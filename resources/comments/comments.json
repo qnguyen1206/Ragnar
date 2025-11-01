@@ -1,1 +1,128 @@
-
+{
+    "IDLE": [
+        "System awaiting instructions...",
+        "Ready for next operation...",
+        "Monitoring network quietly...",
+        "Standing by for targets...",
+        "System in standby mode..."
+    ],
+    "NetworkScanner": [
+        "Scanning network topology...",
+        "Mapping network infrastructure...",
+        "Discovering active hosts...",
+        "Analyzing network segments...",
+        "Reconnaissance phase active..."
+    ],
+    "NmapVulnScanner": [
+        "Vulnerability assessment in progress...",
+        "Scanning for security weaknesses...",
+        "Analyzing system vulnerabilities...",
+        "Security audit underway...",
+        "Testing system defenses..."
+    ],
+    "FTPBruteforce": [
+        "Testing FTP authentication...",
+        "Attempting FTP credential validation...",
+        "FTP access verification in progress...",
+        "Evaluating FTP security...",
+        "FTP login sequence initiated..."
+    ],
+    "TelnetBruteforce": [
+        "Testing Telnet authentication...",
+        "Attempting Telnet credential validation...",
+        "Telnet access verification in progress...",
+        "Evaluating Telnet security...",
+        "Telnet login sequence initiated..."
+    ],
+    "StealFilesRDP": [
+        "Extracting files via RDP connection...",
+        "Downloading data through RDP...",
+        "RDP file transfer in progress...",
+        "Accessing remote files via RDP...",
+        "RDP data extraction active..."
+    ],
+    "StealFilesTelnet": [
+        "Extracting files via Telnet connection...",
+        "Downloading data through Telnet...",
+        "Telnet file transfer in progress...",
+        "Accessing remote files via Telnet...",
+        "Telnet data extraction active..."
+    ],
+    "StealFilesSMB": [
+        "Extracting files via SMB shares...",
+        "Downloading data through SMB...",
+        "SMB file transfer in progress...",
+        "Accessing shared files via SMB...",
+        "SMB data extraction active..."
+    ],
+    "StealFilesFTP": [
+        "Extracting files via FTP connection...",
+        "Downloading data through FTP...",
+        "FTP file transfer in progress...",
+        "Accessing remote files via FTP...",
+        "FTP data extraction active..."
+    ],
+    "StealDataSQL": [
+        "Extracting database contents...",
+        "SQL data extraction in progress...",
+        "Downloading database records...",
+        "Database mining operation active...",
+        "SQL information gathering..."
+    ],
+    "StealFilesSSH": [
+        "Extracting files via SSH connection...",
+        "Downloading data through SSH...",
+        "SSH file transfer in progress...",
+        "Accessing remote files via SSH...",
+        "SSH data extraction active..."
+    ],
+    "SSHBruteforce": [
+        "Testing SSH authentication...",
+        "Attempting SSH credential validation...",
+        "SSH access verification in progress...",
+        "Evaluating SSH security...",
+        "SSH login sequence initiated..."
+    ],
+    "SMBBruteforce": [
+        "Testing SMB authentication...",
+        "Attempting SMB credential validation...",
+        "SMB access verification in progress...",
+        "Evaluating SMB security...",
+        "SMB login sequence initiated..."
+    ],
+    "RDPBruteforce": [
+        "Testing RDP authentication...",
+        "Attempting RDP credential validation...",
+        "RDP access verification in progress...",
+        "Evaluating RDP security...",
+        "RDP login sequence initiated..."
+    ],
+    "LogStandalone": [
+        "Monitoring system logs...",
+        "Analyzing log entries...",
+        "Log surveillance active...",
+        "System activity monitoring...",
+        "Log analysis in progress..."
+    ],
+    "LogStandalone2": [
+        "Extended log monitoring active...",
+        "Deep log analysis in progress...",
+        "Comprehensive log surveillance...",
+        "Advanced system monitoring...",
+        "Enhanced log intelligence gathering..."
+    ],
+    "SQLBruteforce": [
+        "Testing SQL authentication...",
+        "Attempting SQL credential validation...",
+        "SQL access verification in progress...",
+        "Evaluating database security...",
+        "SQL login sequence initiated..."
+    ],
+    "ZombifySSH": [
+        "Installing SSH persistence mechanism...",
+        "Creating SSH backdoor access...",
+        "SSH zombie configuration active...",
+        "Establishing persistent SSH connection...",
+        "SSH persistence deployment in progress..."
+    ]
+}
