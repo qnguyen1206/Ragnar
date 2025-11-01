@@ -362,8 +362,7 @@ setup_ragnar() {
     else
         # No existing directory, proceed with clone
         log "INFO" "Cloning ragnar repository"
-        #git clone https://github.com/infinition/ragnar.git
-        git clone https://github.com/PierreGode/ragnar.git
+        git clone https://github.com/PierreGode/Ragnar.git
         check_success "Cloned ragnar repository"
     fi
 
