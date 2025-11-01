@@ -1781,6 +1781,20 @@ def execute_manual_attack():
         if not target_ip or not attack_type:
             return jsonify({'success': False, 'error': 'Missing IP or attack type'}), 400
         
+        # Update status to show attack is active
+        attack_display_names = {
+            'ssh': 'SSHBruteforce',
+            'ftp': 'FTPBruteforce',
+            'telnet': 'TelnetBruteforce',
+            'smb': 'SMBBruteforce',
+            'rdp': 'RDPBruteforce',
+            'sql': 'SQLBruteforce'
+        }
+        
+        status_name = attack_display_names.get(attack_type, f"{attack_type.upper()}Bruteforce")
+        shared_data.ragnarstatustext = status_name
+        shared_data.ragnarstatustext2 = f"Attacking: {target_ip}:{target_port or 'default'}"
+        
         # Map attack types to module imports and execution
         attack_modules = {
             'ssh': 'actions.ssh_connector',
@@ -1792,6 +1806,8 @@ def execute_manual_attack():
         }
         
         if attack_type not in attack_modules:
+            shared_data.ragnarstatustext = "IDLE"
+            shared_data.ragnarstatustext2 = "Invalid attack type"
             return jsonify({'success': False, 'error': 'Invalid attack type'}), 400
         
         # Execute attack in background
@@ -1812,8 +1828,17 @@ def execute_manual_attack():
                         row = {'ip': target_ip, 'hostname': target_ip, 'mac': '00:00:00:00:00:00'}
                         attack_instance.execute(target_ip, target_port, row, f"manual_{attack_type}")
                     
+                # Update status when attack completes
+                shared_data.ragnarstatustext = "IDLE"
+                shared_data.ragnarstatustext2 = f"{attack_type.upper()} attack completed"
+                
+                logger.info(f"Manual attack completed: {attack_type} on {target_ip}:{target_port}")
+                    
             except Exception as e:
                 logger.error(f"Error executing manual attack: {e}")
+                # Reset status on error
+                shared_data.ragnarstatustext = "IDLE"
+                shared_data.ragnarstatustext2 = f"Attack error: {str(e)[:40]}"
         
         # Start attack in background thread
         import threading
@@ -1875,6 +1900,10 @@ def trigger_network_scan():
         data = request.get_json()
         target_range = data.get('range', '192.168.1.0/24')  # Default range
         
+        # Update status to show scanning is active
+        shared_data.ragnarstatustext = "NetworkScanner"
+        shared_data.ragnarstatustext2 = f"Manual scan: {target_range}"
+        
         # Execute scan in background
         def execute_scan():
             try:
@@ -1885,8 +1914,17 @@ def trigger_network_scan():
                 # Run the scan
                 scanner.scan()
                 
+                # Update status when scan completes
+                shared_data.ragnarstatustext = "IDLE"
+                shared_data.ragnarstatustext2 = "Manual scan completed"
+                
+                logger.info(f"Manual network scan completed for range: {target_range}")
+                
             except Exception as e:
                 logger.error(f"Error executing network scan: {e}")
+                # Reset status on error
+                shared_data.ragnarstatustext = "IDLE"
+                shared_data.ragnarstatustext2 = f"Scan error: {str(e)[:50]}"
         
         # Start scan in background thread
         import threading
@@ -1901,6 +1939,9 @@ def trigger_network_scan():
         
     except Exception as e:
         logger.error(f"Error triggering network scan: {e}")
+        # Reset status on error
+        shared_data.ragnarstatustext = "IDLE"
+        shared_data.ragnarstatustext2 = f"Failed to start scan"
         return jsonify({'success': False, 'error': str(e)}), 500
 
 @app.route('/api/manual/scan/vulnerability', methods=['POST'])
@@ -1912,6 +1953,10 @@ def trigger_vulnerability_scan():
         
         if not target_ip:
             return jsonify({'success': False, 'error': 'Target IP required'}), 400
+        
+        # Update status to show vulnerability scanning is active
+        shared_data.ragnarstatustext = "NmapVulnScanner"
+        shared_data.ragnarstatustext2 = f"Scanning: {target_ip}"
         
         # Execute vulnerability scan in background
         def execute_vuln_scan():
@@ -1926,8 +1971,17 @@ def trigger_vulnerability_scan():
                 # Execute vulnerability scan
                 vuln_scanner.execute(target_ip, row, "manual_vuln_scan")
                 
+                # Update status when scan completes
+                shared_data.ragnarstatustext = "IDLE"
+                shared_data.ragnarstatustext2 = "Vulnerability scan completed"
+                
+                logger.info(f"Manual vulnerability scan completed for: {target_ip}")
+                
             except Exception as e:
                 logger.error(f"Error executing vulnerability scan: {e}")
+                # Reset status on error
+                shared_data.ragnarstatustext = "IDLE"
+                shared_data.ragnarstatustext2 = f"Vuln scan error: {str(e)[:40]}"
         
         # Start scan in background thread
         import threading
@@ -1942,6 +1996,9 @@ def trigger_vulnerability_scan():
         
     except Exception as e:
         logger.error(f"Error triggering vulnerability scan: {e}")
+        # Reset status on error
+        shared_data.ragnarstatustext = "IDLE"
+        shared_data.ragnarstatustext2 = f"Failed to start vuln scan"
         return jsonify({'success': False, 'error': str(e)}), 500
 
 # ============================================================================
