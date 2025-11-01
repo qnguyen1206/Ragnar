@@ -239,15 +239,264 @@ def get_loot():
 def get_logs():
     """Get recent logs"""
     try:
-        # Read last 100 lines of temp log
+        # Enhanced logging - aggregate from multiple sources
+        all_logs = []
+        
+        # 1. Get web console logs (existing functionality)
         log_file = shared_data.webconsolelog
         if os.path.exists(log_file):
-            with open(log_file, 'r') as f:
+            with open(log_file, 'r', encoding='utf-8', errors='ignore') as f:
                 lines = f.readlines()
-                return jsonify({'logs': lines[-100:]})
-        return jsonify({'logs': []})
+                web_logs = [line.strip() for line in lines[-50:] if line.strip()]
+                all_logs.extend([f"[WEB] {log}" for log in web_logs])
+        
+        # 2. Get Ragnar main activity logs from data/logs directory
+        logs_dir = shared_data.logsdir
+        if os.path.exists(logs_dir):
+            # Look for recent log files
+            for log_filename in os.listdir(logs_dir):
+                if log_filename.endswith('.log') or log_filename.endswith('.txt'):
+                    log_path = os.path.join(logs_dir, log_filename)
+                    try:
+                        # Get file modification time to show recent files first
+                        mod_time = os.path.getmtime(log_path)
+                        # Only show logs from last 24 hours
+                        if time.time() - mod_time < 86400:  # 24 hours
+                            with open(log_path, 'r', encoding='utf-8', errors='ignore') as f:
+                                lines = f.readlines()
+                                recent_lines = [line.strip() for line in lines[-20:] if line.strip()]
+                                source_tag = f"[{log_filename.upper().replace('.LOG', '').replace('.TXT', '')}]"
+                                all_logs.extend([f"{source_tag} {log}" for log in recent_lines])
+                    except Exception as e:
+                        # Skip files that can't be read
+                        continue
+        
+        # 3. Get recent discoveries from livestatus file
+        if os.path.exists(shared_data.livestatusfile):
+            try:
+                import pandas as pd
+                df = pd.read_csv(shared_data.livestatusfile)
+                alive_hosts = df[df['Alive'] == 1] if 'Alive' in df.columns else df
+                if not alive_hosts.empty:
+                    recent_discoveries = []
+                    for _, row in alive_hosts.tail(10).iterrows():
+                        ip = row.get('IP', 'Unknown')
+                        hostname = row.get('Hostname', ip)
+                        ports = row.get('Ports', '')
+                        if ports:
+                            port_list = ports.split(';')[:5]  # Show first 5 ports
+                            port_str = ', '.join(port_list)
+                            if len(ports.split(';')) > 5:
+                                port_str += f" (+{len(ports.split(';')) - 5} more)"
+                            discovery_log = f"🎯 Discovered {hostname} ({ip}) - Ports: {port_str}"
+                        else:
+                            discovery_log = f"🎯 Discovered {hostname} ({ip}) - Host alive"
+                        all_logs.append(f"[DISCOVERY] {discovery_log}")
+            except Exception as e:
+                all_logs.append(f"[DISCOVERY] Error reading discoveries: {str(e)}")
+        
+        # 4. Get recent credential findings
+        for cred_file, service in [(shared_data.sshfile, 'SSH'), (shared_data.smbfile, 'SMB'), 
+                                  (shared_data.ftpfile, 'FTP'), (shared_data.telnetfile, 'Telnet'),
+                                  (shared_data.sqlfile, 'SQL'), (shared_data.rdpfile, 'RDP')]:
+            if os.path.exists(cred_file):
+                try:
+                    import pandas as pd
+                    df = pd.read_csv(cred_file)
+                    if not df.empty:
+                        recent_creds = df.tail(5)  # Last 5 credentials
+                        for _, row in recent_creds.iterrows():
+                            ip = row.get('ip', row.get('IP', 'Unknown'))
+                            username = row.get('username', row.get('Username', 'Unknown'))
+                            cred_log = f"🔓 {service} credentials found - {username}@{ip}"
+                            all_logs.append(f"[CREDENTIALS] {cred_log}")
+                except Exception as e:
+                    continue
+        
+        # 5. Get recent vulnerability findings
+        vuln_dir = getattr(shared_data, 'vulnerabilities_dir', os.path.join('data', 'output', 'vulnerabilities'))
+        if os.path.exists(vuln_dir):
+            vuln_files = [f for f in os.listdir(vuln_dir) if f.endswith('.txt')]
+            # Sort by modification time, get 3 most recent
+            vuln_files.sort(key=lambda x: os.path.getmtime(os.path.join(vuln_dir, x)), reverse=True)
+            for vuln_file in vuln_files[:3]:
+                try:
+                    vuln_path = os.path.join(vuln_dir, vuln_file)
+                    with open(vuln_path, 'r', encoding='utf-8', errors='ignore') as f:
+                        content = f.read()
+                        # Look for vulnerability indicators
+                        if 'VULNERABLE' in content.upper() or 'CVE-' in content:
+                            ip = vuln_file.replace('.txt', '').replace('vuln_', '')
+                            vuln_log = f"⚠️ Vulnerabilities found on {ip}"
+                            all_logs.append(f"[VULNERABILITIES] {vuln_log}")
+                except Exception:
+                    continue
+        
+        # 6. Add current status summary
+        status_log = f"📊 Status: {safe_int(shared_data.targetnbr)} targets, {safe_int(shared_data.portnbr)} ports, {safe_int(shared_data.vulnnbr)} vulns, {safe_int(shared_data.crednbr)} creds"
+        all_logs.append(f"[STATUS] {status_log}")
+        
+        # Sort logs by timestamp if possible, otherwise keep recent additions at the end
+        # Limit to last 100 entries to avoid overwhelming the UI
+        recent_logs = all_logs[-100:] if all_logs else []
+        
+        return jsonify({'logs': recent_logs})
     except Exception as e:
-        logger.error(f"Error getting logs: {e}")
+        logger.error(f"Error getting enhanced logs: {e}")
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/logs/activity')
+def get_activity_logs():
+    """Get detailed activity logs showing discoveries, attacks, and results"""
+    try:
+        activity_logs = []
+        current_time = datetime.now()
+        
+        # 1. Recent network discoveries
+        if os.path.exists(shared_data.livestatusfile):
+            try:
+                import pandas as pd
+                df = pd.read_csv(shared_data.livestatusfile)
+                alive_hosts = df[df['Alive'] == 1] if 'Alive' in df.columns else df
+                for _, row in alive_hosts.tail(15).iterrows():
+                    ip = row.get('IP', 'Unknown')
+                    hostname = row.get('Hostname', ip)
+                    ports = row.get('Ports', '')
+                    mac = row.get('MAC', 'Unknown')
+                    
+                    if ports:
+                        port_list = ports.split(';')
+                        service_summary = f"{len(port_list)} services"
+                        if len(port_list) <= 5:
+                            service_summary = f"Ports: {', '.join(port_list)}"
+                    else:
+                        service_summary = "Host responsive"
+                    
+                    log_entry = {
+                        'timestamp': current_time.strftime("%H:%M:%S"),
+                        'type': 'discovery',
+                        'icon': '🎯',
+                        'message': f"Discovered {hostname} ({ip})",
+                        'details': f"MAC: {mac} | {service_summary}",
+                        'severity': 'info'
+                    }
+                    activity_logs.append(log_entry)
+            except Exception as e:
+                activity_logs.append({
+                    'timestamp': current_time.strftime("%H:%M:%S"),
+                    'type': 'error',
+                    'icon': '❌',
+                    'message': f"Error reading discoveries: {str(e)}",
+                    'details': '',
+                    'severity': 'error'
+                })
+        
+        # 2. Recent credential findings
+        cred_sources = [
+            (shared_data.sshfile, 'SSH', '🔐'),
+            (shared_data.smbfile, 'SMB', '📁'),
+            (shared_data.ftpfile, 'FTP', '📂'),
+            (shared_data.telnetfile, 'Telnet', '💻'),
+            (shared_data.sqlfile, 'SQL', '🗄️'),
+            (shared_data.rdpfile, 'RDP', '🖥️')
+        ]
+        
+        for cred_file, service, icon in cred_sources:
+            if os.path.exists(cred_file):
+                try:
+                    import pandas as pd
+                    df = pd.read_csv(cred_file)
+                    if not df.empty:
+                        recent_creds = df.tail(5)
+                        for _, row in recent_creds.iterrows():
+                            ip = row.get('ip', row.get('IP', 'Unknown'))
+                            username = row.get('username', row.get('Username', 'Unknown'))
+                            password = row.get('password', row.get('Password', '***'))
+                            port = row.get('port', row.get('Port', ''))
+                            
+                            port_info = f":{port}" if port else ""
+                            log_entry = {
+                                'timestamp': current_time.strftime("%H:%M:%S"),
+                                'type': 'credential',
+                                'icon': icon,
+                                'message': f"{service} access gained on {ip}{port_info}",
+                                'details': f"Username: {username} | Password: {'*' * min(len(str(password)), 8)}",
+                                'severity': 'success'
+                            }
+                            activity_logs.append(log_entry)
+                except Exception:
+                    continue
+        
+        # 3. Recent vulnerability findings
+        vuln_dir = getattr(shared_data, 'vulnerabilities_dir', os.path.join('data', 'output', 'vulnerabilities'))
+        if os.path.exists(vuln_dir):
+            vuln_files = [f for f in os.listdir(vuln_dir) if f.endswith('.txt')]
+            vuln_files.sort(key=lambda x: os.path.getmtime(os.path.join(vuln_dir, x)), reverse=True)
+            
+            for vuln_file in vuln_files[:5]:
+                try:
+                    vuln_path = os.path.join(vuln_dir, vuln_file)
+                    with open(vuln_path, 'r', encoding='utf-8', errors='ignore') as f:
+                        content = f.read()
+                        
+                    ip = vuln_file.replace('.txt', '').replace('vuln_', '')
+                    vuln_count = content.upper().count('VULNERABLE')
+                    cve_count = content.count('CVE-')
+                    
+                    if vuln_count > 0 or cve_count > 0:
+                        severity_icon = '🚨' if vuln_count > 5 else '⚠️'
+                        severity = 'critical' if vuln_count > 5 else 'warning'
+                        
+                        details = []
+                        if vuln_count > 0:
+                            details.append(f"{vuln_count} vulnerabilities")
+                        if cve_count > 0:
+                            details.append(f"{cve_count} CVEs")
+                        
+                        log_entry = {
+                            'timestamp': current_time.strftime("%H:%M:%S"),
+                            'type': 'vulnerability',
+                            'icon': severity_icon,
+                            'message': f"Vulnerabilities found on {ip}",
+                            'details': " | ".join(details),
+                            'severity': severity
+                        }
+                        activity_logs.append(log_entry)
+                except Exception:
+                    continue
+        
+        # 4. Current system status
+        status_entries = []
+        if safe_str(shared_data.ragnarstatustext) and safe_str(shared_data.ragnarstatustext) != "Idle":
+            status_entries.append({
+                'timestamp': current_time.strftime("%H:%M:%S"),
+                'type': 'status',
+                'icon': '🤖',
+                'message': f"Ragnar: {safe_str(shared_data.ragnarstatustext)}",
+                'details': safe_str(shared_data.ragnarstatustext2) if safe_str(shared_data.ragnarstatustext2) else '',
+                'severity': 'info'
+            })
+        
+        if safe_str(shared_data.ragnarsays) and safe_str(shared_data.ragnarsays).strip():
+            status_entries.append({
+                'timestamp': current_time.strftime("%H:%M:%S"),
+                'type': 'activity',
+                'icon': '⚡',
+                'message': safe_str(shared_data.ragnarsays),
+                'details': '',
+                'severity': 'info'
+            })
+        
+        activity_logs.extend(status_entries)
+        
+        # Sort by timestamp and limit to 50 most recent entries
+        activity_logs = activity_logs[-50:]
+        
+        return jsonify({'activity_logs': activity_logs})
+        
+    except Exception as e:
+        logger.error(f"Error getting activity logs: {e}")
         return jsonify({'error': str(e)}), 500
 
 # ============================================================================
@@ -993,6 +1242,54 @@ def handle_loot_request():
         logger.error(f"Error sending loot data: {e}")
 
 
+@socketio.on('request_activity')
+def handle_activity_request():
+    """Handle request for detailed activity logs"""
+    try:
+        # Generate activity logs directly
+        activity_logs = []
+        current_time = datetime.now()
+        
+        # Recent discoveries
+        if os.path.exists(shared_data.livestatusfile):
+            try:
+                import pandas as pd
+                df = pd.read_csv(shared_data.livestatusfile)
+                alive_hosts = df[df['Alive'] == 1] if 'Alive' in df.columns else df
+                for _, row in alive_hosts.tail(10).iterrows():
+                    ip = row.get('IP', 'Unknown')
+                    hostname = row.get('Hostname', ip)
+                    ports = row.get('Ports', '')
+                    
+                    log_entry = {
+                        'timestamp': current_time.strftime("%H:%M:%S"),
+                        'type': 'discovery',
+                        'icon': '🎯',
+                        'message': f"Discovered {hostname} ({ip})",
+                        'details': f"Ports: {ports.split(';')[:3] if ports else []}" if ports else "Host responsive",
+                        'severity': 'info'
+                    }
+                    activity_logs.append(log_entry)
+            except Exception:
+                pass
+        
+        # Add current status
+        if safe_str(shared_data.ragnarsays) and safe_str(shared_data.ragnarsays).strip():
+            activity_logs.append({
+                'timestamp': current_time.strftime("%H:%M:%S"),
+                'type': 'activity',
+                'icon': '⚡',
+                'message': safe_str(shared_data.ragnarsays),
+                'details': '',
+                'severity': 'info'
+            })
+        
+        emit('activity_update', activity_logs[-20:])  # Send last 20 entries
+    except Exception as e:
+        logger.error(f"Error sending activity data: {e}")
+        emit('activity_update', [])
+
+
 # ============================================================================
 # BACKGROUND TASKS
 # ============================================================================
@@ -1018,22 +1315,78 @@ def get_current_status():
     }
 
 def get_recent_logs():
-    """Get recent log entries"""
+    """Get recent log entries with enhanced activity information"""
     logs = []
     try:
+        # Enhanced logging - aggregate from multiple sources for real-time updates
+        
+        # 1. Get web console logs (existing functionality)
         log_file = shared_data.webconsolelog
         if os.path.exists(log_file):
             with open(log_file, 'r', encoding='utf-8', errors='ignore') as f:
                 lines = f.readlines()
-                # Return last 50 lines
-                logs = [line.strip() for line in lines[-50:] if line.strip()]
+                web_logs = [line.strip() for line in lines[-20:] if line.strip()]
+                logs.extend([f"[WEB] {log}" for log in web_logs])
+        
+        # 2. Add recent activity summary
+        current_time = datetime.now().strftime("%H:%M:%S")
+        
+        # Add Ragnar status
+        ragnar_status = safe_str(shared_data.ragnarstatustext)
+        if ragnar_status and ragnar_status != "Idle":
+            logs.append(f"[{current_time}] [RAGNAR] {ragnar_status}")
+        
+        # Add orchestrator status
+        orch_status = safe_str(shared_data.ragnarorch_status)
+        if orch_status and orch_status != "Idle":
+            logs.append(f"[{current_time}] [ORCHESTRATOR] {orch_status}")
+        
+        # Add what Ragnar says (activity description)
+        ragnar_says = safe_str(shared_data.ragnarsays)
+        if ragnar_says and ragnar_says.strip():
+            logs.append(f"[{current_time}] [ACTIVITY] {ragnar_says}")
+        
+        # 3. Add quick stats summary every few updates
+        stats_summary = f"📊 Active: {safe_int(shared_data.targetnbr)} targets | {safe_int(shared_data.portnbr)} ports | {safe_int(shared_data.vulnnbr)} vulns | {safe_int(shared_data.crednbr)} creds | {safe_int(shared_data.datanbr)} data"
+        logs.append(f"[{current_time}] [STATS] {stats_summary}")
+        
+        # 4. Check for very recent discoveries (last 5 minutes)
+        if os.path.exists(shared_data.livestatusfile):
+            try:
+                # Check file modification time
+                mod_time = os.path.getmtime(shared_data.livestatusfile)
+                if time.time() - mod_time < 300:  # 5 minutes
+                    logs.append(f"[{current_time}] [DISCOVERY] 🎯 Recent network activity detected")
+            except Exception:
+                pass
+        
+        # 5. Check connectivity status
+        connection_status = []
+        if safe_bool(shared_data.wifi_connected):
+            connection_status.append("📶 WiFi")
+        if safe_bool(shared_data.bluetooth_active):
+            connection_status.append("📱 Bluetooth")
+        if safe_bool(shared_data.pan_connected):
+            connection_status.append("🌐 PAN")
+        if safe_bool(shared_data.usb_active):
+            connection_status.append("🔌 USB")
+        
+        if connection_status:
+            logs.append(f"[{current_time}] [CONNECTIVITY] Active: {' | '.join(connection_status)}")
+        
+        # Limit to last 30 entries for real-time updates
+        recent_logs = logs[-30:] if logs else []
+        
     except Exception as e:
-        logger.error(f"Error reading logs: {e}")
-    return logs
+        logger.error(f"Error reading enhanced logs: {e}")
+        logs = [f"[ERROR] Error reading logs: {e}"]
+    
+    return recent_logs
 
 def broadcast_status_updates():
     """Broadcast status updates to all connected clients"""
     log_counter = 0
+    activity_counter = 0
     while not shared_data.webapp_should_exit:
         try:
             if clients_connected > 0:
@@ -1046,6 +1399,38 @@ def broadcast_status_updates():
                 if log_counter % 5 == 0:
                     logs = get_recent_logs()
                     socketio.emit('log_update', logs)
+                
+                # Send activity updates every 3 cycles (6 seconds)
+                activity_counter += 1
+                if activity_counter % 3 == 0:
+                    # Generate simplified activity update for real-time broadcast
+                    activity_update = []
+                    current_time = datetime.now().strftime("%H:%M:%S")
+                    
+                    # Add current Ragnar activity
+                    ragnar_says = safe_str(shared_data.ragnarsays)
+                    if ragnar_says and ragnar_says.strip():
+                        activity_update.append({
+                            'timestamp': current_time,
+                            'type': 'activity',
+                            'icon': '⚡',
+                            'message': ragnar_says,
+                            'severity': 'info'
+                        })
+                    
+                    # Add status if something is happening
+                    ragnar_status = safe_str(shared_data.ragnarstatustext)
+                    if ragnar_status and ragnar_status not in ["Idle", ""]:
+                        activity_update.append({
+                            'timestamp': current_time,
+                            'type': 'status',
+                            'icon': '🤖',
+                            'message': f"Status: {ragnar_status}",
+                            'severity': 'info'
+                        })
+                    
+                    if activity_update:
+                        socketio.emit('activity_update', activity_update)
             
             socketio.sleep(2)  # Update every 2 seconds
         except Exception as e:
