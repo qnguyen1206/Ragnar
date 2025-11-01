@@ -29,7 +29,9 @@ Ragnar is a « Tamagotchi like » sophisticated, autonomous network scanning,
 
 ## 📄 Introduction
 
-Ragnar is a powerful tool designed to perform comprehensive network scanning, vulnerability assessment, and data ex-filtration. Its modular design and extensive configuration options allow for flexible and targeted operations. By combining different actions and orchestrating them intelligently, Ragnar can provide valuable insights into network security and help identify and mitigate potential risks.
+Ragnar is a fork from the awesome project [Bjorn](https://github.com/infinition/Bjorn)  and is rebuilt powerful tool designed to perform comprehensive network scanning, vulnerability assessment, and data ex-filtration. Its modular design and extensive configuration options allow for flexible and targeted operations. By combining different actions and orchestrating them intelligently, Ragnar can provide valuable insights into network security and help identify and mitigate potential risks.
+Ragnar is built for 64-bit Rasbian. 
+Ragnar has also AP option making it easy to have on the go and easly from a phone just make Ragnar connect to a wifi network.
 
 The e-Paper HAT display and web interface make it easy to monitor and interact with Ragnar, providing real-time updates and status information. With its extensible architecture and customizable actions, Ragnar can be adapted to suit a wide range of security testing and monitoring needs.
 
@@ -40,42 +42,25 @@ The e-Paper HAT display and web interface make it easy to monitor and interact w
 - **System Attacks**: Conducts brute-force attacks on various services (FTP, SSH, SMB, RDP, Telnet, SQL).
 - **File Stealing**: Extracts data from vulnerable services.
 - **User Interface**: Real-time display on the e-Paper HAT and web interface for monitoring and interaction.
+<img width="1167" height="654" alt="image" src="https://github.com/user-attachments/assets/b17ce98c-9ccd-452b-94f3-fe2303455bf7" />
 
-![Ragnar Display](https://github.com/infinition/Ragnar/assets/37984399/bcad830d-77d6-4f3e-833d-473eadd33921)
 
 ## 🚀 Getting Started
 
 ## 📌 Prerequisites
 
-### 📋 Prerequisites for RPI zero W (32bits)
+### 📋 Prerequisites for RPI zero W + W2 (64bits)
 
-![image](https://github.com/user-attachments/assets/3980ec5f-a8fc-4848-ab25-4356e0529639)
 
-- Raspberry Pi OS installed. 
-    - Stable:
-      - System: 32-bit
-      - Kernel version: 6.6
-      - Debian version: 12 (bookworm) '2024-10-22-raspios-bookworm-armhf-lite'
-- Username and hostname set to `Ragnar`.
-- 2.13-inch e-Paper HAT connected to GPIO pins.
-
-### 📋 Prerequisites for RPI zero W2 (64bits)
-
-![image](https://github.com/user-attachments/assets/e8d276be-4cb2-474d-a74d-b5b6704d22f5)
-
-I did not develop Ragnar for the raspberry pi zero w2 64bits, but several feedbacks have attested that the installation worked perfectly.
 
 - Raspberry Pi OS installed. 
     - Stable:
       - System: 64-bit
-      - Kernel version: 6.6
-      - Debian version: 12 (bookworm) '2024-10-22-raspios-bookworm-arm64-lite'
+      - Kernel version: 6.12
+      - Debian version: Debian GNU/Linux 13 (trixie)'
 - Username and hostname set to `Ragnar`.
 - 2.13-inch e-Paper HAT connected to GPIO pins.
 
-
-At the moment the paper screen v2  v4 have been tested and implemented.
-I juste hope the V1 & V3 will work the same.
 
 ### 🔨 Installation
 
@@ -83,7 +68,7 @@ The fastest way to install Ragnar is using the automatic installation script :
 
 ```bash
 # Download and run the installer
-wget https://raw.githubusercontent.com/infinition/Ragnar/refs/heads/main/install_Ragnar.sh
+wget https://raw.githubusercontent.com/PierreGode/Ragnar/main/install_ragnar.sh
 sudo chmod +x install_Ragnar.sh && sudo ./install_Ragnar.sh
 # Choose the choice 1 for automatic installation. It may take a while as a lot of packages and modules will be installed. You must reboot at the end.
 ```
@@ -92,15 +77,6 @@ For **detailed information** about **installation** process go to [Install Guide
 
 ## ⚡ Quick Start
 
-**Need help ? You struggle to find Ragnar's IP after the installation ?**
-Use my Ragnar Detector & SSH Launcher :
-
-[https://github.com/infinition/Ragnar-detector](https://github.com/infinition/Ragnar-detector)
-
-![ezgif-1-a310f5fe8f](https://github.com/user-attachments/assets/182f82f0-5c3a-48a9-a75e-37b9cfa2263a)
-
-**Hmm, You still need help ?**
-For **detailed information** about **troubleshooting** go to [Troubleshooting](TROUBLESHOOTING.md)
 
 **Quick Installation**: you can use the fastest way to install **Ragnar** [Getting Started](#-getting-started)
 
@@ -162,15 +138,11 @@ For **detailed information** about **contributing** process go to [Contributing 
   - Document reproduction steps.
   - Provide logs and context.
 
-- **Author**: __infinition__
-- **GitHub**: [infinition/Ragnar](https://github.com/infinition/Ragnar)
-
-## 🌠 Stargazers
-
-[![Star History Chart](https://api.star-history.com/svg?repos=infinition/Ragnar&type=Date)](https://star-history.com/#infinition/Ragnar&Date)
+- **Author**: PierreGode & __infinition__
+- **GitHub**: [PierreGode/Ragnar](https://github.com/PierreGode/Ragnar)
 
 ---
 
 ## 📜 License
 
-2024 - Ragnar is distributed under the MIT License. For more details, please refer to the [LICENSE](LICENSE) file included in this repository.
+2025 - Ragnar is distributed under the MIT License. For more details, please refer to the [LICENSE](LICENSE) file included in this repository.
