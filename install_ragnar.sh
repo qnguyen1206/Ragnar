@@ -460,15 +460,15 @@ setup_ragnar() {
 
     # Configure modern webapp by default
     log "INFO" "Configuring modern web interface..."
-    if [ -f "$ragnar_PATH/ragnar.py" ] && [ -f "$ragnar_PATH/webapp_modern.py" ]; then
-        # Backup original ragnar.py if not already backed up
-        if [ ! -f "$ragnar_PATH/ragnar.py.original" ]; then
-            cp "$ragnar_PATH/ragnar.py" "$ragnar_PATH/ragnar.py.original"
+    if [ -f "$ragnar_PATH/Ragnar.py" ] && [ -f "$ragnar_PATH/webapp_modern.py" ]; then
+        # Backup original Ragnar.py if not already backed up
+        if [ ! -f "$ragnar_PATH/Ragnar.py.original" ]; then
+            cp "$ragnar_PATH/Ragnar.py" "$ragnar_PATH/Ragnar.py.original"
         fi
         
-        # Update ragnar.py to use modern webapp
-        if grep -q "from webapp import web_thread" "$ragnar_PATH/ragnar.py"; then
-            sed -i 's/from webapp import web_thread/# Old webapp - replaced with modern\n# from webapp import web_thread\nfrom webapp_modern import run_server as web_thread/' "$ragnar_PATH/ragnar.py"
+        # Update Ragnar.py to use modern webapp
+        if grep -q "from webapp import web_thread" "$ragnar_PATH/Ragnar.py"; then
+            sed -i 's/from webapp import web_thread/# Old webapp - replaced with modern\n# from webapp import web_thread\nfrom webapp_modern import run_server as web_thread/' "$ragnar_PATH/Ragnar.py"
             log "SUCCESS" "Configured to use modern web interface"
         else
             log "INFO" "Modern webapp already configured or different setup detected"
@@ -492,6 +492,54 @@ setup_ragnar() {
     
     # Ensure ragnar user owns all script files
     chown $ragnar_USER:$ragnar_USER $ragnar_PATH/*.sh 2>/dev/null || true
+    
+    # Create missing directories and files that are needed for proper operation
+    log "INFO" "Creating missing directories and files..."
+    
+    # Create dictionary directory and files
+    mkdir -p $ragnar_PATH/data/input/dictionary
+    if [ ! -f "$ragnar_PATH/data/input/dictionary/users.txt" ]; then
+        cat > $ragnar_PATH/data/input/dictionary/users.txt << EOF
+admin
+root
+user
+administrator
+test
+guest
+EOF
+        log "SUCCESS" "Created users.txt dictionary file"
+    fi
+    
+    if [ ! -f "$ragnar_PATH/data/input/dictionary/passwords.txt" ]; then
+        cat > $ragnar_PATH/data/input/dictionary/passwords.txt << EOF
+password
+123456
+admin
+root
+password123
+123
+test
+guest
+EOF
+        log "SUCCESS" "Created passwords.txt dictionary file"
+    fi
+    
+    # Create comments.json file if missing
+    if [ ! -f "$ragnar_PATH/resources/comments/comments.json" ]; then
+        mkdir -p $ragnar_PATH/resources/comments
+        echo "[]" > $ragnar_PATH/resources/comments/comments.json
+        log "SUCCESS" "Created comments.json file"
+    fi
+    
+    # Create missing ragnar1.bmp placeholder if needed (optional since we handle this gracefully now)
+    if [ ! -f "$ragnar_PATH/resources/images/static/ragnar1.bmp" ] && [ -f "$ragnar_PATH/resources/images/static/bjorn1.bmp" ]; then
+        cp "$ragnar_PATH/resources/images/static/bjorn1.bmp" "$ragnar_PATH/resources/images/static/ragnar1.bmp"
+        log "SUCCESS" "Created ragnar1.bmp from bjorn1.bmp"
+    fi
+    
+    # Set proper ownership for all created files
+    chown -R $ragnar_USER:$ragnar_USER $ragnar_PATH/data/
+    chown -R $ragnar_USER:$ragnar_USER $ragnar_PATH/resources/
     
     # Validate and fix actions.json file
     log "INFO" "Validating actions.json configuration..."
@@ -563,7 +611,7 @@ After=local-fs.target
 
 [Service]
 ExecStartPre=/home/ragnar/ragnar/kill_port_8000.sh
-ExecStart=/usr/bin/python3 /home/ragnar/ragnar/ragnar.py
+ExecStart=/usr/bin/python3 /home/ragnar/ragnar/Ragnar.py
 WorkingDirectory=/home/ragnar/ragnar
 StandardOutput=inherit
 StandardError=inherit
