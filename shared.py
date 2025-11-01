@@ -225,11 +225,47 @@ class SharedData:
     def setup_environment(self):
         """Setup the environment with the necessary directories and files."""
         os.system('cls' if os.name == 'nt' else 'clear')
+        self.create_directories()  # Create all necessary directories first
         self.save_config()
         self.generate_actions_json()
         self.delete_webconsolelog()
         self.initialize_csv()
         self.initialize_epd_display()
+    
+    def create_directories(self):
+        """Create all necessary directories for the application."""
+        directories_to_create = [
+            self.configdir,
+            self.datadir,
+            self.actions_dir,
+            self.webdir,
+            self.resourcesdir,
+            self.backupbasedir,
+            self.backupdir,
+            self.upload_dir,
+            self.logsdir,
+            self.output_dir,
+            self.input_dir,
+            self.crackedpwddir,
+            self.datastolendir,
+            self.zombiesdir,
+            self.vulnerabilities_dir,
+            self.scan_results_dir,
+            self.picdir,
+            self.fontdir,
+            self.commentsdir,
+            self.statuspicdir,
+            self.staticpicdir,
+            self.dictionarydir
+        ]
+        
+        for directory in directories_to_create:
+            try:
+                if not os.path.exists(directory):
+                    os.makedirs(directory, exist_ok=True)
+                    logger.info(f"Created directory: {directory}")
+            except Exception as e:
+                logger.error(f"Failed to create directory {directory}: {e}")
     
 
     # def initialize_epd_display(self):

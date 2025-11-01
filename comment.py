@@ -30,30 +30,46 @@ class Commentaireia:
         cache_file = commentsfile + '.cache'
 
         # Check if a cached version exists and is newer than the original file
-        if os.path.exists(cache_file) and os.path.getmtime(cache_file) >= os.path.getmtime(commentsfile):
+        if os.path.exists(cache_file) and os.path.exists(commentsfile) and os.path.getmtime(cache_file) >= os.path.getmtime(commentsfile):
             try:
                 with open(cache_file, 'r') as file:
                     comments_data = json.load(file)
                     logger.info("Comments loaded successfully from cache.")
                     return comments_data
-            except (FileNotFoundError, json.JSONDecodeError):
-                logger.warning("Cache file is corrupted or not found. Loading from the original file.")
+            except (FileNotFoundError, json.JSONDecodeError) as e:
+                logger.warning(f"Cache file is corrupted or not found: {e}. Loading from the original file.")
 
         # Load from the original file if cache is not used or corrupted
         try:
-            with open(commentsfile, 'r') as file:
+            if not os.path.exists(commentsfile):
+                logger.error(f"Comments file not found: {commentsfile}")
+                return {"IDLE": ["No comments available"]}
+                
+            with open(commentsfile, 'r', encoding='utf-8') as file:
                 comments_data = json.load(file)
                 logger.info("Comments loaded successfully from JSON file.")
+                
+                # Validate that required themes exist
+                required_themes = ["IDLE", "NetworkScanner"]
+                for theme in required_themes:
+                    if theme not in comments_data:
+                        logger.warning(f"Required theme '{theme}' not found in comments file")
+                        comments_data[theme] = [f"Theme {theme} comments not available"]
+                
                 # Save to cache
-                with open(cache_file, 'w') as cache:
-                    json.dump(comments_data, cache)
+                try:
+                    with open(cache_file, 'w', encoding='utf-8') as cache:
+                        json.dump(comments_data, cache)
+                except Exception as e:
+                    logger.warning(f"Could not save comments cache: {e}")
+                    
                 return comments_data
-        except FileNotFoundError:
-            logger.error(f"The file '{commentsfile}' was not found.")
-            return {"IDLE": ["Default comment, no comments file found."]}  # Fallback to a default theme
-        except json.JSONDecodeError:
-            logger.error(f"The file '{commentsfile}' is not a valid JSON file.")
-            return {"IDLE": ["Default comment, invalid JSON format."]}  # Fallback to a default theme
+        except (FileNotFoundError, json.JSONDecodeError) as e:
+            logger.error(f"Error loading comments from JSON file: {e}")
+            return {"IDLE": ["No comments available"], "NetworkScanner": ["Scanning networks..."]}
+        except Exception as e:
+            logger.error(f"Unexpected error loading comments: {e}")
+            return {"IDLE": ["No comments available"], "NetworkScanner": ["Scanning networks..."]}
 
     def get_commentaire(self, theme):
         """ This method returns a random comment based on the specified theme."""

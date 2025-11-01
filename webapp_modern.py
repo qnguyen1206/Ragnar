@@ -65,22 +65,33 @@ def sync_vulnerability_count():
         
         # Count vulnerabilities from files in vulnerabilities directory
         vuln_results_dir = getattr(shared_data, 'vulnerabilities_dir', os.path.join('data', 'output', 'vulnerabilities'))
+        
+        # Create directory if it doesn't exist
+        try:
+            os.makedirs(vuln_results_dir, exist_ok=True)
+        except Exception as e:
+            logger.warning(f"Could not create vulnerabilities directory: {e}")
+        
         if os.path.exists(vuln_results_dir):
-            for filename in os.listdir(vuln_results_dir):
-                if filename.endswith('.txt'):
-                    filepath = os.path.join(vuln_results_dir, filename)
-                    try:
-                        with open(filepath, 'r', encoding='utf-8', errors='ignore') as f:
-                            content = f.read()
-                            if content.strip():
-                                # Count CVEs or files with vulnerability content
-                                cve_matches = re.findall(r'CVE-\d{4}-\d+', content)
-                                if cve_matches:
-                                    vuln_count += len(cve_matches)
-                                elif len(content.strip()) > 50:  # File has significant content
-                                    vuln_count += 1
-                    except Exception as e:
-                        continue
+            try:
+                for filename in os.listdir(vuln_results_dir):
+                    if filename.endswith('.txt') and not filename.startswith('.'):
+                        filepath = os.path.join(vuln_results_dir, filename)
+                        try:
+                            with open(filepath, 'r', encoding='utf-8', errors='ignore') as f:
+                                content = f.read()
+                                if content.strip():
+                                    # Count CVEs or files with vulnerability content
+                                    cve_matches = re.findall(r'CVE-\d{4}-\d+', content)
+                                    if cve_matches:
+                                        vuln_count += len(cve_matches)
+                                    elif len(content.strip()) > 50:  # File has significant content
+                                        vuln_count += 1
+                        except Exception as e:
+                            logger.debug(f"Could not read vulnerability file {filepath}: {e}")
+                            continue
+            except Exception as e:
+                logger.warning(f"Could not list vulnerabilities directory: {e}")
         
         # Update shared data with synchronized count
         shared_data.vulnnbr = vuln_count
@@ -112,28 +123,39 @@ def sync_all_counts():
         
         # Sync target and port counts from scan results
         scan_results_dir = getattr(shared_data, 'scan_results_dir', os.path.join('data', 'output', 'scan_results'))
+        
+        # Create directory if it doesn't exist
+        try:
+            os.makedirs(scan_results_dir, exist_ok=True)
+        except Exception as e:
+            logger.warning(f"Could not create scan_results directory: {e}")
+        
         if os.path.exists(scan_results_dir):
             unique_hosts = set()
             port_count = 0
             
-            for filename in os.listdir(scan_results_dir):
-                if filename.endswith('.txt'):
-                    filepath = os.path.join(scan_results_dir, filename)
-                    try:
-                        with open(filepath, 'r', encoding='utf-8', errors='ignore') as f:
-                            content = f.read()
-                            if content.strip():
-                                # Extract IP from filename
-                                ip_match = re.search(r'\b(?:[0-9]{1,3}\.){3}[0-9]{1,3}\b', filename)
-                                if ip_match:
-                                    unique_hosts.add(ip_match.group())
-                                
-                                # Count ports
-                                for line in content.split('\n'):
-                                    if '/tcp' in line or '/udp' in line:
-                                        port_count += 1
-                    except Exception as e:
-                        continue
+            try:
+                for filename in os.listdir(scan_results_dir):
+                    if filename.endswith('.txt') and not filename.startswith('.'):
+                        filepath = os.path.join(scan_results_dir, filename)
+                        try:
+                            with open(filepath, 'r', encoding='utf-8', errors='ignore') as f:
+                                content = f.read()
+                                if content.strip():
+                                    # Extract IP from filename
+                                    ip_match = re.search(r'\b(?:[0-9]{1,3}\.){3}[0-9]{1,3}\b', filename)
+                                    if ip_match:
+                                        unique_hosts.add(ip_match.group())
+                                    
+                                    # Count ports
+                                    for line in content.split('\n'):
+                                        if '/tcp' in line or '/udp' in line:
+                                            port_count += 1
+                        except Exception as e:
+                            logger.debug(f"Could not read scan result file {filepath}: {e}")
+                            continue
+            except Exception as e:
+                logger.warning(f"Could not list scan_results directory: {e}")
             
             # Only update if we found actual data
             if len(unique_hosts) > 0:
@@ -143,20 +165,31 @@ def sync_all_counts():
         
         # Sync credential count from crackedpwd directory
         cred_results_dir = getattr(shared_data, 'crackedpwd_dir', os.path.join('data', 'output', 'crackedpwd'))
+        
+        # Create directory if it doesn't exist
+        try:
+            os.makedirs(cred_results_dir, exist_ok=True)
+        except Exception as e:
+            logger.warning(f"Could not create crackedpwd directory: {e}")
+        
         if os.path.exists(cred_results_dir):
             cred_count = 0
-            for filename in os.listdir(cred_results_dir):
-                if filename.endswith('.txt') or filename.endswith('.csv'):
-                    filepath = os.path.join(cred_results_dir, filename)
-                    try:
-                        with open(filepath, 'r', encoding='utf-8', errors='ignore') as f:
-                            content = f.read()
-                            # Count lines with credential format (user:pass)
-                            for line in content.split('\n'):
-                                if ':' in line and line.strip():
-                                    cred_count += 1
-                    except Exception as e:
-                        continue
+            try:
+                for filename in os.listdir(cred_results_dir):
+                    if (filename.endswith('.txt') or filename.endswith('.csv')) and not filename.startswith('.'):
+                        filepath = os.path.join(cred_results_dir, filename)
+                        try:
+                            with open(filepath, 'r', encoding='utf-8', errors='ignore') as f:
+                                content = f.read()
+                                # Count lines with credential format (user:pass)
+                                for line in content.split('\n'):
+                                    if ':' in line and line.strip():
+                                        cred_count += 1
+                        except Exception as e:
+                            logger.debug(f"Could not read credential file {filepath}: {e}")
+                            continue
+            except Exception as e:
+                logger.warning(f"Could not list crackedpwd directory: {e}")
             
             # Only update if we found actual data
             if cred_count > 0:
@@ -2636,87 +2669,109 @@ def get_netkb_data():
     try:
         netkb_entries = []
         
-        # Process scan results for host/service information
+        # Process network scan results
         scan_results_dir = getattr(shared_data, 'scan_results_dir', os.path.join('data', 'output', 'scan_results'))
+        
+        # Create directory if it doesn't exist
+        try:
+            os.makedirs(scan_results_dir, exist_ok=True)
+        except Exception as e:
+            logger.warning(f"Could not create scan_results directory: {e}")
+        
         if os.path.exists(scan_results_dir):
-            for filename in os.listdir(scan_results_dir):
-                if filename.endswith('.txt'):
-                    filepath = os.path.join(scan_results_dir, filename)
-                    try:
-                        with open(filepath, 'r', encoding='utf-8', errors='ignore') as f:
-                            content = f.read()
-                            if content.strip():
-                                # Extract IP from filename or content
-                                ip_match = re.search(r'\b(?:[0-9]{1,3}\.){3}[0-9]{1,3}\b', filename)
-                                host_ip = ip_match.group() if ip_match else 'Unknown'
-                                
-                                # Parse port/service info from content
-                                for line in content.split('\n'):
-                                    if '/tcp' in line or '/udp' in line:
-                                        parts = line.split()
-                                        if len(parts) >= 3:
-                                            port = parts[0]
-                                            service = parts[2] if len(parts) > 2 else 'unknown'
-                                            
-                                            netkb_entries.append({
-                                                'id': f"scan_{host_ip}_{port}",
-                                                'type': 'service',
-                                                'host': host_ip,
-                                                'port': port,
-                                                'service': service,
-                                                'description': f"Service {service} running on {port}",
-                                                'severity': 'info',
-                                                'discovered': os.path.getmtime(filepath),
-                                                'source': 'Network Scan'
-                                            })
-                    except Exception as e:
-                        continue
+            try:
+                for filename in os.listdir(scan_results_dir):
+                    if filename.endswith('.txt') and not filename.startswith('.'):
+                        filepath = os.path.join(scan_results_dir, filename)
+                        try:
+                            with open(filepath, 'r', encoding='utf-8', errors='ignore') as f:
+                                content = f.read()
+                                if content.strip():
+                                    # Extract IP from filename or content
+                                    ip_match = re.search(r'\b(?:[0-9]{1,3}\.){3}[0-9]{1,3}\b', filename)
+                                    host_ip = ip_match.group() if ip_match else 'Unknown'
+                                    
+                                    # Parse port/service info from content
+                                    for line in content.split('\n'):
+                                        if '/tcp' in line or '/udp' in line:
+                                            parts = line.split()
+                                            if len(parts) >= 3:
+                                                port = parts[0]
+                                                service = parts[2] if len(parts) > 2 else 'unknown'
+                                                
+                                                netkb_entries.append({
+                                                    'id': f"scan_{host_ip}_{port}",
+                                                    'type': 'service',
+                                                    'host': host_ip,
+                                                    'port': port,
+                                                    'service': service,
+                                                    'description': f"Service {service} running on {port}",
+                                                    'severity': 'info',
+                                                    'discovered': os.path.getmtime(filepath),
+                                                    'source': 'Network Scan'
+                                                })
+                        except Exception as e:
+                            logger.debug(f"Could not read scan result file {filepath}: {e}")
+                            continue
+            except Exception as e:
+                logger.warning(f"Could not list scan_results directory: {e}")
         
         # Process vulnerability scan results
         vuln_results_dir = getattr(shared_data, 'vulnerabilities_dir', os.path.join('data', 'output', 'vulnerabilities'))
+        
+        # Create directory if it doesn't exist
+        try:
+            os.makedirs(vuln_results_dir, exist_ok=True)
+        except Exception as e:
+            logger.warning(f"Could not create vulnerabilities directory: {e}")
+        
         if os.path.exists(vuln_results_dir):
-            for filename in os.listdir(vuln_results_dir):
-                if filename.endswith('.txt'):
-                    filepath = os.path.join(vuln_results_dir, filename)
-                    try:
-                        with open(filepath, 'r', encoding='utf-8', errors='ignore') as f:
-                            content = f.read()
-                            if content.strip():
-                                # Extract vulnerability information
-                                ip_match = re.search(r'\b(?:[0-9]{1,3}\.){3}[0-9]{1,3}\b', filename)
-                                host_ip = ip_match.group() if ip_match else 'Unknown'
-                                
-                                # Look for CVE patterns
-                                cve_matches = re.findall(r'CVE-\d{4}-\d+', content)
-                                for cve in cve_matches:
-                                    netkb_entries.append({
-                                        'id': f"vuln_{host_ip}_{cve}",
-                                        'type': 'vulnerability',
-                                        'host': host_ip,
-                                        'port': '',
-                                        'service': '',
-                                        'description': f"Vulnerability {cve} detected",
-                                        'severity': 'high',
-                                        'discovered': os.path.getmtime(filepath),
-                                        'source': 'Vulnerability Scan',
-                                        'cve': cve
-                                    })
-                                
-                                # Generic vulnerability entries for files without CVEs
-                                if not cve_matches and len(content.strip()) > 50:
-                                    netkb_entries.append({
-                                        'id': f"vuln_{host_ip}_{os.path.basename(filename)}",
-                                        'type': 'vulnerability',
-                                        'host': host_ip,
-                                        'port': '',
-                                        'service': '',
-                                        'description': f"Vulnerability scan results for {host_ip}",
-                                        'severity': 'medium',
-                                        'discovered': os.path.getmtime(filepath),
-                                        'source': 'Vulnerability Scan'
-                                    })
-                    except Exception as e:
-                        continue
+            try:
+                for filename in os.listdir(vuln_results_dir):
+                    if filename.endswith('.txt') and not filename.startswith('.'):
+                        filepath = os.path.join(vuln_results_dir, filename)
+                        try:
+                            with open(filepath, 'r', encoding='utf-8', errors='ignore') as f:
+                                content = f.read()
+                                if content.strip():
+                                    # Extract vulnerability information
+                                    ip_match = re.search(r'\b(?:[0-9]{1,3}\.){3}[0-9]{1,3}\b', filename)
+                                    host_ip = ip_match.group() if ip_match else 'Unknown'
+                                    
+                                    # Look for CVE patterns
+                                    cve_matches = re.findall(r'CVE-\d{4}-\d+', content)
+                                    for cve in cve_matches:
+                                        netkb_entries.append({
+                                            'id': f"vuln_{host_ip}_{cve}",
+                                            'type': 'vulnerability',
+                                            'host': host_ip,
+                                            'port': '',
+                                            'service': '',
+                                            'description': f"Vulnerability {cve} detected",
+                                            'severity': 'high',
+                                            'discovered': os.path.getmtime(filepath),
+                                            'source': 'Vulnerability Scan',
+                                            'cve': cve
+                                        })
+                                    
+                                    # Generic vulnerability entries for files without CVEs
+                                    if not cve_matches and len(content.strip()) > 50:
+                                        netkb_entries.append({
+                                            'id': f"vuln_{host_ip}_{os.path.basename(filename)}",
+                                            'type': 'vulnerability',
+                                            'host': host_ip,
+                                            'port': '',
+                                            'service': '',
+                                            'description': f"Vulnerability scan results for {host_ip}",
+                                            'severity': 'medium',
+                                            'discovered': os.path.getmtime(filepath),
+                                            'source': 'Vulnerability Scan'
+                                        })
+                        except Exception as e:
+                            logger.debug(f"Could not read vulnerability file {filepath}: {e}")
+                            continue
+            except Exception as e:
+                logger.warning(f"Could not list vulnerabilities directory: {e}")
         
         # Add some example entries if no real data exists
         if not netkb_entries:
