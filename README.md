@@ -1,4 +1,4 @@
-# <img src="https://github.com/user-attachments/assets/c5eb4cc1-0c3d-497d-9422-1614651a84ab" alt="thumbnail_IMG_0546" width="33"> Ragnar
+# <img src="https://github.com/user-attachments/assets/463d32c7-f6ca-447c-b62b-f18f2429b2b2" alt="thumbnail_IMG_0546" width="33"> Ragnar
 
 ![Python](https://img.shields.io/badge/Python-3776AB?logo=python&logoColor=fff)
 ![Status](https://img.shields.io/badge/Status-Development-blue.svg)
@@ -6,7 +6,8 @@
 
 
 <p align="center">
-  <img src="https://github.com/user-attachments/assets/c5eb4cc1-0c3d-497d-9422-1614651a84ab" alt="thumbnail_IMG_0546" width="150">
+  <img width="150" height="300" alt="image" src="https://github.com/user-attachments/assets/463d32c7-f6ca-447c-b62b-f18f2429b2b2" />
+
   <img width="235" height="433" alt="image" src="https://github.com/user-attachments/assets/2bb9e9d9-bb6c-401d-aa65-043c5a0ca417" />
 
 </p>
