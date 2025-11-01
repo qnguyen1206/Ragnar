@@ -132,7 +132,10 @@ class Display:
                     if os.path.exists(self.shared_data.netkbfile):
                         with open(self.shared_data.netkbfile, 'r') as file:
                             netkb_df = pd.read_csv(file)
-                            alive_macs = set(netkb_df[(netkb_df["Alive"] == 1) & (netkb_df["MAC Address"] != "STANDALONE")]["MAC Address"])
+                            alive_mask = netkb_df["Alive"].astype(str).str.strip() == '1'
+                            alive_macs = set(
+                                netkb_df[(alive_mask) & (netkb_df["MAC Address"] != "STANDALONE")]["MAC Address"]
+                            )
                     else:
                         alive_macs = set()
 

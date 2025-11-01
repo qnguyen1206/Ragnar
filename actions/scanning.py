@@ -455,7 +455,12 @@ class NetworkScanner:
             Calculates the total number of open ports for alive hosts.
             """
             try:
-                alive_df = self.df[self.df['Alive'] == 1].copy()
+                # The Alive column is persisted as strings ("1"/"0").
+                # Convert to string and compare against "1" to ensure
+                # compatibility with legacy data written by earlier
+                # components.
+                alive_mask = self.df['Alive'].astype(str).str.strip() == '1'
+                alive_df = self.df[alive_mask].copy()
                 alive_df.loc[:, 'Ports'] = alive_df['Ports'].fillna('')
                 alive_df.loc[:, 'Port Count'] = alive_df['Ports'].apply(lambda x: len(x.split(';')) if x else 0)
                 self.total_open_ports = alive_df['Port Count'].sum()
@@ -468,8 +473,9 @@ class NetworkScanner:
             """
             try:
                 # self.all_known_hosts_count = self.df.shape[0] 
-                self.all_known_hosts_count = self.df[self.df['MAC Address'] != 'STANDALONE'].shape[0] 
-                self.alive_hosts_count = self.df[self.df['Alive'] == 1].shape[0]
+                self.all_known_hosts_count = self.df[self.df['MAC Address'] != 'STANDALONE'].shape[0]
+                alive_mask = self.df['Alive'].astype(str).str.strip() == '1'
+                self.alive_hosts_count = self.df[alive_mask].shape[0]
             except Exception as e:
                 self.logger.error(f"Error in calculate_hosts_counts: {e}")
 
