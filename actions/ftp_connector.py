@@ -37,7 +37,7 @@ class FTPBruteforce:
         """
         Executes the brute force attack and updates the shared data status.
         """
-        self.shared_data.bjornorch_status = "FTPBruteforce"
+        self.shared_data.ragnarorch_status = "FTPBruteforce"
         # Wait a bit because it's too fast to see the status change
         time.sleep(5)
         logger.info(f"Brute forcing FTP on {ip}:{port}...")

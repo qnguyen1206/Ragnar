@@ -1,6 +1,6 @@
 # orchestrator.py
 # Description:
-# This file, orchestrator.py, is the heuristic Bjorn brain, and it is responsible for coordinating and executing various network scanning and offensive security actions 
+# This file, orchestrator.py, is the heuristic Ragnar brain, and it is responsible for coordinating and executing various network scanning and offensive security actions 
 # It manages the loading and execution of actions, handles retries for failed and successful actions, 
 # and updates the status of the orchestrator.
 #

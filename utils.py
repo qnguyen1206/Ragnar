@@ -153,7 +153,7 @@ class WebUtils:
         try:
             log_file_path = self.shared_data.webconsolelog
             if not os.path.exists(log_file_path):
-                subprocess.Popen(f"sudo tail -f /home/bjorn/Bjorn/data/logs/* > {log_file_path}", shell=True)
+                subprocess.Popen(f"sudo tail -f /home/ragnar/Ragnar/data/logs/* > {log_file_path}", shell=True)
 
             with open(log_file_path, 'r') as log_file:
                 log_lines = log_file.readlines()
@@ -604,14 +604,14 @@ class WebUtils:
             handler.end_headers()
             handler.wfile.write(json.dumps({"status": "error", "message": str(e)}).encode('utf-8'))
 
-    def restart_bjorn_service(self, handler):
+    def restart_ragnar_service(self, handler):
         try:
-            command = "sudo systemctl restart bjorn.service"
+            command = "sudo systemctl restart ragnar.service"
             subprocess.Popen(command, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
             handler.send_response(200)
             handler.send_header("Content-type", "application/json")
             handler.end_headers()
-            handler.wfile.write(json.dumps({"status": "success", "message": "Bjorn service restarted successfully"}).encode('utf-8'))
+            handler.wfile.write(json.dumps({"status": "success", "message": "Ragnar service restarted successfully"}).encode('utf-8'))
         except subprocess.CalledProcessError as e:
             handler.send_response(500)
             handler.send_header("Content-type", "application/json")

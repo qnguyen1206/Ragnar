@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Bjorn WiFi Setup</title>
+    <title>Ragnar WiFi Setup</title>
     <style>
         * {
             margin: 0;
@@ -187,7 +187,7 @@
 <body>
     <div class="portal-container">
         <div class="logo">
-            <h1>⚡ BJORN</h1>
+            <h1>⚡ RAGNAR</h1>
             <p>WiFi Configuration Portal</p>
         </div>
 
@@ -345,9 +345,9 @@
                 const data = await response.json();
 
                 if (data.success) {
-                    showStatus('Successfully connected! Bjorn will now use this network.', 'success');
+                    showStatus('Successfully connected! Ragnar will now use this network.', 'success');
                     setTimeout(() => {
-                        showStatus('You can now disconnect from this AP. Bjorn is connected to WiFi.', 'info');
+                        showStatus('You can now disconnect from this AP. Ragnar is connected to WiFi.', 'info');
                     }, 3000);
                 } else {
                     showStatus(data.message || 'Failed to connect. Check password and try again.', 'error');

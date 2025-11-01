@@ -17,7 +17,7 @@ import os
 logger = Logger(name="comment.py", level=logging.DEBUG)
 
 class Commentaireia:
-    """Provides context-based random comments for bjorn."""
+    """Provides context-based random comments for ragnar."""
     def __init__(self):
         self.shared_data = shared_data
         self.last_comment_time = 0  # Initialize last_comment_time

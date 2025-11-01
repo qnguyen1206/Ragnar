@@ -521,7 +521,7 @@ class NetworkScanner:
         Initiates the network scan, updates the netkb file, and displays the results.
         """
         try:
-            self.shared_data.bjornorch_status = "NetworkScanner"
+            self.shared_data.ragnarorch_status = "NetworkScanner"
             self.logger.info(f"Starting Network Scanner")
             network = self.get_network()
             self.shared_data.bjornstatustext2 = str(network)

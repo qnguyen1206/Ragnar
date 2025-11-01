@@ -1,7 +1,7 @@
 {
-    "name": "Bjorn Cyberviking",
-    "short_name": "Bjorn",
-    "description": "Bjorn Cyberviking",
+    "name": "Ragnar Cyberviking",
+    "short_name": "Ragnar",
+    "description": "Ragnar Cyberviking",
     "start_url": "/index.html",
     "display": "standalone",
     "background_color": "#333",

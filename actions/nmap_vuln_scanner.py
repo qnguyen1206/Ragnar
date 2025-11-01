@@ -90,7 +90,7 @@ class NmapVulnScanner:
         """
         Executes the vulnerability scan for a given IP and row data.
         """
-        self.shared_data.bjornorch_status = "NmapVulnScanner"
+        self.shared_data.ragnarorch_status = "NmapVulnScanner"
         ports = row["Ports"].split(";")
         scan_result = self.scan_vulnerabilities(ip, row["Hostnames"], row["MAC Address"], ports)
 

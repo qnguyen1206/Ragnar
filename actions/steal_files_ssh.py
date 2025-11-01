@@ -93,7 +93,7 @@ class StealFilesSSH:
         """
         try:
             if 'success' in row.get(self.b_parent_action, ''):  # Verify if the parent action is successful
-                self.shared_data.bjornorch_status = "StealFilesSSH"
+                self.shared_data.ragnarorch_status = "StealFilesSSH"
                 # Wait a bit because it's too fast to see the status change
                 time.sleep(5)
                 logger.info(f"Stealing files from {ip}:{port}...")

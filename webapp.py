@@ -134,8 +134,8 @@ class CustomHandler(http.server.SimpleHTTPRequestHandler):
             self.web_utils.reboot_system(self)
         elif self.path == '/shutdown':
             self.web_utils.shutdown_system(self)
-        elif self.path == '/restart_bjorn_service':
-            self.web_utils.restart_bjorn_service(self)
+        elif self.path == '/restart_ragnar_service':
+            self.web_utils.restart_ragnar_service(self)
         elif self.path == '/backup':
             self.web_utils.backup(self)
         elif self.path == '/restore':

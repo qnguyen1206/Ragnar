@@ -45,7 +45,7 @@ class RDPBruteforce:
         Execute the brute force attack and update status.
         """
         logger.info(f"Executing RDPBruteforce on {ip}:{port}...")
-        self.shared_data.bjornorch_status = "RDPBruteforce"
+        self.shared_data.ragnarorch_status = "RDPBruteforce"
         success, results = self.bruteforce_rdp(ip, port)
         return 'success' if success else 'failed'
 

@@ -49,7 +49,7 @@ class TelnetBruteforce:
         """
         Execute the brute-force attack.
         """
-        self.shared_data.bjornorch_status = "TelnetBruteforce"
+        self.shared_data.ragnarorch_status = "TelnetBruteforce"
         success, results = self.bruteforce_telnet(ip, port)
         return 'success' if success else 'failed'
 

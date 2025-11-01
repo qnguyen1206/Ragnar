@@ -45,7 +45,7 @@ class SSHBruteforce:
         Execute the brute force attack and update status.
         """
         logger.info(f"Executing SSHBruteforce on {ip}:{port}...")
-        self.shared_data.bjornorch_status = "SSHBruteforce"
+        self.shared_data.ragnarorch_status = "SSHBruteforce"
         success, results = self.bruteforce_ssh(ip, port)
         return 'success' if success else 'failed'
 

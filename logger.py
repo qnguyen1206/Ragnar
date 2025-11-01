@@ -1,6 +1,6 @@
 #logger.py
 # Description:
-# This file, logger.py, is responsible for setting up a robust logging system for the Bjorn project. It defines custom logging levels and formats,
+# This file, logger.py, is responsible for setting up a robust logging system for the Ragnar project. It defines custom logging levels and formats,
 # integrates with the Rich library for enhanced console output, and ensures logs are written to rotating files for persistence.
 #
 # Key functionalities include:

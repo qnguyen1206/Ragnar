@@ -91,7 +91,7 @@ class StealDataSQL:
         """
         try:
             if 'success' in row.get(self.b_parent_action, ''):
-                self.shared_data.bjornorch_status = "StealDataSQL"
+                self.shared_data.ragnarorch_status = "StealDataSQL"
                 time.sleep(5)
                 logger.info(f"Stealing data from {ip}:{port}...")
 

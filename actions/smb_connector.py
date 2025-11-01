@@ -46,7 +46,7 @@ class SMBBruteforce:
         """
         Execute the brute force attack and update status.
         """
-        self.shared_data.bjornorch_status = "SMBBruteforce"
+        self.shared_data.ragnarorch_status = "SMBBruteforce"
         success, results = self.bruteforce_smb(ip, port)
         return 'success' if success else 'failed'
 
