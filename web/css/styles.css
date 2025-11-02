@@ -315,7 +315,7 @@ strong {
     width: 20px;
     height: 20px;
     border-radius: 50%;
-    background-color: #e99f00;
+    background-color: rgb(30 41 59 / var(--tw-bg-opacity, 1));
     color: #000;
     font-size: 14px;
     font-weight: bold;
