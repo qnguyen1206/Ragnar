@@ -710,15 +710,69 @@ def load_persistent_network_data():
 
     network_data = read_wifi_network_data()
 
-    if not network_data:
+    def _extract_value(entry, keys):
+        for key in keys:
+            if isinstance(entry, dict) and key in entry:
+                value = entry.get(key)
+                if isinstance(value, str):
+                    value = value.strip()
+                if value not in (None, ''):
+                    return value
+        return ''
+
+    netkb_data = []
+    try:
+        netkb_data = shared_data.read_data()
+    except Exception as e:
+        logger.error(f"Could not read netkb data for MAC enrichment: {e}")
+
+    if network_data:
+        ip_to_mac = {}
+        for row in netkb_data:
+            ip = _extract_value(row, ("IPs", "IP", "ip"))
+            mac = _extract_value(row, ("MAC Address", "MAC", "mac"))
+            if ip and mac and mac.upper() not in {"UNKNOWN", "STANDALONE"}:
+                ip_to_mac[ip] = mac
+
+        for entry in network_data:
+            mac = _extract_value(entry, ("MAC Address", "MAC", "mac"))
+            if not mac or mac.upper() in {"UNKNOWN", "STANDALONE", "00:00:00:00:00:00"}:
+                ip = _extract_value(entry, ("IPs", "IP", "ip"))
+                fallback_mac = ip_to_mac.get(ip)
+                if fallback_mac:
+                    mac = fallback_mac
+            entry['MAC Address'] = mac or ''
+            entry['MAC'] = entry['MAC Address']
+            entry['mac'] = entry['MAC Address']
+    else:
         logger.warning("WiFi-specific network data is empty. Falling back to netkb data.")
-        try:
-            netkb_data = shared_data.read_data()
-            if netkb_data:
-                network_data = netkb_data
+        if netkb_data:
+            normalized_entries = []
+            for row in netkb_data:
+                ip = _extract_value(row, ("IPs", "IP", "ip"))
+                if not ip:
+                    continue
+                mac = _extract_value(row, ("MAC Address", "MAC", "mac"))
+                hostname = _extract_value(row, ("Hostnames", "Hostname", "hostnames", "hostname"))
+                alive = _extract_value(row, ("Alive", "Status", "alive", "status")) or '0'
+                ports = _extract_value(row, ("Ports", "Open Ports", "open_ports"))
+                last_seen = _extract_value(row, ("LastSeen", "Last Seen", "last_seen"))
+
+                normalized_entries.append({
+                    'IPs': ip,
+                    'Hostnames': hostname,
+                    'Alive': alive,
+                    'MAC Address': mac,
+                    'MAC': mac,
+                    'mac': mac,
+                    'Ports': ports,
+                    'LastSeen': last_seen
+                })
+
+            network_data = normalized_entries
+            if network_data:
                 logger.debug("Used netkb data as fallback.")
-        except Exception as e:
-            logger.error(f"Could not read netkb data as fallback: {e}")
+        else:
             network_data = []
 
     current_ssid = get_current_wifi_ssid()
