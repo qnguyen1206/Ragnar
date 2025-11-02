@@ -304,9 +304,15 @@ def sync_all_counts():
                     logger.debug("Updated livestatus file with synchronized counts")
             except Exception as e:
                 logger.warning(f"Could not update livestatus with all sync counts: {e}")
-        
+
+        try:
+            shared_data.update_stats()
+            logger.debug(f"Updated gamification stats - Level: {shared_data.levelnbr}, Points: {shared_data.coinnbr}")
+        except Exception as e:
+            logger.warning(f"Could not update gamification stats: {e}")
+
         logger.debug(f"Completed sync_all_counts() - Targets: {shared_data.targetnbr}, Ports: {shared_data.portnbr}, Vulns: {shared_data.vulnnbr}, Creds: {shared_data.crednbr}")
-        
+
     except Exception as e:
         logger.error(f"Error synchronizing all counts: {e}")
 
@@ -656,6 +662,9 @@ def get_status():
             'vulnerability_count': safe_int(shared_data.vulnnbr),
             'credential_count': safe_int(shared_data.crednbr),
             'data_count': safe_int(shared_data.datanbr),
+            'level': safe_int(shared_data.levelnbr),
+            'points': safe_int(shared_data.coinnbr),
+            'coins': safe_int(shared_data.coinnbr),
             'wifi_connected': safe_bool(shared_data.wifi_connected),
             'bluetooth_active': safe_bool(shared_data.bluetooth_active),
             'pan_connected': safe_bool(shared_data.pan_connected),
@@ -2317,6 +2326,11 @@ def handle_activity_request():
 
 def get_current_status():
     """Get current status data"""
+    try:
+        shared_data.update_stats()
+    except Exception as e:
+        logger.debug(f"Unable to refresh gamification stats: {e}")
+
     return {
         'ragnar_status': safe_str(shared_data.ragnarstatustext),
         'ragnar_status2': safe_str(shared_data.ragnarstatustext2),
@@ -2327,6 +2341,9 @@ def get_current_status():
         'vulnerability_count': safe_int(shared_data.vulnnbr),
         'credential_count': safe_int(shared_data.crednbr),
         'data_count': safe_int(shared_data.datanbr),
+        'level': safe_int(shared_data.levelnbr),
+        'points': safe_int(shared_data.coinnbr),
+        'coins': safe_int(shared_data.coinnbr),
         'wifi_connected': safe_bool(shared_data.wifi_connected),
         'bluetooth_active': safe_bool(shared_data.bluetooth_active),
         'pan_connected': safe_bool(shared_data.pan_connected),
@@ -3621,7 +3638,10 @@ def get_dashboard_stats():
             'target_count': safe_int(shared_data.targetnbr),
             'port_count': safe_int(shared_data.portnbr),
             'vulnerability_count': safe_int(shared_data.vulnnbr),
-            'credential_count': safe_int(shared_data.crednbr)
+            'credential_count': safe_int(shared_data.crednbr),
+            'level': safe_int(shared_data.levelnbr),
+            'points': safe_int(shared_data.coinnbr),
+            'coins': safe_int(shared_data.coinnbr)
         }
         
         return jsonify(stats)

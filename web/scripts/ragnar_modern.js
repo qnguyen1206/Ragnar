@@ -1263,6 +1263,9 @@ function updateDashboardStatus(data) {
                 updateElement('port-count', stats.port_count || 0);
                 updateElement('vuln-count', stats.vulnerability_count || 0);
                 updateElement('cred-count', stats.credential_count || 0);
+                updateElement('level-count', stats.level || stats.levelnbr || 0);
+                const dashboardPoints = stats.points ?? stats.coins ?? 0;
+                updateElement('points-count', dashboardPoints);
             })
             .catch(() => {
                 // Fallback to WebSocket data if API fails
@@ -1270,6 +1273,9 @@ function updateDashboardStatus(data) {
                 updateElement('port-count', data.port_count || 0);
                 updateElement('vuln-count', data.vulnerability_count || 0);
                 updateElement('cred-count', data.credential_count || 0);
+                updateElement('level-count', data.level || data.levelnbr || 0);
+                const fallbackPoints = data.points ?? data.coins ?? 0;
+                updateElement('points-count', fallbackPoints);
             });
     } else {
         // Use WebSocket data if it has non-zero values
@@ -1277,6 +1283,9 @@ function updateDashboardStatus(data) {
         updateElement('port-count', data.port_count || 0);
         updateElement('vuln-count', data.vulnerability_count || 0);
         updateElement('cred-count', data.credential_count || 0);
+        updateElement('level-count', data.level || data.levelnbr || 0);
+        const realtimePoints = data.points ?? data.coins ?? 0;
+        updateElement('points-count', realtimePoints);
     }
     
     // Update status - use the actual e-paper display text
