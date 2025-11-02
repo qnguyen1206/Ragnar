@@ -152,6 +152,8 @@ class Orchestrator:
 
         last_failed_time_str = row.get(action_key, "")
         if 'failed' in last_failed_time_str:
+            if not self.shared_data.retry_failed_actions:
+                return False  # Skip retrying failed actions if retry_failed_actions is disabled
             try:
                 last_failed_time = datetime.strptime(last_failed_time_str.split('_')[1] + "_" + last_failed_time_str.split('_')[2], "%Y%m%d_%H%M%S")
                 if datetime.now() < last_failed_time + timedelta(seconds=self.shared_data.failed_retry_delay):
@@ -214,6 +216,8 @@ class Orchestrator:
 
         last_failed_time_str = row.get(action_key, "")
         if 'failed' in last_failed_time_str:
+            if not self.shared_data.retry_failed_actions:
+                return False  # Skip retrying failed actions if retry_failed_actions is disabled
             try:
                 last_failed_time = datetime.strptime(last_failed_time_str.split('_')[1] + "_" + last_failed_time_str.split('_')[2], "%Y%m%d_%H%M%S")
                 if datetime.now() < last_failed_time + timedelta(seconds=self.shared_data.failed_retry_delay):
@@ -246,51 +250,18 @@ class Orchestrator:
     def run(self):
         """Run the orchestrator cycle to execute actions"""
         #Run the scanner a first time to get the initial data
-        self.shared_data.ragnarorch_status = "NetworkScanner"
-        self.shared_data.ragnarstatustext2 = "First scan..."
-        self.network_scanner.scan()
-        self.shared_data.ragnarstatustext2 = ""
+        if self.network_scanner:
+            self.shared_data.ragnarorch_status = "NetworkScanner"
+            self.shared_data.ragnarstatustext2 = "First scan..."
+            self.network_scanner.scan()
+            self.shared_data.ragnarstatustext2 = ""
+        else:
+            logger.error("Network scanner not initialized. Cannot start orchestrator.")
         while not self.shared_data.orchestrator_should_exit:
             current_data = self.shared_data.read_data()
             any_action_executed = False
-            action_executed_status = None
             action_retry_pending = False
             any_action_executed = self.process_alive_ips(current_data)
-
-            for action in self.actions:
-                for row in current_data:
-                    if row["Alive"] != '1':
-                        continue
-                    ip, ports = row["IPs"], row["Ports"].split(';')
-                    action_key = action.action_name
-
-                    if action.b_parent_action is None:
-                        with self.semaphore:
-                            if self.execute_action(action, ip, ports, row, action_key, current_data):
-                                action_executed_status = action_key
-                                any_action_executed = True
-                                self.shared_data.ragnarorch_status = action_executed_status
-
-                                for child_action in self.actions:
-                                    if child_action.b_parent_action == action_key:
-                                        with self.semaphore:
-                                            if self.execute_action(child_action, ip, ports, row, child_action.action_name, current_data):
-                                                action_executed_status = child_action.action_name
-                                                self.shared_data.ragnarorch_status = action_executed_status
-                                                break
-                                break
-
-            for child_action in self.actions:
-                if child_action.b_parent_action:
-                    action_key = child_action.action_name
-                    for row in current_data:
-                        ip, ports = row["IPs"], row["Ports"].split(';')
-                        with self.semaphore:
-                            if self.execute_action(child_action, ip, ports, row, action_key, current_data):
-                                action_executed_status = child_action.action_name
-                                any_action_executed = True
-                                self.shared_data.ragnarorch_status = action_executed_status
-                                break
 
             self.shared_data.write_data(current_data)
 
@@ -329,6 +300,9 @@ class Orchestrator:
 
                                         # Check failed retry delay
                                         if 'failed' in scan_status:
+                                            if not self.shared_data.retry_failed_actions:
+                                                logger.warning(f"Skipping vulnerability scan for {ip} because retry on failure is disabled.")
+                                                continue  # Skip if retry on failure is disabled
                                             last_failed_time = datetime.strptime(scan_status.split('_')[1] + "_" + scan_status.split('_')[2], "%Y%m%d_%H%M%S")
                                             if datetime.now() < last_failed_time + timedelta(seconds=self.shared_data.failed_retry_delay):
                                                 retry_in_seconds = (last_failed_time + timedelta(seconds=self.shared_data.failed_retry_delay) - datetime.now()).seconds
