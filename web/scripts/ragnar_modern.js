@@ -1204,15 +1204,20 @@ function displayNetworkTable(data) {
     `;
     
     data.forEach(item => {
-        const status = item.Alive === '1' ? 'Online' : 'Offline';
-        const statusColor = item.Alive === '1' ? 'text-green-400' : 'text-gray-400';
-        const ports = item.Ports ? item.Ports.split(';').filter(p => p.trim()).join(', ') : 'None';
-        
+        const aliveValue = item?.Alive ?? item?.alive ?? item?.Status ?? item?.status ?? 0;
+        const aliveString = typeof aliveValue === 'number' ? aliveValue.toString() : String(aliveValue || '0');
+        const isOnline = aliveString === '1' || aliveString.toLowerCase() === 'online' || aliveString === 'true';
+        const status = isOnline ? 'Online' : 'Offline';
+        const statusColor = isOnline ? 'text-green-400' : 'text-gray-400';
+        const hostname = item?.Hostnames || item?.Hostname || item?.hostname || '-';
+        const macAddress = item?.['MAC Address'] || item?.MAC || item?.mac || '-';
+        const ports = item?.Ports ? item.Ports.split(';').filter(p => p.trim()).join(', ') : 'None';
+
         html += `
             <tr class="hover:bg-gray-800 transition-colors">
                 <td class="px-6 py-4 whitespace-nowrap text-sm text-white">${item.IPs || 'N/A'}</td>
-                <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-300">${item.Hostname || '-'}</td>
-                <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-300 font-mono">${item['MAC Address'] || '-'}</td>
+                <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-300">${hostname}</td>
+                <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-300 font-mono">${macAddress}</td>
                 <td class="px-6 py-4 whitespace-nowrap text-sm ${statusColor}">${status}</td>
                 <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-300">${ports}</td>
             </tr>
