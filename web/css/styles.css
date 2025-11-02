@@ -328,7 +328,7 @@ strong {
 
 .info-icon:hover,
 .info-icon:focus {
-    color: #ffb733;
+    color: #ffffff;
 }
 
 .info-icon::after {
@@ -341,7 +341,7 @@ strong {
     color: #ffffff;
     padding: 10px 12px;
     border-radius: 6px;
-    border: 1px solid #e99f00;
+    border: 1px solid #90dda7;
     min-width: 200px;
     max-width: 300px;
     font-size: 12px;
@@ -366,7 +366,7 @@ strong {
     transform: translateX(-50%);
     border-width: 7px;
     border-style: solid;
-    border-color: #e99f00 transparent transparent transparent;
+    border-color: #90dda7 transparent transparent transparent;
     opacity: 0;
     visibility: hidden;
     transition: opacity 0.3s ease, visibility 0.3s ease;
@@ -383,7 +383,7 @@ strong {
 }
 
 .info-icon:focus {
-    outline: 2px solid #e99f00;
+    outline: 2px solid #ffffff;
     outline-offset: 2px;
 }
 
