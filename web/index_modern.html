@@ -232,7 +232,7 @@
         <!-- Dashboard Tab -->
         <div id="dashboard-tab" class="tab-content">
             <!-- Stats Grid -->
-            <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4 mb-8">
+            <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6 gap-4 mb-8">
                 <!-- Targets Card -->
                 <div class="glass rounded-xl p-6 hover:scale-105 transition-transform">
                     <div class="flex items-center justify-between">
@@ -288,6 +288,38 @@
                         <div class="w-12 h-12 bg-yellow-500 bg-opacity-20 rounded-full flex items-center justify-center">
                             <svg class="w-6 h-6 text-yellow-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                                 <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 7a2 2 0 012 2m4 0a6 6 0 01-7.743 5.743L11 17H9v2H7v2H4a1 1 0 01-1-1v-2.586a1 1 0 01.293-.707l5.964-5.964A6 6 0 1121 9z"></path>
+                            </svg>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Level Card -->
+                <div class="glass rounded-xl p-6 hover:scale-105 transition-transform">
+                    <div class="flex items-center justify-between">
+                        <div>
+                            <p class="text-gray-400 text-sm">Level</p>
+                            <p id="level-count" class="text-3xl font-bold text-purple-400">0</p>
+                        </div>
+                        <div class="w-12 h-12 bg-purple-500 bg-opacity-20 rounded-full flex items-center justify-center">
+                            <svg class="w-6 h-6 text-purple-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 14l9-5-9-5-9 5 9 5zm0 0v7"></path>
+                            </svg>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Points Card -->
+                <div class="glass rounded-xl p-6 hover:scale-105 transition-transform">
+                    <div class="flex items-center justify-between">
+                        <div>
+                            <p class="text-gray-400 text-sm">Points</p>
+                            <p id="points-count" class="text-3xl font-bold text-amber-400">0</p>
+                        </div>
+                        <div class="w-12 h-12 bg-amber-500 bg-opacity-20 rounded-full flex items-center justify-center">
+                            <svg class="w-6 h-6 text-amber-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8c-3.314 0-6 1.343-6 3s2.686 3 6 3 6-1.343 6-3-2.686-3-6-3z" />
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 11v2c0 1.657 2.686 3 6 3s6-1.343 6-3v-2" />
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 15v2c0 1.657 2.686 3 6 3s6-1.343 6-3v-2" />
                             </svg>
                         </div>
                     </div>
