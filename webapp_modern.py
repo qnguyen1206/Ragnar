@@ -613,76 +613,110 @@ def update_config():
 def get_network():
     """Get network scan data from WiFi-specific persistent file"""
     try:
-        # Update WiFi-specific network data from latest scan results
+        # Always update WiFi-specific network data from latest scan results first
         update_wifi_network_data()
         
         # Read from WiFi-specific persistent file
         network_data = read_wifi_network_data()
         
-        # If no WiFi-specific data, fallback to legacy behavior
-        if not network_data:
-            logger.debug("No WiFi-specific network data found, falling back to scan results")
+        # If we have persistent data, return it immediately
+        if network_data:
+            current_ssid = get_current_wifi_ssid()
+            logger.info(f"Returning {len(network_data)} persistent network entries for WiFi: {current_ssid}")
+            return jsonify(network_data)
+        
+        # Only fall back to building from scan results if no persistent data exists
+        logger.debug("No WiFi-specific network data found, building from scan results")
+        
+        # Read scan results from CSV files
+        scan_results_dir = getattr(shared_data, 'scan_results_dir', os.path.join('data', 'output', 'scan_results'))
+        
+        if os.path.exists(scan_results_dir):
+            # Process result CSV files to build network data
+            temp_network_data = {}
             
-            # Read scan results from CSV files instead of netkb
-            scan_results_dir = getattr(shared_data, 'scan_results_dir', os.path.join('data', 'output', 'scan_results'))
-            
-            if os.path.exists(scan_results_dir):
-                # Process result CSV files to build network data
-                for filename in os.listdir(scan_results_dir):
-                    if filename.startswith('result_') and filename.endswith('.csv'):
-                        filepath = os.path.join(scan_results_dir, filename)
-                        try:
-                            with open(filepath, 'r', encoding='utf-8', errors='ignore') as f:
-                                reader = csv.reader(f)
-                                for row in reader:
-                                    if len(row) >= 1 and row[0].strip():
-                                        ip = row[0].strip()
-                                        if re.match(r'^(?:[0-9]{1,3}\.){3}[0-9]{1,3}$', ip):
-                                            # Build network data entry
-                                            hostname = row[1] if len(row) > 1 and row[1] else ''
-                                            alive = row[2] if len(row) > 2 and row[2] else '1'
-                                            mac = row[3] if len(row) > 3 and row[3] else ''
-                                            
-                                            # Collect ports from remaining columns
-                                            ports = []
-                                            if len(row) > 4:
-                                                for port_col in row[4:]:
-                                                    if port_col and port_col.strip() and port_col.strip() != '':
-                                                        ports.append(port_col.strip())
-                                            
-                                            network_entry = {
+            for filename in os.listdir(scan_results_dir):
+                if filename.startswith('result_') and filename.endswith('.csv'):
+                    filepath = os.path.join(scan_results_dir, filename)
+                    try:
+                        with open(filepath, 'r', encoding='utf-8', errors='ignore') as f:
+                            reader = csv.reader(f)
+                            for row in reader:
+                                if len(row) >= 1 and row[0].strip():
+                                    ip = row[0].strip()
+                                    if re.match(r'^(?:[0-9]{1,3}\.){3}[0-9]{1,3}$', ip):
+                                        hostname = row[1] if len(row) > 1 and row[1] else ''
+                                        alive = row[2] if len(row) > 2 and row[2] else '1'
+                                        mac = row[3] if len(row) > 3 and row[3] else ''
+                                        
+                                        # Collect ports from remaining columns
+                                        ports = []
+                                        if len(row) > 4:
+                                            for port_col in row[4:]:
+                                                if port_col and port_col.strip() and port_col.strip() != '':
+                                                    ports.append(port_col.strip())
+                                        
+                                        # Update or add entry
+                                        if ip in temp_network_data:
+                                            # Merge data
+                                            if hostname and hostname != 'Unknown':
+                                                temp_network_data[ip]['Hostnames'] = hostname
+                                            if mac and mac != 'Unknown':
+                                                temp_network_data[ip]['MAC Address'] = mac
+                                            temp_network_data[ip]['Alive'] = int(alive) if alive.isdigit() else 1
+                                            existing_ports = set(temp_network_data[ip]['Ports'].split(';')) if temp_network_data[ip]['Ports'] else set()
+                                            existing_ports.update(ports)
+                                            temp_network_data[ip]['Ports'] = ';'.join(sorted(existing_ports, key=lambda x: int(x) if x.isdigit() else 0))
+                                        else:
+                                            # New entry
+                                            temp_network_data[ip] = {
                                                 'IPs': ip,
                                                 'Hostnames': hostname,
                                                 'Alive': int(alive) if alive.isdigit() else 1,
                                                 'MAC Address': mac,
                                                 'Ports': ';'.join(ports) if ports else ''
                                             }
-                                            
-                                            # Check if this IP already exists and merge
-                                            existing = next((item for item in network_data if item['IPs'] == ip), None)
-                                            if existing:
-                                                # Merge ports
-                                                existing_ports = set(existing['Ports'].split(';')) if existing['Ports'] else set()
-                                                new_ports = set(ports)
-                                                all_ports = existing_ports.union(new_ports)
-                                                existing['Ports'] = ';'.join(sorted(all_ports, key=lambda x: int(x) if x.isdigit() else 0))
-                                                # Update hostname if empty
-                                                if not existing['Hostnames'] and hostname:
-                                                    existing['Hostnames'] = hostname
-                                            else:
-                                                network_data.append(network_entry)
-                        except Exception as e:
-                            logger.debug(f"Could not read scan result file {filepath}: {e}")
-                            continue
+                    except Exception as e:
+                        logger.debug(f"Could not read scan result file {filepath}: {e}")
+                        continue
             
-            # Fallback to netkb file if no scan results found
-            if not network_data:
+            # Convert to list format
+            network_data = list(temp_network_data.values())
+            
+            # Save this data to WiFi-specific file for persistence
+            if network_data:
+                # Save the newly built data to persistent file
+                wifi_network_file = get_wifi_specific_network_file()
                 try:
-                    data = shared_data.read_data()
-                    return jsonify(data)
+                    current_time = datetime.now().isoformat()
+                    with open(wifi_network_file, 'w', newline='', encoding='utf-8') as f:
+                        writer = csv.writer(f)
+                        writer.writerow(['IP', 'Hostname', 'Alive', 'MAC', 'Ports', 'LastSeen'])
+                        
+                        for entry in network_data:
+                            writer.writerow([
+                                entry['IPs'],
+                                entry['Hostnames'],
+                                entry['Alive'],
+                                entry['MAC Address'],
+                                entry['Ports'],
+                                current_time
+                            ])
+                    
+                    logger.info(f"Saved {len(network_data)} entries to WiFi-specific network file")
                 except Exception as e:
-                    logger.warning(f"Could not read netkb data: {e}")
-                    return jsonify([])
+                    logger.error(f"Error saving network data to persistent file: {e}")
+        
+        # Final fallback to netkb file if no scan results found
+        if not network_data:
+            try:
+                netkb_data = shared_data.read_data()
+                if netkb_data:
+                    network_data = netkb_data
+                    logger.debug("Used netkb data as fallback")
+            except Exception as e:
+                logger.warning(f"Could not read netkb data: {e}")
+                network_data = []
         
         current_ssid = get_current_wifi_ssid()
         logger.info(f"Returning {len(network_data)} network entries for WiFi: {current_ssid}")
