@@ -130,7 +130,7 @@ class SharedData:
             "__title_Ragnar__": "Settings",
             "manual_mode": False,
             "websrv": True,
-            "web_increment ": False,
+            "web_increment": False,
             "debug_mode": True,
             "scan_vuln_running": False,
             "retry_success_actions": False,
@@ -204,6 +204,21 @@ class SharedData:
             "network_intelligence_enabled": True,
             "network_auto_resolution": True,
         }
+
+    def _normalize_config_keys(self, config):
+        """Ensure legacy or malformed configuration keys are aligned with the current schema."""
+        if 'web_increment ' in config:
+            if 'web_increment' not in config:
+                config['web_increment'] = config['web_increment ']
+            del config['web_increment ']
+        return config
+
+    def _remove_legacy_attributes(self):
+        """Drop attributes created from legacy configuration keys that cannot be accessed normally."""
+        legacy_attrs = ['web_increment ']
+        for attr in legacy_attrs:
+            if hasattr(self, attr):
+                delattr(self, attr)
 
     def update_mac_blacklist(self):
         """Update the MAC blacklist without immediate save."""
@@ -519,9 +534,12 @@ class SharedData:
             if os.path.exists(self.shared_config_json):
                 with open(self.shared_config_json, 'r') as f:
                     config = json.load(f)
+                    config = self._normalize_config_keys(config)
                     self.config.update(config)
+                    self.config = self._normalize_config_keys(self.config)
                     for key, value in self.config.items():
                         setattr(self, key, value)
+                    self._remove_legacy_attributes()
             else:
                 logger.warning("Configuration file not found, creating new one with default values...")
                 self.save_config()
@@ -539,6 +557,7 @@ class SharedData:
                 os.makedirs(self.configdir)
                 logger.info(f"Created configuration directory at {self.configdir}")
             try:
+                self.config = self._normalize_config_keys(self.config)
                 with open(self.shared_config_json, 'w') as f:
                     json.dump(self.config, f, indent=4)
                 logger.info(f"Configuration saved to {self.shared_config_json}")

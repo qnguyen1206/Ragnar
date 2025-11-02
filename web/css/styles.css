@@ -273,8 +273,20 @@ strong {
     margin-bottom: 20px; /* Space between switches */
 }
 
-.label-switch label {
+.label-switch .label-text > label {
     margin-left: 10px;
+}
+
+.label-text,
+.label-with-info {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.label-with-info {
+    justify-content: flex-start;
+    flex-wrap: wrap;
 }
 
 .section-title {
@@ -286,10 +298,88 @@ strong {
 }
 
 .section-item {
+    display: flex;
+    flex-direction: column;
+    align-items: stretch;
+    gap: 8px;
     font-weight: bold;
     font-size: 15px;
     color: rgb(255, 255, 255);
     margin-bottom: 20px; /* Space below each section item */
+}
+
+.info-icon {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 18px;
+    height: 18px;
+    border-radius: 50%;
+    background-color: #e99f00;
+    color: #000;
+    font-size: 12px;
+    font-weight: bold;
+    cursor: pointer;
+    position: relative;
+    transition: background-color 0.2s ease;
+}
+
+.info-icon:hover,
+.info-icon:focus {
+    background-color: #ffb733;
+    color: #111;
+}
+
+.info-icon::after {
+    content: attr(data-tooltip);
+    position: absolute;
+    bottom: calc(100% + 8px);
+    left: 50%;
+    transform: translateX(-50%);
+    background-color: #1f1f1f;
+    color: #ffffff;
+    padding: 8px 10px;
+    border-radius: 6px;
+    min-width: 180px;
+    max-width: 260px;
+    font-size: 11px;
+    line-height: 1.4;
+    opacity: 0;
+    visibility: hidden;
+    transition: opacity 0.2s ease;
+    pointer-events: none;
+    z-index: 20;
+    text-align: left;
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.35);
+}
+
+.info-icon::before {
+    content: "";
+    position: absolute;
+    bottom: calc(100% + 2px);
+    left: 50%;
+    transform: translateX(-50%);
+    border-width: 6px;
+    border-style: solid;
+    border-color: #1f1f1f transparent transparent transparent;
+    opacity: 0;
+    visibility: hidden;
+    transition: opacity 0.2s ease;
+    pointer-events: none;
+    z-index: 20;
+}
+
+.info-icon:hover::after,
+.info-icon:hover::before,
+.info-icon:focus::after,
+.info-icon:focus::before {
+    opacity: 1;
+    visibility: visible;
+}
+
+.info-icon:focus {
+    outline: 2px solid #e99f00;
+    outline-offset: 2px;
 }
 
 .config-buttons {

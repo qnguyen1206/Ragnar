@@ -355,9 +355,27 @@ class WebUtils:
         handler.send_response(200)
         handler.send_header("Content-type", "application/json")
         handler.end_headers()
-        with open(self.shared_data.shared_config_json, 'r') as f:
-            config = json.load(f)
-        handler.wfile.write(json.dumps(config).encode('utf-8'))
+
+        config_payload = None
+
+        try:
+            with open(self.shared_data.shared_config_json, 'r') as f:
+                config_payload = json.load(f)
+        except FileNotFoundError:
+            self.logger.warning("Configuration file missing on disk; serving in-memory settings instead.")
+        except json.JSONDecodeError as exc:
+            self.logger.error(f"Configuration file is not valid JSON: {exc}")
+        except OSError as exc:
+            self.logger.error(f"Unable to read configuration file: {exc}")
+
+        if not config_payload:
+            # Fall back to the live config or, as a last resort, the defaults
+            config_payload = dict(self.shared_data.config or self.shared_data.default_config)
+        else:
+            config_payload = dict(config_payload)
+
+        config_payload = self.shared_data._normalize_config_keys(config_payload)
+        handler.wfile.write(json.dumps(config_payload).encode('utf-8'))
 
     def restore_default_config(self, handler):
         handler.send_response(200)
