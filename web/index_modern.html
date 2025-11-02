@@ -65,6 +65,87 @@
         .scrollbar-thin::-webkit-scrollbar-thumb:hover {
             background: rgba(14, 165, 233, 0.8);
         }
+        
+        /* Info Icon Tooltip Styles */
+        .info-icon {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            width: 20px;
+            height: 20px;
+            border-radius: 50%;
+            background-color: #e99f00;
+            color: #000;
+            font-size: 14px;
+            font-weight: bold;
+            cursor: pointer;
+            position: relative;
+            transition: background-color 0.2s ease;
+            flex-shrink: 0;
+            user-select: none;
+        }
+
+        .info-icon:hover,
+        .info-icon:focus {
+            background-color: #ffb733;
+            color: #111;
+        }
+
+        .info-icon::after {
+            content: attr(data-tooltip);
+            position: absolute;
+            bottom: calc(100% + 10px);
+            left: 50%;
+            transform: translateX(-50%);
+            background-color: #2a2a2a;
+            color: #ffffff;
+            padding: 10px 12px;
+            border-radius: 6px;
+            border: 1px solid #e99f00;
+            min-width: 200px;
+            max-width: 300px;
+            font-size: 12px;
+            line-height: 1.5;
+            font-weight: normal;
+            opacity: 0;
+            visibility: hidden;
+            transition: opacity 0.3s ease, visibility 0.3s ease;
+            pointer-events: none;
+            z-index: 1000;
+            text-align: left;
+            box-shadow: 0 4px 16px rgba(0, 0, 0, 0.5);
+            white-space: normal;
+            word-wrap: break-word;
+        }
+
+        .info-icon::before {
+            content: "";
+            position: absolute;
+            bottom: calc(100% + 3px);
+            left: 50%;
+            transform: translateX(-50%);
+            border-width: 7px;
+            border-style: solid;
+            border-color: #e99f00 transparent transparent transparent;
+            opacity: 0;
+            visibility: hidden;
+            transition: opacity 0.3s ease, visibility 0.3s ease;
+            pointer-events: none;
+            z-index: 1000;
+        }
+
+        .info-icon:hover::after,
+        .info-icon:hover::before,
+        .info-icon:focus::after,
+        .info-icon:focus::before {
+            opacity: 1;
+            visibility: visible;
+        }
+
+        .info-icon:focus {
+            outline: 2px solid #e99f00;
+            outline-offset: 2px;
+        }
     </style>
 </head>
 

@@ -6,6 +6,278 @@ const MAX_RECONNECT_ATTEMPTS = 5;
 let currentTab = 'dashboard';
 let autoRefreshIntervals = {};
 
+// Configuration metadata for tooltips
+const configMetadata = {
+    manual_mode: {
+        label: "Manual Mode",
+        description: "Hold Ragnar in manual control. Disable this to let the orchestrator continuously discover devices, run actions, and launch vulnerability scans automatically."
+    },
+    websrv: {
+        label: "Web Server",
+        description: "Keep the legacy configuration web service running so the interface remains reachable over HTTP."
+    },
+    web_increment: {
+        label: "Web Increment",
+        description: "Legacy incremental refresh support for the classic interface. Leave disabled unless you are troubleshooting the legacy UI."
+    },
+    debug_mode: {
+        label: "Debug Mode",
+        description: "Enable verbose debug logging for deeper troubleshooting output."
+    },
+    scan_vuln_running: {
+        label: "Automatic Vulnerability Scans",
+        description: "Allow the orchestrator to launch vulnerability scans on discovered hosts based on the configured interval."
+    },
+    retry_success_actions: {
+        label: "Retry Successful Actions",
+        description: "Re-run actions that previously succeeded after the success retry delay to keep intelligence fresh."
+    },
+    retry_failed_actions: {
+        label: "Retry Failed Actions",
+        description: "Retry actions that failed after waiting the failed retry delay."
+    },
+    blacklistcheck: {
+        label: "Honor Scan Blacklists",
+        description: "Skip hosts or MAC addresses that appear in the scan blacklist lists when running automated actions."
+    },
+    displaying_csv: {
+        label: "Display Scan CSV",
+        description: "Push the most recent scan CSV results to the e-paper display after each network sweep."
+    },
+    log_debug: {
+        label: "Log Debug Messages",
+        description: "Include debug-level entries in Ragnar logs."
+    },
+    log_info: {
+        label: "Log Info Messages",
+        description: "Include informational entries in Ragnar logs."
+    },
+    log_warning: {
+        label: "Log Warning Messages",
+        description: "Include warning-level entries in Ragnar logs."
+    },
+    log_error: {
+        label: "Log Error Messages",
+        description: "Include error-level entries in Ragnar logs."
+    },
+    log_critical: {
+        label: "Log Critical Messages",
+        description: "Include critical-level entries in Ragnar logs."
+    },
+    startup_delay: {
+        label: "Startup Delay (s)",
+        description: "Seconds to wait after boot before the orchestrator begins automated activity."
+    },
+    web_delay: {
+        label: "Web Update Delay (s)",
+        description: "Seconds between refreshes of the web dashboards and API responses."
+    },
+    screen_delay: {
+        label: "Screen Update Delay (s)",
+        description: "Seconds between e-paper display refreshes."
+    },
+    comment_delaymin: {
+        label: "Comment Delay Min (s)",
+        description: "Minimum number of seconds between on-screen comment rotations."
+    },
+    comment_delaymax: {
+        label: "Comment Delay Max (s)",
+        description: "Maximum number of seconds between on-screen comment rotations."
+    },
+    livestatus_delay: {
+        label: "Live Status Delay (s)",
+        description: "Seconds between updates to the live status CSV that feeds dashboards."
+    },
+    image_display_delaymin: {
+        label: "Image Display Min (s)",
+        description: "Minimum time an image remains on the e-paper display."
+    },
+    image_display_delaymax: {
+        label: "Image Display Max (s)",
+        description: "Maximum time an image remains on the e-paper display."
+    },
+    scan_interval: {
+        label: "Scan Interval (s)",
+        description: "Seconds between full network discovery scans."
+    },
+    scan_vuln_interval: {
+        label: "Vulnerability Scan Interval (s)",
+        description: "Seconds between automated vulnerability scan cycles when enabled."
+    },
+    failed_retry_delay: {
+        label: "Failed Retry Delay (s)",
+        description: "Seconds to wait before retrying an action that previously failed."
+    },
+    success_retry_delay: {
+        label: "Success Retry Delay (s)",
+        description: "Seconds to wait before repeating an action that previously succeeded."
+    },
+    ref_width: {
+        label: "Reference Width",
+        description: "Reference pixel width used to scale drawings for the e-paper display."
+    },
+    ref_height: {
+        label: "Reference Height",
+        description: "Reference pixel height used to scale drawings for the e-paper display."
+    },
+    epd_type: {
+        label: "EPD Type",
+        description: "Model identifier for the connected Waveshare e-paper display."
+    },
+    portlist: {
+        label: "Additional Ports",
+        description: "Comma separated list of extra ports to check on every host in addition to the sequential range."
+    },
+    mac_scan_blacklist: {
+        label: "MAC Scan Blacklist",
+        description: "Comma separated MAC addresses Ragnar should ignore during scans and automated actions."
+    },
+    ip_scan_blacklist: {
+        label: "IP Scan Blacklist",
+        description: "Comma separated IP addresses Ragnar should ignore during scans and automated actions."
+    },
+    steal_file_names: {
+        label: "Target File Names",
+        description: "Comma separated file name fragments that trigger file collection when encountered."
+    },
+    steal_file_extensions: {
+        label: "Target File Extensions",
+        description: "Comma separated file extensions that Ragnar should collect when found."
+    },
+    nmap_scan_aggressivity: {
+        label: "Nmap Aggressiveness",
+        description: "Timing template flag passed to nmap (for example -T2). Adjust to trade accuracy for speed."
+    },
+    portstart: {
+        label: "Port Range Start",
+        description: "First port in the sequential range scanned on every host."
+    },
+    portend: {
+        label: "Port Range End",
+        description: "Last port in the sequential range scanned on every host."
+    },
+    timewait_smb: {
+        label: "SMB Retry Wait (s)",
+        description: "Seconds to wait before retrying SMB actions against a host."
+    },
+    timewait_ssh: {
+        label: "SSH Retry Wait (s)",
+        description: "Seconds to wait before retrying SSH actions against a host."
+    },
+    timewait_telnet: {
+        label: "Telnet Retry Wait (s)",
+        description: "Seconds to wait before retrying Telnet actions against a host."
+    },
+    timewait_ftp: {
+        label: "FTP Retry Wait (s)",
+        description: "Seconds to wait before retrying FTP actions against a host."
+    },
+    timewait_sql: {
+        label: "SQL Retry Wait (s)",
+        description: "Seconds to wait before retrying SQL actions against a host."
+    },
+    timewait_rdp: {
+        label: "RDP Retry Wait (s)",
+        description: "Seconds to wait before retrying RDP actions against a host."
+    },
+    wifi_known_networks: {
+        label: "Known Wi-Fi Networks",
+        description: "Comma separated list of SSIDs Ragnar should automatically join when detected."
+    },
+    wifi_ap_ssid: {
+        label: "AP SSID",
+        description: "Network name broadcast when Ragnar creates its own access point."
+    },
+    wifi_ap_password: {
+        label: "AP Password",
+        description: "Password clients must use to join Ragnar's access point."
+    },
+    wifi_connection_timeout: {
+        label: "Wi-Fi Connection Timeout (s)",
+        description: "Seconds to wait for each Wi-Fi connection attempt before considering it failed."
+    },
+    wifi_max_attempts: {
+        label: "Wi-Fi Max Attempts",
+        description: "Number of Wi-Fi connection retries before giving up or falling back to AP mode."
+    },
+    wifi_scan_interval: {
+        label: "Wi-Fi Scan Interval (s)",
+        description: "Seconds between wireless network scans performed by the Wi-Fi manager."
+    },
+    wifi_monitor_enabled: {
+        label: "Wi-Fi Monitor",
+        description: "Keep the Wi-Fi manager running so connectivity issues are detected quickly."
+    },
+    wifi_auto_ap_fallback: {
+        label: "Auto AP Fallback",
+        description: "Automatically enable Ragnar's access point if normal Wi-Fi connectivity cannot be restored."
+    },
+    wifi_ap_timeout: {
+        label: "AP Timeout (s)",
+        description: "Maximum duration before an active Ragnar access point session shuts down automatically."
+    },
+    wifi_ap_idle_timeout: {
+        label: "AP Idle Timeout (s)",
+        description: "Seconds of inactivity allowed before shutting down the Ragnar access point."
+    },
+    wifi_reconnect_interval: {
+        label: "Wi-Fi Reconnect Interval (s)",
+        description: "Seconds between Wi-Fi reconnect attempts when the device is offline."
+    },
+    wifi_ap_cycle_enabled: {
+        label: "AP Smart Cycling",
+        description: "Periodically cycle the access point when active to limit exposure."
+    },
+    wifi_initial_connection_timeout: {
+        label: "Initial Wi-Fi Timeout (s)",
+        description: "Timeout for the very first Wi-Fi connection attempt during boot."
+    },
+    network_device_retention_days: {
+        label: "Device Retention (days)",
+        description: "Number of days to keep inactive devices in the network database before pruning them."
+    },
+    network_resolution_timeout: {
+        label: "Resolution Timeout (s)",
+        description: "Seconds to wait before re-resolving details for the same device."
+    },
+    network_confirmation_scans: {
+        label: "Confirmation Scans",
+        description: "Number of extra scans required to confirm a detected network change."
+    },
+    network_change_grace: {
+        label: "Change Grace Period (s)",
+        description: "Grace period after detecting a network change before automation responds."
+    },
+    network_intelligence_enabled: {
+        label: "Network Intelligence",
+        description: "Enable the network intelligence engine that tracks devices and their state changes."
+    },
+    network_auto_resolution: {
+        label: "Automatic Resolution",
+        description: "Automatically resolve and enrich newly discovered or changed devices."
+    }
+};
+
+function getConfigLabel(key) {
+    if (configMetadata[key] && configMetadata[key].label) {
+        return configMetadata[key].label;
+    }
+    return key.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase());
+}
+
+function getConfigDescription(key) {
+    if (configMetadata[key] && configMetadata[key].description) {
+        return configMetadata[key].description;
+    }
+    return "No additional information available for this setting.";
+}
+
+function escapeHtml(text) {
+    const div = document.createElement('div');
+    div.textContent = text;
+    return div.innerHTML;
+}
+
 // Initialize on page load
 document.addEventListener('DOMContentLoaded', function() {
     initializeSocket();
@@ -1347,20 +1619,26 @@ function displayConfigForm(config) {
             if (config.hasOwnProperty(key)) {
                 const value = config[key];
                 const type = typeof value === 'boolean' ? 'checkbox' : 'text';
+                const label = getConfigLabel(key);
+                const description = escapeHtml(getConfigDescription(key));
                 
                 if (type === 'checkbox') {
                     html += `
                         <label class="flex items-center space-x-3 p-3 rounded-lg hover:bg-slate-700 hover:bg-opacity-50 transition-colors cursor-pointer">
                             <input type="checkbox" name="${key}" ${value ? 'checked' : ''} 
                                    class="w-5 h-5 rounded bg-slate-700 border-slate-600 text-Ragnar-500 focus:ring-Ragnar-500">
-                            <span>${key.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase())}</span>
+                            <span class="flex items-center gap-2">
+                                ${label}
+                                <span class="info-icon" tabindex="0" role="button" aria-label="${description}" data-tooltip="${description}">ⓘ</span>
+                            </span>
                         </label>
                     `;
                 } else {
                     html += `
                         <div class="space-y-2">
-                            <label class="block text-sm text-gray-400">
-                                ${key.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase())}
+                            <label class="flex items-center gap-2 text-sm text-gray-400">
+                                ${label}
+                                <span class="info-icon" tabindex="0" role="button" aria-label="${description}" data-tooltip="${description}">ⓘ</span>
                             </label>
                             <input type="${type}" name="${key}" value="${value}"
                                    class="w-full px-4 py-2 rounded-lg bg-slate-700 border border-slate-600 focus:border-Ragnar-500 focus:ring-1 focus:ring-Ragnar-500">
