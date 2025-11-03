@@ -303,6 +303,7 @@
                 🔍 Scan Networks
             </button>
             <button class="btn btn-secondary" onclick="refreshStatus()">🔄 Refresh Status</button>
+            <button class="btn btn-secondary" onclick="showManualEntryOption()">✏️ Manual Entry</button>
             <button class="btn btn-danger" onclick="leaveAPMode()">📡 Leave AP Mode</button>
         </div>
 
@@ -488,6 +489,17 @@
             }
 
             const networksHtml = availableNetworks.map(network => {
+                // Handle instructional networks differently
+                if (network.instruction) {
+                    return `
+                        <div class="network-item" style="background: rgba(255, 193, 7, 0.1); border-left: 4px solid #ffc107;">
+                            <div class="network-info">
+                                <div class="network-name" style="color: #856404;">${network.ssid}</div>
+                            </div>
+                        </div>
+                    `;
+                }
+                
                 const signalPercent = Math.min(network.signal, 100);
                 const securityIcon = network.security === 'Open' ? '🔓' : '🔒';
                 const knownIcon = network.known ? '⭐' : '';
@@ -742,6 +754,156 @@
             setTimeout(() => {
                 alertElement.style.display = 'none';
             }, 5000);
+        }
+
+        // Enhanced network scanning with fallback handling for Pi Zero W2
+        async function scanNetworks() {
+            const scanBtn = document.querySelector('button[onclick="scanNetworks()"]');
+            const loading = document.getElementById('scan-loading');
+            const originalText = scanBtn.textContent;
+            
+            scanBtn.disabled = true;
+            loading.style.display = 'inline-block';
+            
+            try {
+                const response = await fetch('/api/wifi/scan', { method: 'POST' });
+                const result = await response.json();
+                
+                if (result.warning) {
+                    showAlert(result.warning, 'warning');
+                }
+                
+                if (result.networks) {
+                    availableNetworks = result.networks;
+                    updateAvailableNetworks();
+                    
+                    // Check if we got instructional networks (scanning failed)
+                    const hasInstructions = result.networks.some(net => net.instruction);
+                    if (hasInstructions || result.manual_entry_available) {
+                        showManualEntryOption();
+                    }
+                    
+                    const realNetworks = result.networks.filter(net => !net.instruction);
+                    if (realNetworks.length > 0) {
+                        showAlert(`Found ${realNetworks.length} networks`, 'success');
+                    } else if (result.ap_mode) {
+                        showAlert('Scanning limited in AP mode. Use manual entry below.', 'info');
+                    }
+                } else {
+                    showAlert('No networks found. You can manually enter network details.', 'info');
+                    showManualEntryOption();
+                }
+                
+            } catch (error) {
+                console.error('Scan error:', error);
+                showAlert('Scan failed. You can manually enter network details below.', 'warning');
+                showManualEntryOption();
+            } finally {
+                scanBtn.disabled = false;
+                loading.style.display = 'none';
+            }
+        }
+
+        // Show manual network entry option
+        function showManualEntryOption() {
+            // Check if manual entry already exists
+            if (document.getElementById('manual-entry-section')) {
+                return;
+            }
+            
+            const manualEntryHtml = `
+                <div id="manual-entry-section" class="section" style="margin-top: 20px;">
+                    <h2>Manual Network Entry</h2>
+                    <p style="color: #666; margin-bottom: 15px;">
+                        Enter network details manually if your network doesn't appear in the scan.
+                    </p>
+                    <div id="manual-entry" style="padding: 20px; background: rgba(102, 126, 234, 0.1); border-radius: 8px; border: 1px solid rgba(102, 126, 234, 0.3);">
+                        <div class="form-group">
+                            <label for="manual-ssid">Network Name (SSID):</label>
+                            <input type="text" id="manual-ssid" placeholder="Enter network name" style="width: 100%; padding: 10px; border: 1px solid #ddd; border-radius: 5px;">
+                        </div>
+                        <div class="form-group">
+                            <label for="manual-password">Password:</label>
+                            <input type="password" id="manual-password" placeholder="Enter password (leave blank for open networks)" style="width: 100%; padding: 10px; border: 1px solid #ddd; border-radius: 5px;">
+                        </div>
+                        <div class="form-group">
+                            <label for="manual-priority">Priority (1-10):</label>
+                            <input type="number" id="manual-priority" value="5" min="1" max="10" style="width: 100px; padding: 10px; border: 1px solid #ddd; border-radius: 5px;">
+                        </div>
+                        <button onclick="connectManualNetwork()" class="btn btn-success" style="margin-right: 10px;">
+                            <span id="manual-connect-loading" style="display: none;" class="loading"></span>
+                            Connect to Network
+                        </button>
+                        <button onclick="hideManualEntry()" class="btn btn-secondary">
+                            Hide Manual Entry
+                        </button>
+                    </div>
+                </div>
+            `;
+            
+            // Insert after available networks section
+            const availableSection = document.querySelector('#available-networks').closest('.section');
+            availableSection.insertAdjacentHTML('afterend', manualEntryHtml);
+        }
+
+        // Hide manual entry section
+        function hideManualEntry() {
+            const manualSection = document.getElementById('manual-entry-section');
+            if (manualSection) {
+                manualSection.remove();
+            }
+        }
+
+        // Connect to manually entered network
+        async function connectManualNetwork() {
+            const ssid = document.getElementById('manual-ssid').value.trim();
+            const password = document.getElementById('manual-password').value;
+            const priority = parseInt(document.getElementById('manual-priority').value) || 5;
+            const loading = document.getElementById('manual-connect-loading');
+            
+            if (!ssid) {
+                showAlert('Please enter a network name', 'error');
+                return;
+            }
+            
+            loading.style.display = 'inline-block';
+            
+            try {
+                const response = await fetch('/api/wifi/connect', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({
+                        ssid: ssid,
+                        password: password,
+                        priority: priority,
+                        save: true
+                    })
+                });
+                
+                const data = await response.json();
+                
+                if (data.success) {
+                    showAlert(data.message || 'Connection attempt started', 'success');
+                    // Clear the form
+                    document.getElementById('manual-ssid').value = '';
+                    document.getElementById('manual-password').value = '';
+                    document.getElementById('manual-priority').value = '5';
+                    
+                    setTimeout(() => {
+                        refreshStatus();
+                        loadNetworks(); // Refresh network lists
+                    }, 3000);
+                } else {
+                    showAlert(data.error || 'Connection failed', 'error');
+                }
+            } catch (error) {
+                console.error('Manual connection error:', error);
+                showAlert('Connection error: ' + error.message, 'error');
+            } finally {
+                loading.style.display = 'none';
+            }
         }
 
         // Auto-refresh status every 30 seconds

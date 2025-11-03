@@ -837,6 +837,86 @@ class WiFiManager:
             self.logger.error(f"Error in smart AP scanning: {e}")
             self.ap_logger.error(f"Error during smart AP scan: {e}")
             return []
+
+    def _parse_iwlist_output(self, output):
+        """Parse iwlist scan output into network list for Pi Zero W2 compatibility"""
+        networks = []
+        current_network = {}
+        
+        try:
+            for line in output.split('\n'):
+                line = line.strip()
+                
+                if 'Cell ' in line and 'Address:' in line:
+                    if current_network.get('ssid'):
+                        networks.append(current_network)
+                    current_network = {}
+                
+                elif 'ESSID:' in line:
+                    ssid = line.split('ESSID:')[1].strip('"')
+                    if ssid and ssid != '<hidden>' and ssid != self.ap_ssid:
+                        current_network['ssid'] = ssid
+                
+                elif 'Signal level=' in line:
+                    try:
+                        signal = re.search(r'Signal level=(-?\d+)', line)
+                        if signal:
+                            dbm = int(signal.group(1))
+                            # Convert dBm to percentage (rough approximation)
+                            percentage = max(0, min(100, (dbm + 100) * 2))
+                            current_network['signal'] = percentage
+                    except Exception as e:
+                        self.logger.debug(f"Error parsing signal: {e}")
+                        current_network['signal'] = 50
+                
+                elif 'Encryption key:' in line:
+                    if 'on' in line:
+                        current_network['security'] = 'WPA/WPA2'
+                    else:
+                        current_network['security'] = 'Open'
+            
+            # Add the last network if it's complete
+            if current_network.get('ssid'):
+                networks.append(current_network)
+            
+            # Add known network flags
+            for network in networks:
+                network['known'] = network['ssid'] in [net['ssid'] for net in self.known_networks]
+            
+            self.logger.debug(f"Parsed {len(networks)} networks from iwlist output")
+            return networks
+            
+        except Exception as e:
+            self.logger.error(f"Error parsing iwlist output: {e}")
+            return []
+
+    def _parse_nmcli_output(self, output):
+        """Parse nmcli output into network list for Pi Zero W2 compatibility"""
+        networks = []
+        
+        try:
+            for line in output.strip().split('\n'):
+                if line.strip():
+                    parts = line.split(':')
+                    if len(parts) >= 3:
+                        ssid = parts[0].strip()
+                        signal = parts[1].strip()
+                        security = parts[2].strip()
+                        
+                        if ssid and ssid != '--' and ssid != self.ap_ssid:
+                            networks.append({
+                                'ssid': ssid,
+                                'signal': int(signal) if signal.isdigit() else 50,
+                                'security': security if security else 'Open',
+                                'known': ssid in [net['ssid'] for net in self.known_networks]
+                            })
+            
+            self.logger.debug(f"Parsed {len(networks)} networks from nmcli output")
+            return networks
+            
+        except Exception as e:
+            self.logger.error(f"Error parsing nmcli output: {e}")
+            return []
     
     def try_connect_known_networks(self):
         """Try to connect to known networks in priority order"""

@@ -626,6 +626,19 @@ def captive_portal():
     """Explicit captive portal route"""
     return send_from_directory('web', 'captive_portal.html')
 
+# WiFi configuration page route
+@app.route('/wifi-config')
+def wifi_config_page():
+    """Serve the Wi-Fi configuration page for AP clients and regular users"""
+    return send_from_directory('web', 'wifi_config.html')
+
+# Alternative routes for WiFi config (for compatibility)
+@app.route('/wifi')
+@app.route('/setup')
+def wifi_config_alt():
+    """Alternative routes for Wi-Fi configuration"""
+    return send_from_directory('web', 'wifi_config.html')
+
 
 # Captive portal detection routes for mobile devices
 @app.route('/generate_204')
@@ -1442,50 +1455,156 @@ def get_wifi_status():
 
 @app.route('/api/wifi/scan', methods=['POST'])
 def scan_wifi_networks():
-    """Scan for available Wi-Fi networks"""
+    """Scan for available Wi-Fi networks with AP mode considerations for Pi Zero W2"""
     try:
         wifi_manager = getattr(shared_data, 'ragnar_instance', None)
         if wifi_manager and hasattr(wifi_manager, 'wifi_manager'):
-            networks = wifi_manager.wifi_manager.scan_networks()
-            return jsonify({'networks': networks})
+            # Check if we're in AP mode and handle accordingly
+            if wifi_manager.wifi_manager.ap_mode_active:
+                logger.info("Scanning networks while in AP mode (Pi Zero W2 compatible)")
+                # Use specialized AP mode scanning
+                networks = wifi_manager.wifi_manager.scan_networks_while_ap()
+                
+                # Check if we got instructional networks (scan failed)
+                if networks and any(net.get('instruction') for net in networks):
+                    return jsonify({
+                        'networks': networks,
+                        'warning': 'Live scanning limited in AP mode. Manual entry recommended.',
+                        'manual_entry_available': True,
+                        'ap_mode': True
+                    })
+                else:
+                    return jsonify({
+                        'networks': networks,
+                        'success': True,
+                        'ap_mode': True
+                    })
+            else:
+                # Regular scanning when not in AP mode
+                networks = wifi_manager.wifi_manager.scan_networks()
+                return jsonify({
+                    'networks': networks,
+                    'success': True,
+                    'ap_mode': False
+                })
         else:
-            return jsonify({'error': 'Wi-Fi manager not available'}), 503
+            return jsonify({
+                'error': 'Wi-Fi manager not available',
+                'manual_entry_available': True
+            }), 503
     except Exception as e:
         logger.error(f"Error scanning Wi-Fi networks: {e}")
-        return jsonify({'error': str(e)}), 500
+        # Fallback to cached networks if scanning fails
+        try:
+            wifi_manager = getattr(shared_data, 'ragnar_instance', None)
+            if wifi_manager and hasattr(wifi_manager, 'wifi_manager'):
+                known_networks = wifi_manager.wifi_manager.get_known_networks()
+                return jsonify({
+                    'networks': known_networks,
+                    'warning': 'Live scan failed, showing known networks only',
+                    'manual_entry_available': True
+                })
+        except:
+            pass
+        
+        return jsonify({
+            'networks': [],
+            'error': 'Scanning failed',
+            'manual_entry_available': True
+        }), 500
 
 @app.route('/api/wifi/networks')
 def get_wifi_networks():
-    """Get available and known Wi-Fi networks"""
+    """Get available and known Wi-Fi networks - optimized for Pi Zero W2 AP mode"""
     try:
         wifi_manager = getattr(shared_data, 'ragnar_instance', None)
         if wifi_manager and hasattr(wifi_manager, 'wifi_manager'):
-            available = wifi_manager.wifi_manager.get_available_networks()
-            known = wifi_manager.wifi_manager.get_known_networks()
             
-            # For captive portal, return networks in a simple format
+            # For captive portal/AP clients, use lightweight response
             if is_ap_client_request():
-                return jsonify({
-                    'success': True,
-                    'networks': available if available else []
-                })
+                logger.info("Serving networks to AP client - using optimized response")
+                try:
+                    if wifi_manager.wifi_manager.ap_mode_active:
+                        available = wifi_manager.wifi_manager.scan_networks_while_ap()
+                    else:
+                        available = wifi_manager.wifi_manager.get_available_networks()
+                    
+                    # Limit to top 10 strongest signals to reduce memory usage on Pi Zero W2
+                    if available:
+                        # Filter out instructional networks for API response
+                        real_networks = [net for net in available if not net.get('instruction')]
+                        if real_networks:
+                            available = sorted(real_networks, 
+                                             key=lambda x: x.get('signal', 0), 
+                                             reverse=True)[:10]
+                        else:
+                            # If only instructional networks, include them
+                            available = available[:3]  # Just the top instructions
+                    
+                    return jsonify({
+                        'success': True,
+                        'networks': available if available else [],
+                        'ap_mode': wifi_manager.wifi_manager.ap_mode_active,
+                        'manual_entry_available': True
+                    })
+                except Exception as e:
+                    logger.warning(f"Limited scan failed for AP client: {e}")
+                    # Fallback to known networks for AP clients
+                    known_networks = wifi_manager.wifi_manager.get_known_networks()
+                    return jsonify({
+                        'success': True,
+                        'networks': known_networks[:5],  # Limit for memory
+                        'error': 'Scanning limited in AP mode',
+                        'manual_entry_available': True,
+                        'ap_mode': True
+                    })
             else:
-                # For main interface, return detailed format
-                return jsonify({
-                    'success': True,
-                    'available': available,
-                    'known': known
-                })
+                # Full response for regular interface
+                try:
+                    if wifi_manager.wifi_manager.ap_mode_active:
+                        available = wifi_manager.wifi_manager.scan_networks_while_ap()
+                    else:
+                        available = wifi_manager.wifi_manager.get_available_networks()
+                    
+                    known = wifi_manager.wifi_manager.get_known_networks()
+                    
+                    return jsonify({
+                        'success': True,
+                        'available': available,
+                        'known': known,
+                        'ap_mode': wifi_manager.wifi_manager.ap_mode_active,
+                        'manual_entry_available': True
+                    })
+                except Exception as e:
+                    logger.warning(f"Network scan failed: {e}")
+                    # Fallback to known networks only
+                    known = wifi_manager.wifi_manager.get_known_networks()
+                    return jsonify({
+                        'success': True,
+                        'available': [],
+                        'known': known,
+                        'error': 'Scanning failed, showing known networks only',
+                        'manual_entry_available': True
+                    })
         else:
             return jsonify({
                 'success': False,
                 'networks': [],
                 'available': [], 
-                'known': []
+                'known': [],
+                'manual_entry_available': True,
+                'error': 'Wi-Fi manager not available'
             })
     except Exception as e:
         logger.error(f"Error getting Wi-Fi networks: {e}")
-        return jsonify({'success': False, 'error': str(e)}), 500
+        return jsonify({
+            'success': False, 
+            'error': str(e),
+            'manual_entry_available': True,
+            'networks': [],
+            'available': [],
+            'known': []
+        }), 500
 
 @app.route('/api/wifi/connect', methods=['POST'])
 def connect_wifi():
