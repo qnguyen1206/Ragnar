@@ -42,6 +42,13 @@
         "b_parent": null
     },
     {
+        "b_module": "scanning",
+        "b_class": "NetworkScanner",
+        "b_port": null,
+        "b_status": "network_scanner",
+        "b_parent": null
+    },
+    {
         "b_module": "ssh_connector",
         "b_class": "SSHBruteforce",
         "b_port": 22,

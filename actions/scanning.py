@@ -7,7 +7,14 @@ import threading
 import csv
 import pandas as pd
 import socket
-import netifaces
+try:
+    import netifaces_plus as netifaces
+except ImportError:
+    try:
+        import netifaces
+    except ImportError:
+        netifaces = None
+        print("Warning: Neither netifaces nor netifaces-plus found. Network discovery may be limited.")
 import time
 import glob
 import logging
@@ -262,6 +269,13 @@ class NetworkScanner:
         Retrieves the network information including the default gateway and subnet.
         """
         try:
+            if netifaces is None:
+                # Fallback to a common private network range if netifaces is not available
+                self.logger.warning("netifaces not available, using default network range")
+                network = ipaddress.IPv4Network("192.168.1.0/24", strict=False)
+                self.logger.info(f"Network (default): {network}")
+                return network
+                
             gws = netifaces.gateways()
             default_gateway = gws['default'][netifaces.AF_INET][1]
             iface = netifaces.ifaddresses(default_gateway)[netifaces.AF_INET][0]

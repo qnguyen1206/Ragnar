@@ -171,9 +171,9 @@ class SharedData:
             "steal_file_extensions": [".ragnar",".hack",".flag"],
             
             "__title_network__": "Network",
-            "nmap_scan_aggressivity": "-T2",
+            "nmap_scan_aggressivity": "-T4",
             "portstart": 1,
-            "portend": 2,
+            "portend": 1000,
             
             "__title_timewaits__": "Time Wait Settings",
             "timewait_smb": 0,
