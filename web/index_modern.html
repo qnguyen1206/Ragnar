@@ -174,17 +174,14 @@
                     <button onclick="showTab('network')" class="nav-btn px-4 py-2 rounded-lg hover:bg-slate-700 transition-colors" data-tab="network">
                         Network
                     </button>
-                    <button onclick="showTab('credentials')" class="nav-btn px-4 py-2 rounded-lg hover:bg-slate-700 transition-colors" data-tab="credentials">
-                        Credentials
+                    <button onclick="showTab('discovered')" class="nav-btn px-4 py-2 rounded-lg hover:bg-slate-700 transition-colors" data-tab="discovered">
+                        Discovered
                     </button>
-                    <button onclick="showTab('loot')" class="nav-btn px-4 py-2 rounded-lg hover:bg-slate-700 transition-colors" data-tab="loot">
-                        Loot
+                    <button onclick="showTab('threat-intel')" class="nav-btn px-4 py-2 rounded-lg hover:bg-slate-700 transition-colors" data-tab="threat-intel">
+                        Threat Intel
                     </button>
                     <button onclick="showTab('files')" class="nav-btn px-4 py-2 rounded-lg hover:bg-slate-700 transition-colors" data-tab="files">
                         Files
-                    </button>
-                    <button onclick="showTab('images')" class="nav-btn px-4 py-2 rounded-lg hover:bg-slate-700 transition-colors" data-tab="images">
-                        Images
                     </button>
                     <button onclick="showTab('system')" class="nav-btn px-4 py-2 rounded-lg hover:bg-slate-700 transition-colors" data-tab="system">
                         System
@@ -214,10 +211,9 @@
             <div class="px-2 pt-2 pb-3 space-y-1">
                 <button onclick="showTab('dashboard')" class="block w-full text-left px-3 py-2 rounded-lg hover:bg-slate-700">Dashboard</button>
                 <button onclick="showTab('network')" class="block w-full text-left px-3 py-2 rounded-lg hover:bg-slate-700">Network</button>
-                <button onclick="showTab('credentials')" class="block w-full text-left px-3 py-2 rounded-lg hover:bg-slate-700">Credentials</button>
-                <button onclick="showTab('loot')" class="block w-full text-left px-3 py-2 rounded-lg hover:bg-slate-700">Loot</button>
+                <button onclick="showTab('discovered')" class="block w-full text-left px-3 py-2 rounded-lg hover:bg-slate-700">Discovered</button>
+                <button onclick="showTab('threat-intel')" class="block w-full text-left px-3 py-2 rounded-lg hover:bg-slate-700">Threat Intel</button>
                 <button onclick="showTab('files')" class="block w-full text-left px-3 py-2 rounded-lg hover:bg-slate-700">Files</button>
-                <button onclick="showTab('images')" class="block w-full text-left px-3 py-2 rounded-lg hover:bg-slate-700">Images</button>
                 <button onclick="showTab('system')" class="block w-full text-left px-3 py-2 rounded-lg hover:bg-slate-700">System</button>
                 <button onclick="showTab('netkb')" class="block w-full text-left px-3 py-2 rounded-lg hover:bg-slate-700">NetKB</button>
                 <button onclick="showTab('epaper')" class="block w-full text-left px-3 py-2 rounded-lg hover:bg-slate-700">E-Paper</button>
@@ -238,7 +234,28 @@
                     <div class="flex items-center justify-between">
                         <div>
                             <p class="text-gray-400 text-sm">Targets</p>
-                            <p id="target-count" class="text-3xl font-bold text-Ragnar-400">0</p>
+                            <div class="flex items-baseline space-x-2">
+                                <p id="target-count" class="text-3xl font-bold text-Ragnar-400">0</p>
+                                <span class="text-sm text-gray-400">active</span>
+                            </div>
+                            <div class="mt-3 grid grid-cols-2 gap-2 text-xs text-gray-300">
+                                <div class="flex items-center space-x-1">
+                                    <span class="text-gray-400">Total</span>
+                                    <span id="target-total-count" class="font-semibold text-gray-100">0</span>
+                                </div>
+                                <div class="flex items-center space-x-1">
+                                    <span class="text-gray-400">Offline</span>
+                                    <span id="target-inactive-count" class="font-semibold text-red-300">0</span>
+                                </div>
+                                <div class="flex items-center space-x-1">
+                                    <span class="text-gray-400">New</span>
+                                    <span id="target-new-count" class="font-semibold text-green-300" title="No recent additions">0</span>
+                                </div>
+                                <div class="flex items-center space-x-1">
+                                    <span class="text-gray-400">Lost</span>
+                                    <span id="target-lost-count" class="font-semibold text-orange-300" title="No recent drops">0</span>
+                                </div>
+                            </div>
                         </div>
                         <div class="w-12 h-12 bg-Ragnar-500 bg-opacity-20 rounded-full flex items-center justify-center">
                             <svg class="w-6 h-6 text-Ragnar-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -325,7 +342,28 @@
                     </div>
                 </div>
             </div>
-            
+
+            <div class="glass rounded-xl p-4 mb-8 flex flex-col sm:flex-row sm:items-center sm:justify-between text-xs text-gray-300">
+                <div class="flex items-center space-x-2">
+                    <span class="uppercase tracking-wider text-gray-400">Last Sync</span>
+                    <span id="last-sync-display" class="font-semibold text-gray-100">Sync pending…</span>
+                </div>
+                <div class="mt-2 sm:mt-0 flex flex-wrap gap-2 text-[11px] text-gray-400">
+                    <span class="flex items-center space-x-1">
+                        <span class="w-1.5 h-1.5 rounded-full bg-green-400"></span>
+                        <span id="active-target-summary">Active targets stable</span>
+                    </span>
+                    <span class="flex items-center space-x-1">
+                        <span class="w-1.5 h-1.5 rounded-full bg-blue-400"></span>
+                        <span id="new-target-summary">0 new</span>
+                    </span>
+                    <span class="flex items-center space-x-1">
+                        <span class="w-1.5 h-1.5 rounded-full bg-red-400"></span>
+                        <span id="lost-target-summary">0 lost</span>
+                    </span>
+                </div>
+            </div>
+
             <!-- Status Section -->
             <div class="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-8">
                 <!-- Current Status -->
@@ -511,38 +549,209 @@
             </div>
         </div>
         
-        <!-- Credentials Tab -->
-        <div id="credentials-tab" class="tab-content hidden">
-            <div class="glass rounded-xl p-6">
-                <div class="flex items-center justify-between mb-6">
-                    <h2 class="text-2xl font-bold">Discovered Credentials</h2>
-                    <button onclick="refreshCurrentTab()" class="refresh-btn bg-Ragnar-600 hover:bg-Ragnar-700 text-white px-4 py-2 rounded-lg transition-colors">
-                        <svg class="w-4 h-4 inline mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"></path>
-                        </svg>
-                        Refresh
-                    </button>
+        <!-- Discovered Tab -->
+        <div id="discovered-tab" class="tab-content hidden">
+            <div class="grid grid-cols-1 xl:grid-cols-2 gap-6">
+                <div class="glass rounded-xl p-6 h-full flex flex-col">
+                    <div class="flex items-center justify-between mb-6">
+                        <h2 class="text-2xl font-bold">Discovered Credentials</h2>
+                        <button onclick="refreshCurrentTab()" class="refresh-btn bg-Ragnar-600 hover:bg-Ragnar-700 text-white px-4 py-2 rounded-lg transition-colors">
+                            <svg class="w-4 h-4 inline mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"></path>
+                            </svg>
+                            Refresh
+                        </button>
+                    </div>
+                    <div id="credentials-table" class="overflow-x-auto">
+                        <p class="text-gray-400">Loading credentials...</p>
+                    </div>
                 </div>
-                <div id="credentials-table" class="overflow-x-auto">
-                    <p class="text-gray-400">Loading credentials...</p>
+                <div class="glass rounded-xl p-6 h-full flex flex-col">
+                    <div class="flex items-center justify-between mb-6">
+                        <h2 class="text-2xl font-bold">Stolen Data</h2>
+                        <button onclick="refreshCurrentTab()" class="refresh-btn bg-Ragnar-600 hover:bg-Ragnar-700 text-white px-4 py-2 rounded-lg transition-colors">
+                            <svg class="w-4 h-4 inline mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"></path>
+                            </svg>
+                            Refresh
+                        </button>
+                    </div>
+                    <div id="loot-table" class="overflow-x-auto">
+                        <p class="text-gray-400">Loading loot data...</p>
+                    </div>
                 </div>
             </div>
         </div>
-        
-        <!-- Loot Tab -->
-        <div id="loot-tab" class="tab-content hidden">
-            <div class="glass rounded-xl p-6">
-                <div class="flex items-center justify-between mb-6">
-                    <h2 class="text-2xl font-bold">Stolen Data</h2>
-                    <button onclick="refreshCurrentTab()" class="refresh-btn bg-Ragnar-600 hover:bg-Ragnar-700 text-white px-4 py-2 rounded-lg transition-colors">
-                        <svg class="w-4 h-4 inline mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"></path>
-                        </svg>
-                        Refresh
-                    </button>
+
+        <!-- Threat Intelligence Tab -->
+        <div id="threat-intel-tab" class="tab-content hidden">
+            <div class="mb-6">
+                <h1 class="text-3xl font-bold text-white mb-2">🛡️ Threat Intelligence</h1>
+                <p class="text-slate-400">Global threat intelligence fusion and real-time threat analysis</p>
+            </div>
+
+            <!-- Summary Cards -->
+            <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 mb-8">
+                <div class="glass rounded-lg p-6">
+                    <div class="flex items-center justify-between">
+                        <div>
+                            <p class="text-slate-400 text-sm">Threat Sources</p>
+                            <p class="text-2xl font-bold text-green-400" id="threat-sources-count">0</p>
+                        </div>
+                        <div class="bg-green-500/20 p-3 rounded-lg">
+                            <svg class="w-6 h-6 text-green-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"></path>
+                            </svg>
+                        </div>
+                    </div>
                 </div>
-                <div id="loot-table" class="overflow-x-auto">
-                    <p class="text-gray-400">Loading loot data...</p>
+
+                <div class="glass rounded-lg p-6">
+                    <div class="flex items-center justify-between">
+                        <div>
+                            <p class="text-slate-400 text-sm">Enriched Findings</p>
+                            <p class="text-2xl font-bold text-blue-400" id="enriched-findings-count">0</p>
+                        </div>
+                        <div class="bg-blue-500/20 p-3 rounded-lg">
+                            <svg class="w-6 h-6 text-blue-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"></path>
+                            </svg>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="glass rounded-lg p-6">
+                    <div class="flex items-center justify-between">
+                        <div>
+                            <p class="text-slate-400 text-sm">High Risk</p>
+                            <p class="text-2xl font-bold text-red-400" id="high-risk-count">0</p>
+                        </div>
+                        <div class="bg-red-500/20 p-3 rounded-lg">
+                            <svg class="w-6 h-6 text-red-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-2.5L13.732 4c-.77-.833-1.964-.833-2.732 0L3.072 16.5c-.77.833.192 2.5 1.732 2.5z"></path>
+                            </svg>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="glass rounded-lg p-6">
+                    <div class="flex items-center justify-between">
+                        <div>
+                            <p class="text-slate-400 text-sm">Active Campaigns</p>
+                            <p class="text-2xl font-bold text-yellow-400" id="active-campaigns-count">0</p>
+                        </div>
+                        <div class="bg-yellow-500/20 p-3 rounded-lg">
+                            <svg class="w-6 h-6 text-yellow-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10"></path>
+                            </svg>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Top Threats -->
+            <div class="glass rounded-lg p-6 mb-8">
+                <div class="flex items-center justify-between mb-4">
+                    <h3 class="text-lg font-semibold text-white">Top Threats</h3>
+                    <span class="text-sm text-slate-400" id="top-threats-updated">Last updated: N/A</span>
+                </div>
+                <ul id="top-threats-list" class="space-y-3 text-slate-300">
+                    <li class="text-slate-400">No threats detected. You're all clear!</li>
+                </ul>
+            </div>
+
+            <!-- Control Panel -->
+            <div class="grid grid-cols-1 lg:grid-cols-3 gap-6 mb-8">
+                <div class="glass rounded-lg p-6">
+                    <h3 class="text-lg font-semibold text-white mb-4">Intelligence Sources</h3>
+                    <div class="space-y-3">
+                        <div class="flex items-center justify-between">
+                            <span class="text-slate-300">CISA KEV</span>
+                            <span class="w-3 h-3 bg-green-400 rounded-full" id="cisa-status"></span>
+                        </div>
+                        <div class="flex items-center justify-between">
+                            <span class="text-slate-300">NVD CVE</span>
+                            <span class="w-3 h-3 bg-green-400 rounded-full" id="nvd-status"></span>
+                        </div>
+                        <div class="flex items-center justify-between">
+                            <span class="text-slate-300">AlienVault OTX</span>
+                            <span class="w-3 h-3 bg-green-400 rounded-full" id="otx-status"></span>
+                        </div>
+                        <div class="flex items-center justify-between">
+                            <span class="text-slate-300">MITRE ATT&CK</span>
+                            <span class="w-3 h-3 bg-green-400 rounded-full" id="mitre-status"></span>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="glass rounded-lg p-6">
+                    <h3 class="text-lg font-semibold text-white mb-4">Manual Enrichment</h3>
+                    <div class="space-y-3">
+                        <input type="text" id="enrichment-target" placeholder="Enter IP, domain, or hash" 
+                               class="w-full bg-slate-700 text-white px-3 py-2 rounded-lg border border-slate-600 focus:border-blue-500 focus:outline-none">
+                        <button onclick="enrichTarget()" 
+                                class="w-full bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg font-medium transition-colors">
+                            Enrich Target
+                        </button>
+                    </div>
+                </div>
+
+                <div class="glass rounded-lg p-6">
+                    <h3 class="text-lg font-semibold text-white mb-4">Risk Distribution</h3>
+                    <div class="space-y-2">
+                        <div class="flex items-center justify-between">
+                            <span class="text-red-400">Critical</span>
+                            <span class="text-white" id="critical-risk-count">0</span>
+                        </div>
+                        <div class="flex items-center justify-between">
+                            <span class="text-orange-400">High</span>
+                            <span class="text-white" id="high-risk-detail-count">0</span>
+                        </div>
+                        <div class="flex items-center justify-between">
+                            <span class="text-yellow-400">Medium</span>
+                            <span class="text-white" id="medium-risk-count">0</span>
+                        </div>
+                        <div class="flex items-center justify-between">
+                            <span class="text-green-400">Low</span>
+                            <span class="text-white" id="low-risk-count">0</span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Enriched Findings Table -->
+            <div class="glass rounded-lg">
+                <div class="px-6 py-4 border-b border-slate-700">
+                    <div class="flex items-center justify-between">
+                        <h3 class="text-lg font-semibold text-white">Enriched Findings</h3>
+                        <button onclick="refreshThreatIntel()" 
+                                class="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg font-medium transition-colors">
+                            Refresh
+                        </button>
+                    </div>
+                </div>
+                <div class="p-6">
+                    <div class="overflow-x-auto">
+                        <table class="w-full">
+                            <thead>
+                                <tr class="border-b border-slate-700">
+                                    <th class="text-left py-3 px-4 text-slate-400 font-medium">Target</th>
+                                    <th class="text-left py-3 px-4 text-slate-400 font-medium">Risk Score</th>
+                                    <th class="text-left py-3 px-4 text-slate-400 font-medium">Threat Context</th>
+                                    <th class="text-left py-3 px-4 text-slate-400 font-medium">Attribution</th>
+                                    <th class="text-left py-3 px-4 text-slate-400 font-medium">Last Updated</th>
+                                    <th class="text-left py-3 px-4 text-slate-400 font-medium">Actions</th>
+                                </tr>
+                            </thead>
+                            <tbody id="enriched-findings-table">
+                                <tr>
+                                    <td colspan="6" class="text-center py-8 text-slate-400">
+                                        No threats detected. Run network scans to generate threat intelligence data.
+                                    </td>
+                                </tr>
+                            </tbody>
+                        </table>
+                    </div>
                 </div>
             </div>
         </div>
@@ -602,31 +811,14 @@
                     </div>
                 </div>
                 
-                <!-- File Operations Modal -->
-                <div id="file-operations-modal" class="fixed inset-0 bg-black bg-opacity-50 hidden items-center justify-center z-50">
-                    <div class="glass rounded-xl p-6 max-w-md w-full mx-4">
-                        <h3 id="modal-title" class="text-lg font-semibold mb-4">File Operation</h3>
-                        <div id="modal-content" class="mb-6">
-                            <!-- Dynamic content -->
-                        </div>
-                        <div class="flex space-x-3">
-                            <button id="modal-confirm" class="bg-Ragnar-600 hover:bg-Ragnar-700 text-white px-4 py-2 rounded-lg transition-colors">
-                                Confirm
-                            </button>
-                            <button onclick="closeFileModal()" class="bg-gray-600 hover:bg-gray-700 text-white px-4 py-2 rounded-lg transition-colors">
-                                Cancel
-                            </button>
-                        </div>
-                    </div>
-                </div>
             </div>
-        </div>
-        
-        <!-- Images Tab -->
-        <div id="images-tab" class="tab-content hidden">
-            <div class="glass rounded-xl p-6">
+
+            <div class="glass rounded-xl p-6 mt-8">
                 <div class="flex items-center justify-between mb-6">
-                    <h2 class="text-2xl font-bold">Image Gallery</h2>
+                    <div>
+                        <h2 class="text-2xl font-bold">Image Gallery</h2>
+                        <p class="text-sm text-gray-400 mt-1">Browse captured screenshots and other stored images.</p>
+                    </div>
                     <div class="flex space-x-3">
                         <button onclick="captureScreenshot()" class="bg-purple-600 hover:bg-purple-700 text-white px-4 py-2 rounded-lg transition-colors">
                             <svg class="w-4 h-4 inline mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -643,7 +835,7 @@
                         </button>
                     </div>
                 </div>
-                
+
                 <!-- Image Filter Controls -->
                 <div class="mb-6">
                     <div class="flex flex-wrap gap-2">
@@ -664,52 +856,70 @@
                         </button>
                     </div>
                 </div>
-                
+
                 <!-- Image Grid -->
                 <div class="glass-card p-4">
                     <div id="image-grid" class="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-6 gap-4">
                         <p class="text-gray-400 col-span-full text-center py-8">Loading images...</p>
                     </div>
                 </div>
-                
-                <!-- Image Detail Modal -->
-                <div id="image-detail-modal" class="fixed inset-0 bg-black bg-opacity-80 hidden items-center justify-center z-50">
-                    <div class="glass rounded-xl p-6 max-w-4xl w-full mx-4 max-h-[90vh] overflow-y-auto">
-                        <div class="flex items-center justify-between mb-4">
-                            <h3 id="image-detail-title" class="text-lg font-semibold">Image Details</h3>
-                            <button onclick="closeImageModal()" class="text-gray-400 hover:text-white">
-                                <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"></path>
-                                </svg>
-                            </button>
+            </div>
+
+            <!-- File Operations Modal -->
+            <div id="file-operations-modal" class="fixed inset-0 bg-black bg-opacity-50 hidden items-center justify-center z-50">
+                <div class="glass rounded-xl p-6 max-w-md w-full mx-4">
+                    <h3 id="modal-title" class="text-lg font-semibold mb-4">File Operation</h3>
+                    <div id="modal-content" class="mb-6">
+                        <!-- Dynamic content -->
+                    </div>
+                    <div class="flex space-x-3">
+                        <button id="modal-confirm" class="bg-Ragnar-600 hover:bg-Ragnar-700 text-white px-4 py-2 rounded-lg transition-colors">
+                            Confirm
+                        </button>
+                        <button onclick="closeFileModal()" class="bg-gray-600 hover:bg-gray-700 text-white px-4 py-2 rounded-lg transition-colors">
+                            Cancel
+                        </button>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Image Detail Modal -->
+            <div id="image-detail-modal" class="fixed inset-0 bg-black bg-opacity-80 hidden items-center justify-center z-50">
+                <div class="glass rounded-xl p-6 max-w-4xl w-full mx-4 max-h-[90vh] overflow-y-auto">
+                    <div class="flex items-center justify-between mb-4">
+                        <h3 id="image-detail-title" class="text-lg font-semibold">Image Details</h3>
+                        <button onclick="closeImageModal()" class="text-gray-400 hover:text-white">
+                            <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"></path>
+                            </svg>
+                        </button>
+                    </div>
+
+                    <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
+                        <!-- Image Display -->
+                        <div class="text-center">
+                            <img id="image-detail-img" src="" alt="" class="max-w-full max-h-96 mx-auto rounded-lg shadow-lg">
                         </div>
-                        
-                        <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
-                            <!-- Image Display -->
-                            <div class="text-center">
-                                <img id="image-detail-img" src="" alt="" class="max-w-full max-h-96 mx-auto rounded-lg shadow-lg">
+
+                        <!-- Image Information -->
+                        <div class="space-y-4">
+                            <div id="image-detail-info" class="space-y-2 text-sm">
+                                <!-- Dynamic content -->
                             </div>
-                            
-                            <!-- Image Information -->
-                            <div class="space-y-4">
-                                <div id="image-detail-info" class="space-y-2 text-sm">
-                                    <!-- Dynamic content -->
-                                </div>
-                                
-                                <div class="flex space-x-3">
-                                    <button id="download-image-btn" class="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg transition-colors">
-                                        <svg class="w-4 h-4 inline mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 10v6m0 0l-4-4m4 4l4-4m6 4H6"></path>
-                                        </svg>
-                                        Download
-                                    </button>
-                                    <button id="delete-image-btn" class="bg-red-600 hover:bg-red-700 text-white px-4 py-2 rounded-lg transition-colors">
-                                        <svg class="w-4 h-4 inline mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"></path>
-                                        </svg>
-                                        Delete
-                                    </button>
-                                </div>
+
+                            <div class="flex space-x-3">
+                                <button id="download-image-btn" class="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg transition-colors">
+                                    <svg class="w-4 h-4 inline mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 10v6m0 0l-4-4m4 4l4-4m6 4H6"></path>
+                                    </svg>
+                                    Download
+                                </button>
+                                <button id="delete-image-btn" class="bg-red-600 hover:bg-red-700 text-white px-4 py-2 rounded-lg transition-colors">
+                                    <svg class="w-4 h-4 inline mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"></path>
+                                    </svg>
+                                    Delete
+                                </button>
                             </div>
                         </div>
                     </div>

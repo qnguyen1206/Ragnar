@@ -1,0 +1,405 @@
+{
+  "vuln_51225fbc5d71": {
+    "original_finding": {
+      "id": "vuln_51225fbc5d71",
+      "host": "192.168.1.100",
+      "port": 22,
+      "service": "ssh",
+      "vulnerability": "SSH Weak Authentication",
+      "severity": "high",
+      "details": {
+        "cve": "CVE-2023-1234",
+        "description": "Weak SSH configuration"
+      },
+      "discovered": "2025-11-01T23:40:23.439991",
+      "network_id": "default_network",
+      "status": "active",
+      "confirmation_count": 1,
+      "last_confirmed": "2025-11-01T23:40:23.439996"
+    },
+    "threat_contexts": [
+      {
+        "source": "NVD_CVE",
+        "threat_type": "vulnerability",
+        "severity": "MEDIUM",
+        "confidence": 0.8,
+        "first_seen": "2023-03-07T22:15:10.480",
+        "last_seen": "2024-11-21T07:38:44.033",
+        "description": "Inappropriate implementation in Intents in Google Chrome on Android prior to 111.0.5563.64 allowed a remote attacker to perform domain spoofing via a crafted HTML page. (Chromium security severity: Low)",
+        "references": [
+          "https://nvd.nist.gov/vuln/detail/CVE-2023-1234"
+        ],
+        "tags": [
+          "cve",
+          "nvd"
+        ],
+        "iocs": {
+          "cve_id": "CVE-2023-1234",
+          "cvss_score": 4.3
+        }
+      },
+      {
+        "source": "AlienVault_OTX",
+        "threat_type": "ip_reputation",
+        "severity": "MEDIUM",
+        "confidence": 0.6,
+        "first_seen": "2025-11-03T14:06:26.538140",
+        "last_seen": "2025-11-03T14:06:26.538145",
+        "description": "IP reputation check for 192.168.1.100",
+        "references": [
+          "https://otx.alienvault.com/indicator/ip/192.168.1.100"
+        ],
+        "tags": [
+          "ip_reputation",
+          "otx"
+        ],
+        "iocs": {
+          "ip": "192.168.1.100"
+        }
+      },
+      {
+        "source": "MITRE_ATT&CK",
+        "threat_type": "technique_mapping",
+        "severity": "MEDIUM",
+        "confidence": 0.7,
+        "first_seen": "2025-11-03T14:06:26.548438",
+        "last_seen": "2025-11-03T14:06:26.548444",
+        "description": "MITRE ATT&CK technique mapping for ssh",
+        "references": [
+          "https://attack.mitre.org"
+        ],
+        "tags": [
+          "mitre_attack",
+          "technique"
+        ],
+        "iocs": {
+          "service": "ssh"
+        }
+      }
+    ],
+    "dynamic_risk_score": 9.0,
+    "attribution": {
+      "actor_name": "Unknown",
+      "actor_aliases": [],
+      "motivation": "Unknown",
+      "sophistication": "Medium",
+      "geographic_origin": "Unknown",
+      "target_industries": [
+        "General"
+      ],
+      "ttps": [
+        "Service: ssh"
+      ],
+      "confidence": 0.3
+    },
+    "active_campaigns": [],
+    "exploitation_prediction": {
+      "exploitation_likelihood": 0.3,
+      "predicted_timeline_days": 90,
+      "confidence": 0.6,
+      "factors": [
+        "threat_intelligence_analysis",
+        "vulnerability_severity",
+        "historical_patterns"
+      ]
+    },
+    "recommended_actions": [
+      "IMMEDIATE: Isolate affected systems",
+      "IMMEDIATE: Apply emergency patches",
+      "IMMEDIATE: Monitor for exploitation",
+      "Review ssh configuration for security hardening",
+      "Monitor ssh logs for suspicious activity"
+    ],
+    "executive_summary": "**CRITICAL RISK**: SSH Weak Authentication detected on 192.168.1.100 - immediate action required. Associated with threat actor: Unknown. Dynamic risk score: 9.0/10."
+  },
+  "vuln_66508739fe27": {
+    "original_finding": {
+      "id": "vuln_66508739fe27",
+      "host": "192.168.1.101",
+      "port": 80,
+      "service": "http",
+      "vulnerability": "Apache Directory Traversal",
+      "severity": "medium",
+      "details": {
+        "cve": "CVE-2023-5678",
+        "description": "Path traversal vulnerability"
+      },
+      "discovered": "2025-11-01T23:40:23.473797",
+      "network_id": "default_network",
+      "status": "active",
+      "confirmation_count": 1,
+      "last_confirmed": "2025-11-01T23:40:23.473802"
+    },
+    "threat_contexts": [
+      {
+        "source": "NVD_CVE",
+        "threat_type": "vulnerability",
+        "severity": "MEDIUM",
+        "confidence": 0.8,
+        "first_seen": "2023-11-06T16:15:42.670",
+        "last_seen": "2024-11-21T08:42:15.573",
+        "description": "Issue summary: Generating excessively long X9.42 DH keys or checking\nexcessively long X9.42 DH keys or parameters may be very slow.\n\nImpact summary: Applications that use the functions DH_generate_key() to\ngenerate an X9.42 DH key may experience long delays.  Likewise, applications\nthat use DH_check_pub_key(), DH_check_pub_key_ex() or EVP_PKEY_public_check()\nto check an X9.42 DH key or X9.42 DH parameters may experience long delays.\nWhere the key or parameters that are being checked have been ob",
+        "references": [
+          "https://nvd.nist.gov/vuln/detail/CVE-2023-5678"
+        ],
+        "tags": [
+          "cve",
+          "nvd"
+        ],
+        "iocs": {
+          "cve_id": "CVE-2023-5678",
+          "cvss_score": 5.3
+        }
+      },
+      {
+        "source": "AlienVault_OTX",
+        "threat_type": "ip_reputation",
+        "severity": "MEDIUM",
+        "confidence": 0.6,
+        "first_seen": "2025-11-03T14:06:27.575288",
+        "last_seen": "2025-11-03T14:06:27.575293",
+        "description": "IP reputation check for 192.168.1.101",
+        "references": [
+          "https://otx.alienvault.com/indicator/ip/192.168.1.101"
+        ],
+        "tags": [
+          "ip_reputation",
+          "otx"
+        ],
+        "iocs": {
+          "ip": "192.168.1.101"
+        }
+      },
+      {
+        "source": "MITRE_ATT&CK",
+        "threat_type": "technique_mapping",
+        "severity": "MEDIUM",
+        "confidence": 0.7,
+        "first_seen": "2025-11-03T14:06:27.576128",
+        "last_seen": "2025-11-03T14:06:27.576134",
+        "description": "MITRE ATT&CK technique mapping for http",
+        "references": [
+          "https://attack.mitre.org"
+        ],
+        "tags": [
+          "mitre_attack",
+          "technique"
+        ],
+        "iocs": {
+          "service": "http"
+        }
+      }
+    ],
+    "dynamic_risk_score": 7.3,
+    "attribution": {
+      "actor_name": "Unknown",
+      "actor_aliases": [],
+      "motivation": "Unknown",
+      "sophistication": "Medium",
+      "geographic_origin": "Unknown",
+      "target_industries": [
+        "General"
+      ],
+      "ttps": [
+        "Service: http"
+      ],
+      "confidence": 0.3
+    },
+    "active_campaigns": [],
+    "exploitation_prediction": {
+      "exploitation_likelihood": 0.3,
+      "predicted_timeline_days": 90,
+      "confidence": 0.6,
+      "factors": [
+        "threat_intelligence_analysis",
+        "vulnerability_severity",
+        "historical_patterns"
+      ]
+    },
+    "recommended_actions": [
+      "Review http configuration for security hardening",
+      "Monitor http logs for suspicious activity"
+    ],
+    "executive_summary": "**HIGH RISK**: Apache Directory Traversal detected on 192.168.1.101 - urgent attention needed. Associated with threat actor: Unknown. Dynamic risk score: 7.3/10."
+  },
+  "cred_fc34a17a6fb7": {
+    "original_finding": {
+      "id": "cred_fc34a17a6fb7",
+      "host": "192.168.1.100",
+      "service": "ssh",
+      "username": "admin",
+      "password": "password123",
+      "protocol": "ssh",
+      "details": {
+        "method": "brute_force",
+        "attempts": 5
+      },
+      "discovered": "2025-11-01T23:40:23.508960",
+      "network_id": "default_network",
+      "status": "active",
+      "confirmation_count": 1,
+      "last_confirmed": "2025-11-01T23:40:23.508964"
+    },
+    "threat_contexts": [
+      {
+        "source": "AlienVault_OTX",
+        "threat_type": "ip_reputation",
+        "severity": "MEDIUM",
+        "confidence": 0.6,
+        "first_seen": "2025-11-03T14:06:26.538140",
+        "last_seen": "2025-11-03T14:06:26.538145",
+        "description": "IP reputation check for 192.168.1.100",
+        "references": [
+          "https://otx.alienvault.com/indicator/ip/192.168.1.100"
+        ],
+        "tags": [
+          "ip_reputation",
+          "otx"
+        ],
+        "iocs": {
+          "ip": "192.168.1.100"
+        }
+      },
+      {
+        "source": "MITRE_ATT&CK",
+        "threat_type": "technique_mapping",
+        "severity": "MEDIUM",
+        "confidence": 0.7,
+        "first_seen": "2025-11-03T14:06:26.548438",
+        "last_seen": "2025-11-03T14:06:26.548444",
+        "description": "MITRE ATT&CK technique mapping for ssh",
+        "references": [
+          "https://attack.mitre.org"
+        ],
+        "tags": [
+          "mitre_attack",
+          "technique"
+        ],
+        "iocs": {
+          "service": "ssh"
+        }
+      }
+    ],
+    "dynamic_risk_score": 7.0,
+    "attribution": {
+      "actor_name": "Unknown",
+      "actor_aliases": [],
+      "motivation": "Unknown",
+      "sophistication": "Medium",
+      "geographic_origin": "Unknown",
+      "target_industries": [
+        "General"
+      ],
+      "ttps": [
+        "Service: ssh"
+      ],
+      "confidence": 0.3
+    },
+    "active_campaigns": [],
+    "exploitation_prediction": {
+      "exploitation_likelihood": 0.3,
+      "predicted_timeline_days": 90,
+      "confidence": 0.6,
+      "factors": [
+        "threat_intelligence_analysis",
+        "vulnerability_severity",
+        "historical_patterns"
+      ]
+    },
+    "recommended_actions": [
+      "Review ssh configuration for security hardening",
+      "Monitor ssh logs for suspicious activity"
+    ],
+    "executive_summary": "**HIGH RISK**: Unknown vulnerability detected on 192.168.1.100 - urgent attention needed. Associated with threat actor: Unknown. Dynamic risk score: 7.0/10."
+  },
+  "cred_d8af3e705748": {
+    "original_finding": {
+      "id": "cred_d8af3e705748",
+      "host": "192.168.1.101",
+      "service": "ftp",
+      "username": "anonymous",
+      "password": "guest@domain.com",
+      "protocol": "ftp",
+      "details": {
+        "method": "anonymous_login",
+        "attempts": 1
+      },
+      "discovered": "2025-11-01T23:40:23.544497",
+      "network_id": "default_network",
+      "status": "active",
+      "confirmation_count": 1,
+      "last_confirmed": "2025-11-01T23:40:23.544501"
+    },
+    "threat_contexts": [
+      {
+        "source": "AlienVault_OTX",
+        "threat_type": "ip_reputation",
+        "severity": "MEDIUM",
+        "confidence": 0.6,
+        "first_seen": "2025-11-03T14:06:27.575288",
+        "last_seen": "2025-11-03T14:06:27.575293",
+        "description": "IP reputation check for 192.168.1.101",
+        "references": [
+          "https://otx.alienvault.com/indicator/ip/192.168.1.101"
+        ],
+        "tags": [
+          "ip_reputation",
+          "otx"
+        ],
+        "iocs": {
+          "ip": "192.168.1.101"
+        }
+      },
+      {
+        "source": "MITRE_ATT&CK",
+        "threat_type": "technique_mapping",
+        "severity": "MEDIUM",
+        "confidence": 0.7,
+        "first_seen": "2025-11-03T14:06:27.595991",
+        "last_seen": "2025-11-03T14:06:27.595994",
+        "description": "MITRE ATT&CK technique mapping for ftp",
+        "references": [
+          "https://attack.mitre.org"
+        ],
+        "tags": [
+          "mitre_attack",
+          "technique"
+        ],
+        "iocs": {
+          "service": "ftp"
+        }
+      }
+    ],
+    "dynamic_risk_score": 7.0,
+    "attribution": {
+      "actor_name": "Unknown",
+      "actor_aliases": [],
+      "motivation": "Unknown",
+      "sophistication": "Medium",
+      "geographic_origin": "Unknown",
+      "target_industries": [
+        "General"
+      ],
+      "ttps": [
+        "Service: ftp"
+      ],
+      "confidence": 0.3
+    },
+    "active_campaigns": [],
+    "exploitation_prediction": {
+      "exploitation_likelihood": 0.3,
+      "predicted_timeline_days": 90,
+      "confidence": 0.6,
+      "factors": [
+        "threat_intelligence_analysis",
+        "vulnerability_severity",
+        "historical_patterns"
+      ]
+    },
+    "recommended_actions": [
+      "Review ftp configuration for security hardening",
+      "Monitor ftp logs for suspicious activity"
+    ],
+    "executive_summary": "**HIGH RISK**: Unknown vulnerability detected on 192.168.1.101 - urgent attention needed. Associated with threat actor: Unknown. Dynamic risk score: 7.0/10."
+  }
+}

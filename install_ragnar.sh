@@ -246,6 +246,7 @@ install_dependencies() {
         "wget"
         "lsof"
         "git"
+        "sudo"
         "libopenjp2-7"
         "nmap"
         "libopenblas-dev"
@@ -268,6 +269,11 @@ install_dependencies() {
         "python3-numpy"
         "hostapd"
         "dnsmasq"
+        "network-manager"
+        "wireless-tools"
+        "iproute2"
+        "iputils-ping"
+        "rfkill"
     )
     
     # Optional packages that may not be available in all distributions
@@ -299,6 +305,34 @@ install_dependencies() {
     
     # Update nmap scripts
     nmap --script-updatedb
+    
+    # Configure WiFi interfaces
+    log "INFO" "Configuring WiFi interfaces..."
+    
+    # Ensure WiFi is not blocked by rfkill
+    if command -v rfkill >/dev/null 2>&1; then
+        rfkill unblock wifi
+        log "SUCCESS" "WiFi unblocked via rfkill"
+    else
+        log "WARNING" "rfkill not available - WiFi blocking status unknown"
+    fi
+    
+    # Create basic wpa_supplicant configuration if it doesn't exist
+    if [ ! -f "/etc/wpa_supplicant/wpa_supplicant.conf" ]; then
+        log "INFO" "Creating basic wpa_supplicant configuration..."
+        mkdir -p /etc/wpa_supplicant
+        cat > /etc/wpa_supplicant/wpa_supplicant.conf << EOF
+country=US
+ctrl_interface=DIR=/var/run/wpa_supplicant GROUP=netdev
+update_config=1
+
+# This file will be managed by NetworkManager and Ragnar WiFi Manager
+# Networks will be added dynamically
+EOF
+        chmod 600 /etc/wpa_supplicant/wpa_supplicant.conf
+        log "SUCCESS" "Created basic wpa_supplicant configuration"
+    fi
+    
     check_success "Dependencies installation completed"
 }
 
@@ -445,6 +479,7 @@ setup_ragnar() {
         ["flask>=3.0.0"]="flask"
         ["flask-socketio>=5.3.0"]="flask_socketio"
         ["flask-cors>=4.0.0"]="flask_cors"
+        ["psutil>=5.9.0"]="psutil"
     )
     
     # Install each package individually with retries if not already installed
@@ -603,9 +638,18 @@ except Exception as e:
     print(f"ERROR validating actions.json: {e}")
 PYTHON_EOF
     
-    # Add ragnar user to necessary groups
-    usermod -a -G spi,gpio,i2c $ragnar_USER
-    check_success "Added ragnar user to required groups"
+    # Add ragnar user to necessary groups (including sudo for WiFi management)
+    usermod -a -G spi,gpio,i2c,sudo,netdev $ragnar_USER
+    
+    # Configure sudo for WiFi management commands without password
+    log "INFO" "Configuring sudo permissions for WiFi management..."
+    cat > /etc/sudoers.d/ragnar-wifi << EOF
+# Allow ragnar user to run WiFi management commands without password
+ragnar ALL=(ALL) NOPASSWD: /usr/bin/nmcli, /sbin/iwlist, /sbin/ip, /bin/systemctl start hostapd, /bin/systemctl stop hostapd, /bin/systemctl start dnsmasq, /bin/systemctl stop dnsmasq, /usr/sbin/hostapd, /usr/sbin/dnsmasq
+EOF
+    chmod 440 /etc/sudoers.d/ragnar-wifi
+    
+    check_success "Added ragnar user to required groups and configured sudo permissions"
 }
 
 
@@ -654,6 +698,31 @@ EOF
     echo "session required pam_limits.so" >> /etc/pam.d/common-session
     echo "session required pam_limits.so" >> /etc/pam.d/common-session-noninteractive
 
+    # Configure NetworkManager for WiFi management
+    log "INFO" "Configuring NetworkManager for WiFi management..."
+    
+    # Enable and start NetworkManager
+    systemctl enable NetworkManager
+    systemctl start NetworkManager
+    
+    # Configure NetworkManager for WiFi management priority
+    cat > /etc/NetworkManager/conf.d/99-ragnar-wifi.conf << EOF
+[main]
+# Ragnar WiFi Management Configuration
+dns=default
+
+[device]
+# Manage WiFi devices
+wifi.scan-rand-mac-address=no
+
+[connection]
+# WiFi connection settings
+wifi.cloned-mac-address=preserve
+EOF
+
+    # Ensure NetworkManager manages wlan0
+    nmcli dev set wlan0 managed yes 2>/dev/null || log "WARNING" "Could not set wlan0 to managed (interface may not exist yet)"
+    
     # Enable and start services
     systemctl daemon-reload
     systemctl enable ragnar.service
@@ -762,6 +831,58 @@ EOF
 verify_installation() {
     log "INFO" "Verifying installation..."
     
+    # Check WiFi management dependencies
+    log "INFO" "Verifying WiFi management dependencies..."
+    
+    # Check NetworkManager
+    if systemctl is-active --quiet NetworkManager; then
+        log "SUCCESS" "NetworkManager is running"
+    else
+        log "WARNING" "NetworkManager is not running - WiFi management may not work"
+    fi
+    
+    # Check nmcli command
+    if command -v nmcli >/dev/null 2>&1; then
+        log "SUCCESS" "nmcli command available"
+    else
+        log "ERROR" "nmcli command not found - critical for WiFi management"
+    fi
+    
+    # Check iwlist command
+    if command -v iwlist >/dev/null 2>&1; then
+        log "SUCCESS" "iwlist command available"
+    else
+        log "WARNING" "iwlist command not found - AP mode scanning may be limited"
+    fi
+    
+    # Check hostapd and dnsmasq
+    if command -v hostapd >/dev/null 2>&1 && command -v dnsmasq >/dev/null 2>&1; then
+        log "SUCCESS" "hostapd and dnsmasq available"
+    else
+        log "ERROR" "hostapd or dnsmasq not found - AP mode will not work"
+    fi
+    
+    # Check Python WiFi dependencies
+    log "INFO" "Verifying Python dependencies..."
+    python3 -c "
+import sys
+failed = []
+required_modules = ['flask', 'flask_socketio', 'psutil', 'netifaces']
+for module in required_modules:
+    try:
+        __import__(module)
+        print(f'✓ {module}')
+    except ImportError:
+        failed.append(module)
+        print(f'✗ {module}')
+
+if failed:
+    print(f'ERROR: Missing Python modules: {failed}')
+    sys.exit(1)
+else:
+    print('SUCCESS: All critical Python modules available')
+" && log "SUCCESS" "Python dependencies verified" || log "ERROR" "Some Python dependencies missing"
+    
     # Check if services are running
     if ! systemctl is-active --quiet ragnar.service; then
         log "WARNING" "ragnar service is not running"
@@ -776,6 +897,8 @@ verify_installation() {
     else
         log "WARNING" "Web interface is not responding"
     fi
+    
+    log "INFO" "WiFi timer functionality will be available when AP mode is active"
 }
 
 # Clean exit function

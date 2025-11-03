@@ -19,6 +19,10 @@ import threading
 import time
 import subprocess
 import re
+import io
+import base64
+import shutil
+import importlib
 from datetime import datetime, timedelta
 from flask import Flask, render_template, jsonify, request, send_from_directory, Response
 from flask_socketio import SocketIO, emit
@@ -27,9 +31,20 @@ try:
     flask_cors_available = True
 except ImportError:
     flask_cors_available = False
+try:
+    import psutil
+    psutil_available = True
+except ImportError:
+    psutil_available = False
+try:
+    import pandas as pd
+    pandas_available = True
+except ImportError:
+    pandas_available = False
 from init_shared import shared_data
 from utils import WebUtils
 from logger import Logger
+from threat_intelligence import ThreatIntelligenceFusion
 
 # Initialize logger
 logger = Logger(name="webapp_modern.py", level=logging.DEBUG)
@@ -52,8 +67,21 @@ socketio = SocketIO(app, cors_allowed_origins="*", async_mode='threading')
 # Initialize web utilities
 web_utils = WebUtils(shared_data, logger)
 
+# Initialize threat intelligence system
+try:
+    threat_intelligence = ThreatIntelligenceFusion(shared_data)
+    logger.info("Threat intelligence system initialized")
+except Exception as e:
+    logger.error(f"Failed to initialize threat intelligence: {e}")
+    threat_intelligence = None
+
 # Global state
 clients_connected = 0
+
+# Synchronization helpers for keeping dashboard and e-paper data fresh
+sync_lock = threading.Lock()
+last_sync_time = 0.0
+SYNC_BACKGROUND_INTERVAL = 5  # seconds between automatic synchronizations
 
 
 def broadcast_status_update():
@@ -136,12 +164,14 @@ def sync_vulnerability_count():
         # Also update livestatus file if it exists
         if os.path.exists(shared_data.livestatusfile):
             try:
-                import pandas as pd
-                df = pd.read_csv(shared_data.livestatusfile)
-                if not df.empty:
-                    df.loc[0, 'Vulnerabilities Count'] = vuln_count
-                    df.to_csv(shared_data.livestatusfile, index=False)
-                    logger.debug(f"Updated livestatus file with vuln count: {vuln_count}")
+                if pandas_available:
+                    df = pd.read_csv(shared_data.livestatusfile)
+                    if not df.empty:
+                        df.loc[0, 'Vulnerabilities Count'] = vuln_count
+                        df.to_csv(shared_data.livestatusfile, index=False)
+                        logger.debug(f"Updated livestatus file with vuln count: {vuln_count}")
+                else:
+                    logger.warning("Pandas not available, skipping livestatus update")
             except Exception as e:
                 logger.warning(f"Could not update livestatus with sync vulnerability count: {e}")
         
@@ -155,166 +185,202 @@ def sync_vulnerability_count():
 
 def sync_all_counts():
     """Synchronize all counts (targets, ports, vulnerabilities, credentials) across data sources"""
-    try:
-        logger.debug("Starting sync_all_counts()")
-        
-        # Sync vulnerability count
-        sync_vulnerability_count()
-        
-        # Update WiFi-specific network data from scan results
-        aggregated_network_stats = update_wifi_network_data()
-        
-        # Sync target and port counts from scan results
-        scan_results_dir = getattr(shared_data, 'scan_results_dir', os.path.join('data', 'output', 'scan_results'))
-        
-        logger.debug(f"Syncing targets/ports from directory: {scan_results_dir}")
-        
-        # Create directory if it doesn't exist
+    global last_sync_time
+
+    with sync_lock:
+        start_time = time.time()
         try:
-            os.makedirs(scan_results_dir, exist_ok=True)
-            logger.debug(f"Ensured directory exists: {scan_results_dir}")
-        except Exception as e:
-            logger.warning(f"Could not create scan_results directory: {e}")
-        
-        if os.path.exists(scan_results_dir):
-            unique_hosts = set()
-            port_count = 0
-            
+            logger.debug("Starting sync_all_counts()")
+
+            # Sync vulnerability count
+            sync_vulnerability_count()
+
+            # Update WiFi-specific network data from scan results
+            aggregated_network_stats = update_wifi_network_data()
+
+            # Sync target and port counts from scan results
+            scan_results_dir = getattr(shared_data, 'scan_results_dir', os.path.join('data', 'output', 'scan_results'))
+
+            logger.debug(f"Syncing targets/ports from directory: {scan_results_dir}")
+
+            # Create directory if it doesn't exist
             try:
-                scan_files_found = []
-                for filename in os.listdir(scan_results_dir):
-                    # Look for result CSV files that contain actual scan data
-                    if filename.startswith('result_') and filename.endswith('.csv') and not filename.startswith('.'):
-                        scan_files_found.append(filename)
-                        filepath = os.path.join(scan_results_dir, filename)
-                        try:
-                            with open(filepath, 'r', encoding='utf-8', errors='ignore') as f:
-                                reader = csv.reader(f)
-                                for row in reader:
-                                    if len(row) >= 1 and row[0].strip():
-                                        # First column should be IP address
-                                        ip = row[0].strip()
-                                        if re.match(r'^(?:[0-9]{1,3}\.){3}[0-9]{1,3}$', ip):
-                                            unique_hosts.add(ip)
-                                            logger.debug(f"Found host {ip} in {filename}")
-                                            
-                                            # Count non-empty ports in columns 4-9 (typical port columns)
+                os.makedirs(scan_results_dir, exist_ok=True)
+                logger.debug(f"Ensured directory exists: {scan_results_dir}")
+            except Exception as e:
+                logger.warning(f"Could not create scan_results directory: {e}")
+
+            unique_hosts = set()
+            csv_host_ports = {}
+            scan_files_found = []
+
+            if os.path.exists(scan_results_dir):
+                try:
+                    for filename in os.listdir(scan_results_dir):
+                        if filename.startswith('result_') and filename.endswith('.csv') and not filename.startswith('.'):
+                            scan_files_found.append(filename)
+                            filepath = os.path.join(scan_results_dir, filename)
+                            try:
+                                with open(filepath, 'r', encoding='utf-8', errors='ignore') as f:
+                                    reader = csv.reader(f)
+                                    for row in reader:
+                                        if len(row) >= 1 and row[0].strip():
+                                            ip = row[0].strip()
+                                            if re.match(r'^(?:[0-9]{1,3}\.){3}[0-9]{1,3}$', ip):
+                                                unique_hosts.add(ip)
+                                                csv_host_ports.setdefault(ip, set())
+
                                             if len(row) > 4:
                                                 for port_col in row[4:]:
-                                                    if port_col and port_col.strip() and port_col.strip() != '':
-                                                        port_count += 1
-                        except Exception as e:
-                            logger.debug(f"Could not read scan result file {filepath}: {e}")
-                            continue
-                
-                logger.debug(f"Scan result files found: {scan_files_found}")
-                logger.debug(f"Unique hosts found: {list(unique_hosts)}")
-                logger.debug(f"Total port count: {port_count}")
-            except Exception as e:
-                logger.warning(f"Could not list scan_results directory: {e}")
-            
-            # Update shared data with the current counts
+                                                    normalized_port = _normalize_port_value(port_col)
+                                                    if normalized_port:
+                                                        csv_host_ports.setdefault(ip, set()).add(normalized_port)
+                            except Exception as e:
+                                logger.debug(f"Could not read scan result file {filepath}: {e}")
+                                continue
+                except Exception as e:
+                    logger.warning(f"Could not process scan_results directory: {e}")
+            else:
+                logger.warning(f"Scan results directory does not exist: {scan_results_dir}")
+
+            logger.debug(f"Scan result files found: {scan_files_found}")
+            logger.debug(f"Unique hosts found: {list(unique_hosts)}")
+            aggregated_ports_from_csv = sum(len(ports) for ports in csv_host_ports.values())
+            logger.debug(f"Total port count from CSV: {aggregated_ports_from_csv}")
+
             old_targets = shared_data.targetnbr
             old_ports = shared_data.portnbr
             aggregated_targets = len(unique_hosts)
-            aggregated_ports = port_count
+            aggregated_ports = aggregated_ports_from_csv
+            total_target_count = aggregated_targets
+            inactive_target_count = 0
+            current_snapshot = {ip: {'alive': True, 'ports': csv_host_ports.get(ip, set())} for ip in unique_hosts}
 
             if aggregated_network_stats:
-                agg_host_count = aggregated_network_stats.get('host_count', aggregated_targets)
-                agg_port_count = aggregated_network_stats.get('port_count', aggregated_ports)
+                agg_host_count = aggregated_network_stats.get('host_count')
+                agg_total_host_count = aggregated_network_stats.get('total_host_count')
+                agg_inactive_count = aggregated_network_stats.get('inactive_host_count')
+                agg_port_count = aggregated_network_stats.get('port_count')
+                hosts_snapshot = aggregated_network_stats.get('hosts')
 
-                if agg_host_count or agg_port_count:
-                    aggregated_targets = max(agg_host_count, aggregated_targets)
-                    aggregated_ports = max(agg_port_count, aggregated_ports)
+                if hosts_snapshot:
+                    current_snapshot = hosts_snapshot
+
+                if agg_host_count is not None:
+                    aggregated_targets = safe_int(agg_host_count)
+                if agg_total_host_count is not None:
+                    total_target_count = safe_int(agg_total_host_count)
+                else:
+                    total_target_count = aggregated_targets
+                if agg_inactive_count is not None:
+                    inactive_target_count = safe_int(agg_inactive_count)
+                else:
+                    inactive_target_count = max(total_target_count - aggregated_targets, 0)
+                if agg_port_count is not None:
+                    aggregated_ports = safe_int(agg_port_count)
+            else:
+                total_target_count = aggregated_targets
+                inactive_target_count = max(total_target_count - aggregated_targets, 0)
 
             shared_data.targetnbr = aggregated_targets
+            shared_data.total_targetnbr = total_target_count
+            shared_data.inactive_targetnbr = inactive_target_count
             shared_data.portnbr = aggregated_ports
             logger.debug(f"Updated targets: {old_targets} -> {aggregated_targets}")
             logger.debug(f"Updated ports: {old_ports} -> {aggregated_ports}")
-        else:
-            logger.warning(f"Scan results directory does not exist: {scan_results_dir}")
 
-            if aggregated_network_stats:
-                old_targets = shared_data.targetnbr
-                old_ports = shared_data.portnbr
+            previous_snapshot = getattr(shared_data, 'network_hosts_snapshot', {}) or {}
 
-                shared_data.targetnbr = aggregated_network_stats.get('host_count', safe_int(shared_data.targetnbr))
-                shared_data.portnbr = aggregated_network_stats.get('port_count', safe_int(shared_data.portnbr))
+            previous_active_hosts = {ip for ip, meta in previous_snapshot.items() if meta.get('alive', True)}
+            current_active_hosts = {ip for ip, meta in current_snapshot.items() if meta.get('alive', True)}
 
-                logger.debug(f"Updated targets from aggregated data: {old_targets} -> {shared_data.targetnbr}")
-                logger.debug(f"Updated ports from aggregated data: {old_ports} -> {shared_data.portnbr}")
-        
-        # Sync credential count from crackedpwd directory
-        cred_results_dir = getattr(shared_data, 'crackedpwd_dir', os.path.join('data', 'output', 'crackedpwd'))
-        
-        logger.debug(f"Syncing credentials from directory: {cred_results_dir}")
-        
-        # Create directory if it doesn't exist
-        try:
-            os.makedirs(cred_results_dir, exist_ok=True)
-            logger.debug(f"Ensured directory exists: {cred_results_dir}")
-        except Exception as e:
-            logger.warning(f"Could not create crackedpwd directory: {e}")
-        
-        if os.path.exists(cred_results_dir):
-            cred_count = 0
+            new_active_hosts = current_active_hosts - previous_active_hosts
+            lost_active_hosts = previous_active_hosts - current_active_hosts
+
+            shared_data.network_hosts_snapshot = current_snapshot
+            shared_data.new_target_ips = sorted(new_active_hosts)
+            shared_data.lost_target_ips = sorted(lost_active_hosts)
+            shared_data.new_targets = len(shared_data.new_target_ips)
+            shared_data.lost_targets = len(shared_data.lost_target_ips)
+
+            # Sync credential count from crackedpwd directory
+            cred_results_dir = getattr(shared_data, 'crackedpwd_dir', os.path.join('data', 'output', 'crackedpwd'))
+
+            logger.debug(f"Syncing credentials from directory: {cred_results_dir}")
+
+            # Create directory if it doesn't exist
             try:
-                cred_files_found = []
-                for filename in os.listdir(cred_results_dir):
-                    if (filename.endswith('.txt') or filename.endswith('.csv')) and not filename.startswith('.'):
-                        cred_files_found.append(filename)
-                        filepath = os.path.join(cred_results_dir, filename)
-                        try:
-                            with open(filepath, 'r', encoding='utf-8', errors='ignore') as f:
-                                content = f.read()
-                                # Count lines with credential format (user:pass)
-                                file_creds = 0
-                                for line in content.split('\n'):
-                                    if ':' in line and line.strip():
-                                        cred_count += 1
-                                        file_creds += 1
-                                if file_creds > 0:
-                                    logger.debug(f"Found {file_creds} credentials in {filename}")
-                        except Exception as e:
-                            logger.debug(f"Could not read credential file {filepath}: {e}")
-                            continue
-                
-                logger.debug(f"Credential files found: {cred_files_found}")
-                logger.debug(f"Total credential count: {cred_count}")
+                os.makedirs(cred_results_dir, exist_ok=True)
+                logger.debug(f"Ensured directory exists: {cred_results_dir}")
             except Exception as e:
-                logger.warning(f"Could not list crackedpwd directory: {e}")
-            
-            # Update shared data with the current credential count
-            old_creds = shared_data.crednbr
-            shared_data.crednbr = cred_count
-            logger.debug(f"Updated credentials: {old_creds} -> {cred_count}")
-        else:
-            logger.warning(f"Crackedpwd directory does not exist: {cred_results_dir}")
-        
-        # Update livestatus file with all synchronized counts
-        if os.path.exists(shared_data.livestatusfile):
+                logger.warning(f"Could not create crackedpwd directory: {e}")
+
+            if os.path.exists(cred_results_dir):
+                cred_count = 0
+                try:
+                    cred_files_found = []
+                    for filename in os.listdir(cred_results_dir):
+                        if (filename.endswith('.txt') or filename.endswith('.csv')) and not filename.startswith('.'):
+                            cred_files_found.append(filename)
+                            filepath = os.path.join(cred_results_dir, filename)
+                            try:
+                                with open(filepath, 'r', encoding='utf-8', errors='ignore') as f:
+                                    content = f.read()
+                                    # Count lines with credential format (user:pass)
+                                    file_creds = 0
+                                    for line in content.split('\n'):
+                                        if ':' in line and line.strip():
+                                            cred_count += 1
+                                            file_creds += 1
+                                    if file_creds > 0:
+                                        logger.debug(f"Found {file_creds} credentials in {filename}")
+                            except Exception as e:
+                                logger.debug(f"Could not read credential file {filepath}: {e}")
+                                continue
+
+                    logger.debug(f"Credential files found: {cred_files_found}")
+                    logger.debug(f"Total credential count: {cred_count}")
+                except Exception as e:
+                    logger.warning(f"Could not list crackedpwd directory: {e}")
+
+                # Update shared data with the current credential count
+                old_creds = shared_data.crednbr
+                shared_data.crednbr = cred_count
+                logger.debug(f"Updated credentials: {old_creds} -> {cred_count}")
+            else:
+                logger.warning(f"Crackedpwd directory does not exist: {cred_results_dir}")
+
+            # Update livestatus file with all synchronized counts
+            if os.path.exists(shared_data.livestatusfile):
+                try:
+                    if pandas_available:
+                        df = pd.read_csv(shared_data.livestatusfile)
+                        if not df.empty:
+                            df.loc[0, 'Alive Hosts Count'] = safe_int(shared_data.targetnbr)
+                            df.loc[0, 'Total Open Ports'] = safe_int(shared_data.portnbr)
+                            df.loc[0, 'Vulnerabilities Count'] = safe_int(shared_data.vulnnbr)
+                            df.to_csv(shared_data.livestatusfile, index=False)
+                            logger.debug("Updated livestatus file with synchronized counts")
+                    else:
+                        logger.warning("Pandas not available, skipping livestatus update")
+                except Exception as e:
+                    logger.warning(f"Could not update livestatus with all sync counts: {e}")
+
             try:
-                import pandas as pd
-                df = pd.read_csv(shared_data.livestatusfile)
-                if not df.empty:
-                    df.loc[0, 'Alive Hosts Count'] = safe_int(shared_data.targetnbr)
-                    df.loc[0, 'Total Open Ports'] = safe_int(shared_data.portnbr)
-                    df.loc[0, 'Vulnerabilities Count'] = safe_int(shared_data.vulnnbr)
-                    df.to_csv(shared_data.livestatusfile, index=False)
-                    logger.debug("Updated livestatus file with synchronized counts")
+                shared_data.update_stats()
+                logger.debug(f"Updated gamification stats - Level: {shared_data.levelnbr}, Points: {shared_data.coinnbr}")
             except Exception as e:
-                logger.warning(f"Could not update livestatus with all sync counts: {e}")
+                logger.warning(f"Could not update gamification stats: {e}")
 
-        try:
-            shared_data.update_stats()
-            logger.debug(f"Updated gamification stats - Level: {shared_data.levelnbr}, Points: {shared_data.coinnbr}")
+            logger.debug(f"Completed sync_all_counts() - Targets: {shared_data.targetnbr}, Ports: {shared_data.portnbr}, Vulns: {shared_data.vulnnbr}, Creds: {shared_data.crednbr}")
+
         except Exception as e:
-            logger.warning(f"Could not update gamification stats: {e}")
-
-        logger.debug(f"Completed sync_all_counts() - Targets: {shared_data.targetnbr}, Ports: {shared_data.portnbr}, Vulns: {shared_data.vulnnbr}, Creds: {shared_data.crednbr}")
-
-    except Exception as e:
-        logger.error(f"Error synchronizing all counts: {e}")
+            logger.error(f"Error synchronizing all counts: {e}")
+        finally:
+            last_sync_time = time.time()
+            shared_data.last_sync_timestamp = last_sync_time
+            duration = last_sync_time - start_time
+            logger.debug(f"sync_all_counts() finished in {duration:.2f}s")
 
 
 def safe_int(value, default=0):
@@ -339,6 +405,15 @@ def safe_bool(value, default=False):
         return bool(value) if value is not None else default
     except (ValueError, TypeError):
         return default
+
+
+def ensure_recent_sync(max_age=SYNC_BACKGROUND_INTERVAL):
+    """Ensure counts are synchronized if the last update is older than max_age seconds"""
+    global last_sync_time
+
+    if time.time() - last_sync_time > max_age:
+        logger.debug("Triggering on-demand sync_all_counts() due to stale data")
+        sync_all_counts()
 
 
 def get_current_wifi_ssid():
@@ -398,6 +473,29 @@ def _normalize_port_value(port_entry):
         return None
 
 
+def _normalize_alive_value(value):
+    """Normalize alive column values to boolean"""
+    try:
+        if value is None:
+            return True
+
+        if isinstance(value, bool):
+            return value
+
+        if isinstance(value, (int, float)):
+            return value != 0
+
+        text = str(value).strip().lower()
+        if text in ('', '1', 'true', 'yes', 'up', 'alive', 'online'):
+            return True
+        if text in ('0', 'false', 'no', 'down', 'dead', 'offline'):
+            return False
+
+        return True
+    except Exception:
+        return True
+
+
 def update_wifi_network_data():
     """Update WiFi-specific network data from scan results and provide aggregated counts"""
     try:
@@ -413,18 +511,18 @@ def update_wifi_network_data():
                     headers = next(reader, None)
                     if headers:
                         for row in reader:
-                            if len(row) >= 1 and row[0].strip():
-                                ip = row[0].strip()
-                                ports = set()
-                                if len(row) > 4 and row[4]:
-                                    for port_entry in row[4].split(';'):
-                                        normalized = _normalize_port_value(port_entry)
-                                        if normalized:
-                                            ports.add(normalized)
+                                if len(row) >= 1 and row[0].strip():
+                                    ip = row[0].strip()
+                                    ports = set()
+                                    if len(row) > 4 and row[4]:
+                                        for port_entry in row[4].split(';'):
+                                            normalized = _normalize_port_value(port_entry)
+                                            if normalized:
+                                                ports.add(normalized)
 
                                 existing_data[ip] = {
                                     'hostname': row[1] if len(row) > 1 else '',
-                                    'alive': row[2] if len(row) > 2 else '1',
+                                    'alive': _normalize_alive_value(row[2] if len(row) > 2 else '1'),
                                     'mac': row[3] if len(row) > 3 else '',
                                     'ports': ports,
                                     'last_seen': row[5] if len(row) > 5 else datetime.now().isoformat()
@@ -447,7 +545,7 @@ def update_wifi_network_data():
                                     ip = row[0].strip()
                                     if re.match(r'^(?:[0-9]{1,3}\.){3}[0-9]{1,3}$', ip):
                                         hostname = row[1] if len(row) > 1 and row[1] else ''
-                                        alive = row[2] if len(row) > 2 and row[2] else '1'
+                                        alive = _normalize_alive_value(row[2] if len(row) > 2 and row[2] else '1')
                                         mac = row[3] if len(row) > 3 and row[3] else ''
 
                                         # Collect ports from remaining columns
@@ -506,11 +604,17 @@ def update_wifi_network_data():
 
         # Prepare aggregated counts from persisted data
         aggregated_host_count = 0
+        aggregated_active_count = 0
+        aggregated_inactive_count = 0
         aggregated_port_count = 0
 
         for ip, data in existing_data.items():
             aggregated_host_count += 1
-            aggregated_port_count += sum(1 for port in data['ports'] if port)
+            if data.get('alive', True):
+                aggregated_active_count += 1
+                aggregated_port_count += sum(1 for port in data['ports'] if port)
+            else:
+                aggregated_inactive_count += 1
 
         # Write updated data to WiFi-specific file
         try:
@@ -523,7 +627,10 @@ def update_wifi_network_data():
                         if value.isdigit():
                             return int(value)
                         try:
-                            return int(re.match(r"^(\d+)", value).group(1))
+                            match = re.match(r"^(\d+)", value)
+                            if match:
+                                return int(match.group(1))
+                            return value
                         except Exception:
                             return value
 
@@ -531,7 +638,7 @@ def update_wifi_network_data():
                     writer.writerow([
                         ip,
                         data['hostname'],
-                        data['alive'],
+                        '1' if data.get('alive', True) else '0',
                         data['mac'],
                         ports_str,
                         data['last_seen']
@@ -542,9 +649,12 @@ def update_wifi_network_data():
             logger.error(f"Error writing WiFi network data file: {e}")
 
         return {
-            'host_count': aggregated_host_count,
+            'host_count': aggregated_active_count,
+            'total_host_count': aggregated_host_count,
+            'inactive_host_count': aggregated_inactive_count,
             'port_count': aggregated_port_count,
-            'stale_hosts_removed': len(stale_hosts)
+            'stale_hosts_removed': len(stale_hosts),
+            'hosts': existing_data
         }
 
     except Exception as e:
@@ -617,6 +727,19 @@ def index():
 def captive_portal():
     """Explicit captive portal route"""
     return send_from_directory('web', 'captive_portal.html')
+
+# WiFi configuration page route
+@app.route('/wifi-config')
+def wifi_config_page():
+    """Serve the Wi-Fi configuration page for AP clients and regular users"""
+    return send_from_directory('web', 'wifi_config.html')
+
+# Alternative routes for WiFi config (for compatibility)
+@app.route('/wifi')
+@app.route('/setup')
+def wifi_config_alt():
+    """Alternative routes for Wi-Fi configuration"""
+    return send_from_directory('web', 'wifi_config.html')
 
 
 # Captive portal detection routes for mobile devices
@@ -1434,50 +1557,156 @@ def get_wifi_status():
 
 @app.route('/api/wifi/scan', methods=['POST'])
 def scan_wifi_networks():
-    """Scan for available Wi-Fi networks"""
+    """Scan for available Wi-Fi networks with AP mode considerations for Pi Zero W2"""
     try:
         wifi_manager = getattr(shared_data, 'ragnar_instance', None)
         if wifi_manager and hasattr(wifi_manager, 'wifi_manager'):
-            networks = wifi_manager.wifi_manager.scan_networks()
-            return jsonify({'networks': networks})
+            # Check if we're in AP mode and handle accordingly
+            if wifi_manager.wifi_manager.ap_mode_active:
+                logger.info("Scanning networks while in AP mode (Pi Zero W2 compatible)")
+                # Use specialized AP mode scanning
+                networks = wifi_manager.wifi_manager.scan_networks_while_ap()
+                
+                # Check if we got instructional networks (scan failed)
+                if networks and any(net.get('instruction') for net in networks):
+                    return jsonify({
+                        'networks': networks,
+                        'warning': 'Live scanning limited in AP mode. Manual entry recommended.',
+                        'manual_entry_available': True,
+                        'ap_mode': True
+                    })
+                else:
+                    return jsonify({
+                        'networks': networks,
+                        'success': True,
+                        'ap_mode': True
+                    })
+            else:
+                # Regular scanning when not in AP mode
+                networks = wifi_manager.wifi_manager.scan_networks()
+                return jsonify({
+                    'networks': networks,
+                    'success': True,
+                    'ap_mode': False
+                })
         else:
-            return jsonify({'error': 'Wi-Fi manager not available'}), 503
+            return jsonify({
+                'error': 'Wi-Fi manager not available',
+                'manual_entry_available': True
+            }), 503
     except Exception as e:
         logger.error(f"Error scanning Wi-Fi networks: {e}")
-        return jsonify({'error': str(e)}), 500
+        # Fallback to cached networks if scanning fails
+        try:
+            wifi_manager = getattr(shared_data, 'ragnar_instance', None)
+            if wifi_manager and hasattr(wifi_manager, 'wifi_manager'):
+                known_networks = wifi_manager.wifi_manager.get_known_networks()
+                return jsonify({
+                    'networks': known_networks,
+                    'warning': 'Live scan failed, showing known networks only',
+                    'manual_entry_available': True
+                })
+        except:
+            pass
+        
+        return jsonify({
+            'networks': [],
+            'error': 'Scanning failed',
+            'manual_entry_available': True
+        }), 500
 
 @app.route('/api/wifi/networks')
 def get_wifi_networks():
-    """Get available and known Wi-Fi networks"""
+    """Get available and known Wi-Fi networks - optimized for Pi Zero W2 AP mode"""
     try:
         wifi_manager = getattr(shared_data, 'ragnar_instance', None)
         if wifi_manager and hasattr(wifi_manager, 'wifi_manager'):
-            available = wifi_manager.wifi_manager.get_available_networks()
-            known = wifi_manager.wifi_manager.get_known_networks()
             
-            # For captive portal, return networks in a simple format
+            # For captive portal/AP clients, use lightweight response
             if is_ap_client_request():
-                return jsonify({
-                    'success': True,
-                    'networks': available if available else []
-                })
+                logger.info("Serving networks to AP client - using optimized response")
+                try:
+                    if wifi_manager.wifi_manager.ap_mode_active:
+                        available = wifi_manager.wifi_manager.scan_networks_while_ap()
+                    else:
+                        available = wifi_manager.wifi_manager.get_available_networks()
+                    
+                    # Limit to top 10 strongest signals to reduce memory usage on Pi Zero W2
+                    if available:
+                        # Filter out instructional networks for API response
+                        real_networks = [net for net in available if not net.get('instruction')]
+                        if real_networks:
+                            available = sorted(real_networks, 
+                                             key=lambda x: x.get('signal', 0), 
+                                             reverse=True)[:10]
+                        else:
+                            # If only instructional networks, include them
+                            available = available[:3]  # Just the top instructions
+                    
+                    return jsonify({
+                        'success': True,
+                        'networks': available if available else [],
+                        'ap_mode': wifi_manager.wifi_manager.ap_mode_active,
+                        'manual_entry_available': True
+                    })
+                except Exception as e:
+                    logger.warning(f"Limited scan failed for AP client: {e}")
+                    # Fallback to known networks for AP clients
+                    known_networks = wifi_manager.wifi_manager.get_known_networks()
+                    return jsonify({
+                        'success': True,
+                        'networks': known_networks[:5],  # Limit for memory
+                        'error': 'Scanning limited in AP mode',
+                        'manual_entry_available': True,
+                        'ap_mode': True
+                    })
             else:
-                # For main interface, return detailed format
-                return jsonify({
-                    'success': True,
-                    'available': available,
-                    'known': known
-                })
+                # Full response for regular interface
+                try:
+                    if wifi_manager.wifi_manager.ap_mode_active:
+                        available = wifi_manager.wifi_manager.scan_networks_while_ap()
+                    else:
+                        available = wifi_manager.wifi_manager.get_available_networks()
+                    
+                    known = wifi_manager.wifi_manager.get_known_networks()
+                    
+                    return jsonify({
+                        'success': True,
+                        'available': available,
+                        'known': known,
+                        'ap_mode': wifi_manager.wifi_manager.ap_mode_active,
+                        'manual_entry_available': True
+                    })
+                except Exception as e:
+                    logger.warning(f"Network scan failed: {e}")
+                    # Fallback to known networks only
+                    known = wifi_manager.wifi_manager.get_known_networks()
+                    return jsonify({
+                        'success': True,
+                        'available': [],
+                        'known': known,
+                        'error': 'Scanning failed, showing known networks only',
+                        'manual_entry_available': True
+                    })
         else:
             return jsonify({
                 'success': False,
                 'networks': [],
                 'available': [], 
-                'known': []
+                'known': [],
+                'manual_entry_available': True,
+                'error': 'Wi-Fi manager not available'
             })
     except Exception as e:
         logger.error(f"Error getting Wi-Fi networks: {e}")
-        return jsonify({'success': False, 'error': str(e)}), 500
+        return jsonify({
+            'success': False, 
+            'error': str(e),
+            'manual_entry_available': True,
+            'networks': [],
+            'available': [],
+            'known': []
+        }), 500
 
 @app.route('/api/wifi/connect', methods=['POST'])
 def connect_wifi():
@@ -1645,13 +1874,31 @@ def reconnect_wifi():
         logger.error(f"Error reconnecting Wi-Fi: {e}")
         return jsonify({'error': str(e)}), 500
 
+@app.route('/api/wifi/ap/exit', methods=['POST'])
+def exit_wifi_ap_mode():
+    """Exit AP mode and start WiFi search (Endless Loop)"""
+    try:
+        wifi_manager = getattr(shared_data, 'ragnar_instance', None)
+        if not wifi_manager or not hasattr(wifi_manager, 'wifi_manager'):
+            return jsonify({'error': 'Wi-Fi manager not available'}), 503
+        
+        # Use the new exit AP mode function for endless loop
+        success = wifi_manager.wifi_manager.exit_ap_mode_from_web()
+        
+        return jsonify({
+            'success': success,
+            'message': 'Exiting AP mode and starting WiFi search...' if success else 'Failed to exit AP mode'
+        })
+        
+    except Exception as e:
+        logger.error(f"Error exiting Wi-Fi AP mode: {e}")
+        return jsonify({'error': str(e)}), 500
+
 @app.route('/api/epaper-display')
 def get_epaper_display():
     """Get current e-paper display image as base64"""
     try:
         from PIL import Image
-        import base64
-        import io
         
         # Look for the current display image saved by display.py
         display_image_path = os.path.join(shared_data.webdir, "screen.png")
@@ -1955,9 +2202,279 @@ def get_stats():
             df = pd.read_csv(shared_data.netkbfile)
             stats['scan_results_count'] = safe_int(len(df[df['Alive'] == 1]) if 'Alive' in df.columns else len(df))
         
+        # Add threat intelligence stats
+        if threat_intelligence:
+            ti_stats = threat_intelligence.get_enriched_findings_summary()
+            stats.update(ti_stats)
+        
         return jsonify(stats)
     except Exception as e:
         logger.error(f"Error getting stats: {e}")
+        return jsonify({'error': str(e)}), 500
+
+
+# ============================================================================
+# THREAT INTELLIGENCE ENDPOINTS
+# ============================================================================
+
+def _serialize_enriched_finding(finding_id, enriched_finding, default_last_update=None):
+    """Serialize enriched finding details for the modern web UI."""
+    original = enriched_finding.original_finding or {}
+
+    target = (
+        original.get('host')
+        or original.get('ip')
+        or original.get('target')
+        or original.get('id')
+        or finding_id
+    )
+
+    primary_context = enriched_finding.threat_contexts[0] if enriched_finding.threat_contexts else None
+    threat_context = 'No additional context available'
+    last_seen = None
+
+    if primary_context:
+        threat_context = primary_context.description or primary_context.threat_type or threat_context
+        last_seen = primary_context.last_seen or primary_context.first_seen
+
+    if not last_seen:
+        last_seen = (
+            original.get('timestamp')
+            or original.get('last_seen')
+            or default_last_update
+        )
+
+    attribution = None
+    if enriched_finding.attribution and enriched_finding.attribution.actor_name:
+        confidence = enriched_finding.attribution.confidence
+        if confidence:
+            attribution = f"{enriched_finding.attribution.actor_name} ({int(round(confidence * 100))}% confidence)"
+        else:
+            attribution = enriched_finding.attribution.actor_name
+
+    summary = (enriched_finding.executive_summary or '').strip()
+    if summary and len(summary) > 160:
+        summary = summary[:157] + '...'
+
+    risk_score = int(round(min(enriched_finding.dynamic_risk_score or 0.0, 10.0) * 10))
+
+    return {
+        'id': finding_id,
+        'target': target,
+        'risk_score': risk_score,
+        'threat_context': threat_context,
+        'attribution': attribution,
+        'last_updated': last_seen,
+        'summary': summary,
+        'last_seen': last_seen
+    }
+
+
+@app.route('/api/threat-intelligence/status')
+def get_threat_intelligence_status():
+    """Get threat intelligence system status"""
+    try:
+        if not threat_intelligence:
+            return jsonify({'error': 'Threat intelligence system not available'}), 503
+
+        summary = threat_intelligence.get_enriched_findings_summary() or {}
+        default_last_update = summary.get('last_intelligence_update')
+
+        serialized_findings = [
+            _serialize_enriched_finding(finding_id, enriched_finding, default_last_update)
+            for finding_id, enriched_finding in threat_intelligence.enriched_findings.items()
+        ]
+
+        risk_distribution = {'critical': 0, 'high': 0, 'medium': 0, 'low': 0}
+        active_campaigns = set()
+
+        for enriched_finding in threat_intelligence.enriched_findings.values():
+            score = enriched_finding.dynamic_risk_score or 0.0
+            if score >= 9.0:
+                risk_distribution['critical'] += 1
+            elif score >= 7.0:
+                risk_distribution['high'] += 1
+            elif score >= 4.0:
+                risk_distribution['medium'] += 1
+            else:
+                risk_distribution['low'] += 1
+
+            for campaign in enriched_finding.active_campaigns or []:
+                if campaign:
+                    active_campaigns.add(campaign)
+
+        type_to_status_key = {
+            'cisa': 'cisa_kev',
+            'nvd': 'nvd_cve',
+            'otx': 'alienvault_otx',
+            'mitre': 'mitre_attack'
+        }
+
+        source_status = {key: False for key in type_to_status_key.values()}
+        sources = []
+        for name, source in threat_intelligence.threat_sources.items():
+            sources.append({
+                'name': name,
+                'type': source.type,
+                'enabled': source.enabled,
+                'confidence_weight': source.confidence_weight,
+                'last_updated': source.last_updated
+            })
+
+            status_key = type_to_status_key.get(source.type)
+            if status_key:
+                source_status[status_key] = source_status.get(status_key, False) or source.enabled
+
+        top_threats = sorted(serialized_findings, key=lambda f: f['risk_score'], reverse=True)[:5]
+
+        total_enriched = summary.get('total_enriched_findings', len(serialized_findings))
+        high_risk_total = risk_distribution['critical'] + risk_distribution['high']
+
+        status = {
+            'enabled': True,
+            'active_sources': summary.get('threat_sources_enabled', 0),
+            'enriched_findings_count': total_enriched,
+            'high_risk_count': high_risk_total,
+            'active_campaigns': len(active_campaigns),
+            'risk_distribution': risk_distribution,
+            'source_status': source_status,
+            'last_update': default_last_update,
+            'top_threats': top_threats,
+            'sources': sources,
+            'cache_entries': len(threat_intelligence.threat_cache),
+            'total_enriched_findings': total_enriched
+        }
+
+        return jsonify(status)
+    except Exception as e:
+        logger.error(f"Error getting threat intelligence status: {e}")
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/threat-intelligence/enriched-findings')
+def get_enriched_findings():
+    """Get all enriched findings with threat intelligence"""
+    try:
+        if not threat_intelligence:
+            return jsonify({'error': 'Threat intelligence system not available'}), 503
+        
+        summary = threat_intelligence.get_enriched_findings_summary() or {}
+        default_last_update = summary.get('last_intelligence_update')
+
+        enriched_findings = [
+            _serialize_enriched_finding(finding_id, enriched_finding, default_last_update)
+            for finding_id, enriched_finding in threat_intelligence.enriched_findings.items()
+        ]
+
+        top_threats = sorted(enriched_findings, key=lambda f: f['risk_score'], reverse=True)[:5]
+
+        return jsonify({
+            'enriched_findings': enriched_findings,
+            'total_count': len(enriched_findings),
+            'summary': summary,
+            'top_threats': top_threats
+        })
+
+    except Exception as e:
+        logger.error(f"Error getting enriched findings: {e}")
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/threat-intelligence/enrich-finding', methods=['POST'])
+def enrich_finding_endpoint():
+    """Manually enrich a finding with threat intelligence"""
+    try:
+        if not threat_intelligence:
+            return jsonify({'error': 'Threat intelligence system not available'}), 503
+        
+        data = request.get_json()
+        if not data:
+            return jsonify({'error': 'No data provided'}), 400
+        
+        # Extract finding data
+        finding = {
+            'id': data.get('id'),
+            'host': data.get('host'),
+            'port': data.get('port'),
+            'service': data.get('service'),
+            'vulnerability': data.get('vulnerability'),
+            'severity': data.get('severity', 'medium'),
+            'details': data.get('details', {})
+        }
+        
+        # Enrich the finding
+        import asyncio
+        enriched_finding = asyncio.run(threat_intelligence.enrich_finding_with_threat_intelligence(finding))
+        
+        return jsonify({
+            'success': True,
+            'enriched_finding': {
+                'id': finding['id'],
+                'dynamic_risk_score': enriched_finding.dynamic_risk_score,
+                'executive_summary': enriched_finding.executive_summary,
+                'recommended_actions': enriched_finding.recommended_actions,
+                'threat_contexts_count': len(enriched_finding.threat_contexts),
+                'attribution': {
+                    'actor_name': enriched_finding.attribution.actor_name if enriched_finding.attribution else None,
+                    'confidence': enriched_finding.attribution.confidence if enriched_finding.attribution else 0.0
+                }
+            }
+        })
+        
+    except Exception as e:
+        logger.error(f"Error enriching finding: {e}")
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/threat-intelligence/dashboard')
+def get_threat_intelligence_dashboard():
+    """Get threat intelligence dashboard data"""
+    try:
+        if not threat_intelligence:
+            return jsonify({'error': 'Threat intelligence system not available'}), 503
+        
+        dashboard_data = {
+            'summary': threat_intelligence.get_enriched_findings_summary(),
+            'recent_findings': [],
+            'risk_distribution': {'critical': 0, 'high': 0, 'medium': 0, 'low': 0},
+            'threat_sources_status': []
+        }
+        
+        # Get recent enriched findings
+        recent_findings = []
+        for finding_id, enriched_finding in list(threat_intelligence.enriched_findings.items())[-10:]:
+            recent_findings.append({
+                'id': finding_id,
+                'host': enriched_finding.original_finding.get('host', 'Unknown'),
+                'vulnerability': enriched_finding.original_finding.get('vulnerability', 'Unknown'),
+                'risk_score': enriched_finding.dynamic_risk_score,
+                'executive_summary': enriched_finding.executive_summary[:200] + '...'
+            })
+        
+        dashboard_data['recent_findings'] = recent_findings
+        
+        # Calculate risk distribution
+        for enriched_finding in threat_intelligence.enriched_findings.values():
+            score = enriched_finding.dynamic_risk_score
+            if score >= 9.0:
+                dashboard_data['risk_distribution']['critical'] += 1
+            elif score >= 7.0:
+                dashboard_data['risk_distribution']['high'] += 1
+            elif score >= 5.0:
+                dashboard_data['risk_distribution']['medium'] += 1
+            else:
+                dashboard_data['risk_distribution']['low'] += 1
+        
+        # Threat sources status
+        for name, source in threat_intelligence.threat_sources.items():
+            dashboard_data['threat_sources_status'].append({
+                'name': name,
+                'type': source.type,
+                'enabled': source.enabled,
+                'last_updated': source.last_updated
+            })
+        
+        return jsonify(dashboard_data)
+        
+    except Exception as e:
+        logger.error(f"Error getting threat intelligence dashboard: {e}")
         return jsonify({'error': str(e)}), 500
 
 
@@ -2226,12 +2743,13 @@ def handle_connect():
     clients_connected += 1
     logger.info(f"Client connected. Total clients: {clients_connected}")
     emit('connected', {'message': 'Connected to Ragnar'})
-    
+
     # Send initial data to new client
     try:
+        ensure_recent_sync()
         status_data = get_current_status()
         emit('status_update', status_data)
-        
+
         # Send recent logs
         logs = get_recent_logs()
         emit('log_update', logs)
@@ -2460,15 +2978,11 @@ def broadcast_status_updates():
     """Broadcast status updates to all connected clients"""
     log_counter = 0
     activity_counter = 0
-    sync_counter = 0
     while not shared_data.webapp_should_exit:
         try:
             if clients_connected > 0:
-                # Synchronize all counts every 10 cycles (20 seconds)
-                sync_counter += 1
-                if sync_counter % 10 == 0:
-                    sync_all_counts()
-                
+                ensure_recent_sync()
+
                 # Send status update
                 status_data = get_current_status()
                 socketio.emit('status_update', status_data)
@@ -2515,6 +3029,17 @@ def broadcast_status_updates():
         except Exception as e:
             logger.error(f"Error broadcasting status: {e}")
             socketio.sleep(5)
+
+
+def background_sync_loop(interval=SYNC_BACKGROUND_INTERVAL):
+    """Continuously synchronize counts so displays remain fresh even without web clients"""
+    while not shared_data.webapp_should_exit:
+        try:
+            sync_all_counts()
+        except Exception as e:
+            logger.error(f"Background sync error: {e}")
+
+        time.sleep(max(1, interval))
 
 
 # ============================================================================
@@ -3361,11 +3886,10 @@ def capture_screenshot_api():
         filename = f"screenshot_{timestamp}.png"
         filepath = os.path.join(shared_data.webdir, filename)
         
-        # Capture screenshot using the display module
-        display_manager = display.DisplayManager(shared_data)
-        if hasattr(display_manager, 'capture_screenshot'):
-            success = display_manager.capture_screenshot(filepath)
-        else:
+        # Capture screenshot - create a placeholder for now
+        success = False
+            
+        if not success:
             # Fallback to creating a placeholder
             from PIL import Image, ImageDraw, ImageFont
             img = Image.new('RGB', (400, 300), color='black')
@@ -3455,9 +3979,9 @@ def format_bytes(bytes_value):
 def get_system_status_api():
     """Get comprehensive system status"""
     try:
-        import psutil
-        import subprocess
-        
+        if not psutil_available:
+            return jsonify({'error': 'System monitoring not available'}), 503
+            
         # CPU Information
         cpu_percent = psutil.cpu_percent(interval=1)
         cpu_count = psutil.cpu_count()
@@ -3497,11 +4021,14 @@ def get_system_status_api():
         
         # Temperature (if available)
         try:
-            temps = psutil.sensors_temperatures()
-            temperature_data = {}
-            for name, entries in temps.items():
-                for entry in entries:
-                    temperature_data[f"{name}_{entry.label}"] = entry.current
+            if hasattr(psutil, 'sensors_temperatures'):
+                temps = psutil.sensors_temperatures()
+                temperature_data = {}
+                for name, entries in temps.items():
+                    for entry in entries:
+                        temperature_data[f"{name}_{entry.label}"] = entry.current
+            else:
+                temperature_data = {}
         except:
             temperature_data = {}
         
@@ -3574,7 +4101,8 @@ def get_system_status_api():
 def get_processes_api():
     """Get detailed process information"""
     try:
-        import psutil
+        if not psutil_available:
+            return jsonify({'error': 'Process monitoring not available'}), 503
         
         processes = []
         for proc in psutil.process_iter(['pid', 'name', 'cpu_percent', 'memory_percent', 'status', 'create_time']):
@@ -3608,7 +4136,8 @@ def get_processes_api():
 def get_network_stats_api():
     """Get network interface statistics"""
     try:
-        import psutil
+        if not psutil_available:
+            return jsonify({'error': 'Network monitoring not available'}), 503
         
         net_io = psutil.net_io_counters(pernic=True)
         net_connections = psutil.net_connections()
@@ -3666,19 +4195,41 @@ def format_uptime(seconds):
 def get_dashboard_stats():
     """Get dashboard statistics including counts from various sources"""
     try:
-        # Synchronize all counts first to ensure consistency
-        sync_all_counts()
-        
+        # Ensure recent synchronization without blocking the request unnecessarily
+        ensure_recent_sync()
+
+        current_time = time.time()
+        last_sync_ts = getattr(shared_data, 'last_sync_timestamp', last_sync_time)
+        last_sync_iso = None
+        last_sync_age = None
+
+        if last_sync_ts:
+            try:
+                last_sync_iso = datetime.fromtimestamp(last_sync_ts).isoformat()
+                last_sync_age = max(current_time - last_sync_ts, 0.0)
+            except Exception:
+                last_sync_iso = None
+
         stats = {
             'target_count': safe_int(shared_data.targetnbr),
+            'active_target_count': safe_int(shared_data.targetnbr),
+            'inactive_target_count': safe_int(getattr(shared_data, 'inactive_targetnbr', 0)),
+            'total_target_count': safe_int(getattr(shared_data, 'total_targetnbr', shared_data.targetnbr)),
+            'new_target_count': safe_int(getattr(shared_data, 'new_targets', 0)),
+            'lost_target_count': safe_int(getattr(shared_data, 'lost_targets', 0)),
+            'new_target_ips': getattr(shared_data, 'new_target_ips', []),
+            'lost_target_ips': getattr(shared_data, 'lost_target_ips', []),
             'port_count': safe_int(shared_data.portnbr),
             'vulnerability_count': safe_int(shared_data.vulnnbr),
             'credential_count': safe_int(shared_data.crednbr),
             'level': safe_int(shared_data.levelnbr),
             'points': safe_int(shared_data.coinnbr),
-            'coins': safe_int(shared_data.coinnbr)
+            'coins': safe_int(shared_data.coinnbr),
+            'last_sync_timestamp': last_sync_ts,
+            'last_sync_iso': last_sync_iso,
+            'last_sync_age_seconds': last_sync_age
         }
-        
+
         return jsonify(stats)
     except Exception as e:
         logger.error(f"Error getting dashboard stats: {e}")
@@ -3990,10 +4541,14 @@ def run_server(host='0.0.0.0', port=8000):
     try:
         logger.info(f"Starting Ragnar web server on {host}:{port}")
         logger.info(f"Access the interface at http://{host}:{port}")
-        
+
+        # Prime synchronized data before clients connect
+        sync_all_counts()
+
         # Start background status broadcaster
         socketio.start_background_task(broadcast_status_updates)
-        
+        socketio.start_background_task(background_sync_loop)
+
         # Run the server
         socketio.run(app, host=host, port=port, debug=False, allow_unsafe_werkzeug=True)
     except Exception as e:

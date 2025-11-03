@@ -325,13 +325,13 @@ function initializeSocket() {
     });
 
     socket.on('credentials_update', function(data) {
-        if (currentTab === 'credentials') {
+        if (currentTab === 'discovered') {
             displayCredentialsTable(data);
         }
     });
 
     socket.on('loot_update', function(data) {
-        if (currentTab === 'loot') {
+        if (currentTab === 'discovered') {
             displayLootTable(data);
         }
     });
@@ -462,14 +462,9 @@ function setupAutoRefresh() {
         }
     }, 10000); // Every 10 seconds
 
-    autoRefreshIntervals.credentials = setInterval(() => {
-        if (currentTab === 'credentials' && socket && socket.connected) {
+    autoRefreshIntervals.discovered = setInterval(() => {
+        if (currentTab === 'discovered' && socket && socket.connected) {
             socket.emit('request_credentials');
-        }
-    }, 15000); // Every 15 seconds
-
-    autoRefreshIntervals.loot = setInterval(() => {
-        if (currentTab === 'loot' && socket && socket.connected) {
             socket.emit('request_loot');
         }
     }, 20000); // Every 20 seconds
@@ -540,16 +535,15 @@ async function loadTabData(tabName) {
         case 'network':
             await loadNetworkData();
             break;
-        case 'credentials':
+        case 'discovered':
             await loadCredentialsData();
-            break;
-        case 'loot':
             await loadLootData();
+            break;
+        case 'threat-intel':
+            await loadThreatIntelData();
             break;
         case 'files':
             await loadFilesData();
-            break;
-        case 'images':
             await loadImagesData();
             break;
         case 'system':
@@ -577,11 +571,135 @@ async function loadDashboardData() {
     }
 }
 
+function toNumber(value, fallback = 0) {
+    const numeric = Number(value);
+    return Number.isFinite(numeric) ? numeric : fallback;
+}
+
+function formatRelativeTime(seconds) {
+    if (!Number.isFinite(seconds)) {
+        return null;
+    }
+
+    let remaining = Math.max(0, Math.floor(seconds));
+    const units = [
+        { label: 'd', value: 86400 },
+        { label: 'h', value: 3600 },
+        { label: 'm', value: 60 },
+        { label: 's', value: 1 }
+    ];
+
+    const parts = [];
+    for (const unit of units) {
+        if (remaining >= unit.value || (unit.label === 's' && parts.length === 0)) {
+            const amount = Math.floor(remaining / unit.value);
+            if (amount > 0 || unit.label === 's') {
+                parts.push(`${amount}${unit.label}`);
+            }
+            remaining -= amount * unit.value;
+        }
+        if (parts.length >= 2) {
+            break;
+        }
+    }
+
+    return parts.length > 0 ? parts.join(' ') : '0s';
+}
+
+function buildLastSyncDisplay(stats) {
+    if (!stats) {
+        return 'Sync pending…';
+    }
+
+    const ageSeconds = toNumber(stats.last_sync_age_seconds, NaN);
+    const hasAge = Number.isFinite(ageSeconds);
+    const relative = hasAge ? `${formatRelativeTime(ageSeconds)} ago` : '';
+
+    let timestampSource = stats.last_sync_iso ?? stats.last_sync_time ?? stats.last_sync_timestamp;
+    let isoValue = null;
+
+    if (typeof timestampSource === 'number') {
+        isoValue = new Date(timestampSource * 1000).toISOString();
+    } else if (typeof timestampSource === 'string' && timestampSource) {
+        isoValue = timestampSource;
+    }
+
+    let absolute = '';
+    if (isoValue) {
+        const parsed = new Date(isoValue);
+        if (!Number.isNaN(parsed.getTime())) {
+            absolute = parsed.toLocaleString();
+        }
+    }
+
+    if (relative && absolute) {
+        return `${relative} (${absolute})`;
+    }
+
+    if (relative) {
+        return relative;
+    }
+
+    if (absolute) {
+        return absolute;
+    }
+
+    return 'Sync pending…';
+}
+
 function updateDashboardStats(stats) {
-    updateElement('target-count', stats.target_count || 0);
-    updateElement('port-count', stats.port_count || 0);
-    updateElement('vuln-count', stats.vulnerability_count || 0);
-    updateElement('cred-count', stats.credential_count || 0);
+    if (!stats || typeof stats !== 'object') {
+        return;
+    }
+
+    const activeTargets = toNumber(stats.active_target_count ?? stats.target_count, 0);
+    const inactiveTargets = toNumber(stats.inactive_target_count ?? stats.offline_target_count, 0);
+    const totalTargets = toNumber(stats.total_target_count ?? activeTargets + inactiveTargets, activeTargets + inactiveTargets);
+
+    const newTargetList = Array.isArray(stats.new_target_ips) ? stats.new_target_ips :
+        (Array.isArray(stats.new_targets) ? stats.new_targets : []);
+    const lostTargetList = Array.isArray(stats.lost_target_ips) ? stats.lost_target_ips :
+        (Array.isArray(stats.lost_targets) ? stats.lost_targets : []);
+
+    const newTargets = toNumber(stats.new_target_count ?? stats.new_targets ?? newTargetList.length, newTargetList.length);
+    const lostTargets = toNumber(stats.lost_target_count ?? stats.lost_targets ?? lostTargetList.length, lostTargetList.length);
+
+    const portCount = toNumber(stats.port_count ?? stats.open_port_count, 0);
+    const vulnCount = toNumber(stats.vulnerability_count ?? stats.vuln_count, 0);
+    const credCount = toNumber(stats.credential_count ?? stats.cred_count, 0);
+    const level = toNumber(stats.level ?? stats.levelnbr, 0);
+    const points = toNumber(stats.points ?? stats.coins, 0);
+
+    updateElement('target-count', activeTargets);
+    updateElement('target-total-count', totalTargets);
+    updateElement('target-inactive-count', inactiveTargets);
+    updateElement('target-new-count', newTargets);
+    updateElement('target-lost-count', lostTargets);
+
+    const newCountElement = document.getElementById('target-new-count');
+    if (newCountElement) {
+        newCountElement.title = newTargetList.length > 0 ? newTargetList.join(', ') : 'No recent additions';
+    }
+
+    const lostCountElement = document.getElementById('target-lost-count');
+    if (lostCountElement) {
+        lostCountElement.title = lostTargetList.length > 0 ? lostTargetList.join(', ') : 'No recent drops';
+    }
+
+    updateElement('port-count', portCount);
+    updateElement('vuln-count', vulnCount);
+    updateElement('cred-count', credCount);
+    updateElement('level-count', level);
+    updateElement('points-count', points);
+
+    const activeSummary = totalTargets > 0 ? `${activeTargets}/${totalTargets} active` : `${activeTargets} active`;
+    const newSummary = newTargets > 0 ? `${newTargets} new` : 'No new targets';
+    const lostSummary = lostTargets > 0 ? `${lostTargets} lost` : 'No targets lost';
+
+    updateElement('active-target-summary', activeSummary);
+    updateElement('new-target-summary', newSummary);
+    updateElement('lost-target-summary', lostSummary);
+    updateElement('last-sync-display', buildLastSyncDisplay(stats));
 }
 
 async function loadNetworkData() {
@@ -1253,41 +1371,23 @@ async function refreshDashboard() {
 
 function updateDashboardStatus(data) {
     // If the WebSocket data has zero counts, fetch from our dashboard API instead
-    if ((data.target_count || 0) === 0 && (data.port_count || 0) === 0 && 
+    if ((data.target_count || 0) === 0 && (data.port_count || 0) === 0 &&
         (data.vulnerability_count || 0) === 0 && (data.credential_count || 0) === 0) {
-        
+
         // Fetch proper dashboard stats
         fetchAPI('/api/dashboard/stats')
             .then(stats => {
-                updateElement('target-count', stats.target_count || 0);
-                updateElement('port-count', stats.port_count || 0);
-                updateElement('vuln-count', stats.vulnerability_count || 0);
-                updateElement('cred-count', stats.credential_count || 0);
-                updateElement('level-count', stats.level || stats.levelnbr || 0);
-                const dashboardPoints = stats.points ?? stats.coins ?? 0;
-                updateElement('points-count', dashboardPoints);
+                updateDashboardStats(stats);
             })
             .catch(() => {
                 // Fallback to WebSocket data if API fails
-                updateElement('target-count', data.target_count || 0);
-                updateElement('port-count', data.port_count || 0);
-                updateElement('vuln-count', data.vulnerability_count || 0);
-                updateElement('cred-count', data.credential_count || 0);
-                updateElement('level-count', data.level || data.levelnbr || 0);
-                const fallbackPoints = data.points ?? data.coins ?? 0;
-                updateElement('points-count', fallbackPoints);
+                updateDashboardStats(data);
             });
     } else {
         // Use WebSocket data if it has non-zero values
-        updateElement('target-count', data.target_count || 0);
-        updateElement('port-count', data.port_count || 0);
-        updateElement('vuln-count', data.vulnerability_count || 0);
-        updateElement('cred-count', data.credential_count || 0);
-        updateElement('level-count', data.level || data.levelnbr || 0);
-        const realtimePoints = data.points ?? data.coins ?? 0;
-        updateElement('points-count', realtimePoints);
+        updateDashboardStats(data);
     }
-    
+
     // Update status - use the actual e-paper display text
     updateElement('Ragnar-status', data.ragnar_status || 'IDLE');
     updateElement('Ragnar-says', (data.ragnar_says || 'Hacking away...'));
@@ -3053,3 +3153,221 @@ window.exportNetkbEntry = exportNetkbEntry;
 window.researchEntry = researchEntry;
 window.researchVulnerability = researchVulnerability;
 window.exploitVulnerability = exploitVulnerability;
+
+// Threat Intelligence Functions
+window.loadThreatIntelData = loadThreatIntelData;
+window.refreshThreatIntel = refreshThreatIntel;
+window.enrichTarget = enrichTarget;
+window.updateThreatIntelStats = updateThreatIntelStats;
+
+// ===========================================
+// THREAT INTELLIGENCE FUNCTIONS
+// ===========================================
+
+// Load threat intelligence data when tab is shown
+async function loadThreatIntelData() {
+    try {
+        // Load threat intelligence status
+        const statusResponse = await fetch('/api/threat-intelligence/status');
+        if (statusResponse.ok) {
+            const statusData = await statusResponse.json();
+            updateThreatIntelStats(statusData);
+        }
+
+        // Load enriched findings
+        const findingsResponse = await fetch('/api/threat-intelligence/enriched-findings');
+        if (findingsResponse.ok) {
+            const findingsData = await findingsResponse.json();
+            updateEnrichedFindingsTable(findingsData.enriched_findings || []);
+        }
+
+    } catch (error) {
+        console.error('Error loading threat intelligence data:', error);
+        showNotification('Error loading threat intelligence data', 'error');
+    }
+}
+
+// Refresh threat intelligence data
+function refreshThreatIntel() {
+    showNotification('Refreshing threat intelligence...', 'info');
+    loadThreatIntelData();
+}
+
+// Update threat intelligence statistics
+function updateThreatIntelStats(data) {
+    // Update summary cards
+    document.getElementById('threat-sources-count').textContent = data.active_sources || 0;
+    document.getElementById('enriched-findings-count').textContent = data.enriched_findings_count || 0;
+    document.getElementById('high-risk-count').textContent = data.high_risk_count || 0;
+    document.getElementById('active-campaigns-count').textContent = data.active_campaigns || 0;
+
+    // Update risk distribution
+    const riskDistribution = data.risk_distribution || {};
+    document.getElementById('critical-risk-count').textContent = riskDistribution.critical || 0;
+    document.getElementById('high-risk-detail-count').textContent = riskDistribution.high || 0;
+    document.getElementById('medium-risk-count').textContent = riskDistribution.medium || 0;
+    document.getElementById('low-risk-count').textContent = riskDistribution.low || 0;
+
+    // Update source status indicators
+    const sources = data.source_status || {};
+    updateSourceStatus('cisa-status', sources.cisa_kev || false);
+    updateSourceStatus('nvd-status', sources.nvd_cve || false);
+    updateSourceStatus('otx-status', sources.alienvault_otx || false);
+    updateSourceStatus('mitre-status', sources.mitre_attack || false);
+
+    updateTopThreatsList(data.top_threats || [], data.last_update || data.last_intelligence_update || null);
+}
+
+// Update source status indicator
+function updateSourceStatus(elementId, isActive) {
+    const element = document.getElementById(elementId);
+    if (element) {
+        element.className = `w-3 h-3 rounded-full ${isActive ? 'bg-green-400' : 'bg-red-400'}`;
+    }
+}
+
+// Update enriched findings table
+function updateEnrichedFindingsTable(findings) {
+    const tableBody = document.getElementById('enriched-findings-table');
+
+    if (!findings || findings.length === 0) {
+        tableBody.innerHTML = `
+            <tr>
+                <td colspan="6" class="text-center py-8 text-slate-400">
+                    No threats detected. Run network scans to generate threat intelligence data.
+                </td>
+            </tr>
+        `;
+        return;
+    }
+
+    tableBody.innerHTML = findings.map(finding => `
+        <tr class="border-b border-slate-700 hover:bg-slate-700/50">
+            <td class="py-3 px-4 text-white font-mono">${escapeHtml(finding.target)}</td>
+            <td class="py-3 px-4">
+                <span class="px-2 py-1 rounded text-xs font-medium ${getRiskScoreClass(finding.risk_score)}">
+                    ${finding.risk_score}/100
+                </span>
+            </td>
+            <td class="py-3 px-4 text-slate-300 max-w-xs truncate" title="${escapeHtml(finding.threat_context || 'N/A')}">
+                ${escapeHtml(finding.threat_context || 'N/A')}
+            </td>
+            <td class="py-3 px-4 text-slate-300">${escapeHtml(finding.attribution || 'Unknown')}</td>
+            <td class="py-3 px-4 text-slate-400">${formatTimestamp(finding.last_updated)}</td>
+            <td class="py-3 px-4">
+                <button onclick="showFindingDetails('${finding.target}')" 
+                        class="text-blue-400 hover:text-blue-300 text-sm">
+                    Details
+                </button>
+            </td>
+        </tr>
+    `).join('');
+}
+
+// Update top threats list
+function updateTopThreatsList(threats, lastUpdated) {
+    const listElement = document.getElementById('top-threats-list');
+    const updatedElement = document.getElementById('top-threats-updated');
+
+    if (!listElement) {
+        return;
+    }
+
+    if (updatedElement) {
+        updatedElement.textContent = `Last updated: ${lastUpdated ? formatTimestamp(lastUpdated) : 'N/A'}`;
+    }
+
+    if (!threats || threats.length === 0) {
+        listElement.innerHTML = `
+            <li class="text-slate-400">
+                No threats detected. You're all clear!
+            </li>
+        `;
+        return;
+    }
+
+    listElement.innerHTML = threats.slice(0, 5).map(threat => `
+        <li class="bg-slate-800/60 rounded-lg p-4 flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+            <div class="space-y-1">
+                <p class="text-white font-semibold">${escapeHtml(threat.target || 'Unknown Target')}</p>
+                <p class="text-slate-400 text-sm">${escapeHtml(threat.summary || 'No summary available')}</p>
+                <div class="text-xs text-slate-500 space-x-3">
+                    <span>Last Seen: ${formatTimestamp(threat.last_seen)}</span>
+                    ${threat.attribution ? `<span>Attributed to: ${escapeHtml(threat.attribution)}</span>` : ''}
+                </div>
+            </div>
+            <span class="self-start sm:self-center px-2 py-1 rounded text-xs font-semibold ${getRiskScoreClass(threat.risk_score)}">
+                ${threat.risk_score}/100
+            </span>
+        </li>
+    `).join('');
+}
+
+// Get risk score CSS class
+function getRiskScoreClass(score) {
+    if (score >= 90) return 'bg-red-600 text-white';
+    if (score >= 70) return 'bg-orange-600 text-white';
+    if (score >= 50) return 'bg-yellow-600 text-black';
+    return 'bg-green-600 text-white';
+}
+
+// Manual target enrichment
+async function enrichTarget() {
+    const targetInput = document.getElementById('enrichment-target');
+    const target = targetInput.value.trim();
+    
+    if (!target) {
+        showNotification('Please enter a target (IP, domain, or hash)', 'error');
+        return;
+    }
+
+    try {
+        showNotification(`Enriching target: ${target}...`, 'info');
+        
+        const response = await fetch('/api/threat-intelligence/enrich-target', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({ target: target })
+        });
+
+        if (response.ok) {
+            const result = await response.json();
+            showNotification(`Target enriched successfully. Risk score: ${result.risk_score}/100`, 'success');
+            targetInput.value = '';
+            loadThreatIntelData(); // Refresh the data
+        } else {
+            const error = await response.json();
+            showNotification(`Enrichment failed: ${error.error}`, 'error');
+        }
+    } catch (error) {
+        console.error('Error enriching target:', error);
+        showNotification('Error enriching target', 'error');
+    }
+}
+
+// Show finding details (placeholder for future modal implementation)
+function showFindingDetails(target) {
+    showNotification(`Detailed analysis for ${target} coming soon...`, 'info');
+}
+
+// Format timestamp for display
+function formatTimestamp(timestamp) {
+    if (!timestamp) return 'N/A';
+    
+    try {
+        const date = new Date(timestamp);
+        return date.toLocaleString();
+    } catch (error) {
+        return 'Invalid date';
+    }
+}
+
+// HTML escape utility
+function escapeHtml(text) {
+    if (typeof text !== 'string') return text;
+    const div = document.createElement('div');
+    div.textContent = text;
+    return div.innerHTML;
+}
