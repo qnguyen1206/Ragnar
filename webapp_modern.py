@@ -1653,6 +1653,26 @@ def reconnect_wifi():
         logger.error(f"Error reconnecting Wi-Fi: {e}")
         return jsonify({'error': str(e)}), 500
 
+@app.route('/api/wifi/ap/exit', methods=['POST'])
+def exit_wifi_ap_mode():
+    """Exit AP mode and start WiFi search (Endless Loop)"""
+    try:
+        wifi_manager = getattr(shared_data, 'ragnar_instance', None)
+        if not wifi_manager or not hasattr(wifi_manager, 'wifi_manager'):
+            return jsonify({'error': 'Wi-Fi manager not available'}), 503
+        
+        # Use the new exit AP mode function for endless loop
+        success = wifi_manager.wifi_manager.exit_ap_mode_from_web()
+        
+        return jsonify({
+            'success': success,
+            'message': 'Exiting AP mode and starting WiFi search...' if success else 'Failed to exit AP mode'
+        })
+        
+    except Exception as e:
+        logger.error(f"Error exiting Wi-Fi AP mode: {e}")
+        return jsonify({'error': str(e)}), 500
+
 @app.route('/api/epaper-display')
 def get_epaper_display():
     """Get current e-paper display image as base64"""

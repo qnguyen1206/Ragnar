@@ -282,14 +282,13 @@
 <body>
     <div class="container">
         <div class="header">
-            <h1>🛡️ Ragnar Wi-Fi Manager</h1>
+            <h1>Ragnar Wi-Fi Manager</h1>
             <p>Configure your network connection</p>
         </div>
 
         <!-- Status Section -->
         <div class="section">
             <div id="status-card" class="status-card">
-                <h3><span id="status-icon" class="wifi-icon">📶</span>Connection Status</h3>
                 <p><strong>Status:</strong> <span id="wifi-status">Checking...</span></p>
                 <p><strong>Network:</strong> <span id="current-network">N/A</span></p>
                 <p><strong>Mode:</strong> <span id="connection-mode">Client</span></p>
@@ -304,8 +303,7 @@
                 🔍 Scan Networks
             </button>
             <button class="btn btn-secondary" onclick="refreshStatus()">🔄 Refresh Status</button>
-            <button class="btn btn-danger" onclick="startAPMode()">📡 Start AP Mode</button>
-            <button class="btn btn-success" onclick="forceReconnect()">🔗 Reconnect</button>
+            <button class="btn btn-danger" onclick="leaveAPMode()">📡 Leave AP Mode</button>
         </div>
 
         <!-- Available Networks -->
@@ -704,6 +702,34 @@
             } catch (error) {
                 console.error('Error reconnecting:', error);
                 showAlert('Error initiating reconnection', 'error');
+            }
+        }
+
+        // Exit AP mode and start WiFi search
+        async function leaveAPMode() {
+            if (!confirm('This will exit AP mode and start searching for known WiFi networks. Continue?')) {
+                return;
+            }
+            
+            try {
+                const response = await fetch('/api/wifi/ap/exit', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    }
+                });
+                
+                const result = await response.json();
+                
+                if (result.success) {
+                    showAlert('Exiting AP mode and searching for WiFi networks...', 'success');
+                    setTimeout(refreshStatus, 3000);
+                } else {
+                    showAlert(result.message || 'Failed to exit AP mode', 'error');
+                }
+            } catch (error) {
+                console.error('Error exiting AP mode:', error);
+                showAlert('Error exiting AP mode', 'error');
             }
         }
 

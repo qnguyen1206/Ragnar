@@ -34,20 +34,35 @@ class WiFiManager:
         self.ap_mode_active = False
         self.connection_attempts = 0
         self.last_connection_attempt = None
-        self.connection_check_interval = 30  # seconds
-        self.connection_timeout = shared_data.config.get('wifi_initial_connection_timeout', 60)
+        self.connection_check_interval = 10  # Check every 10 seconds for responsive monitoring
+        self.connection_timeout = shared_data.config.get('wifi_initial_connection_timeout', 120)  # 2 minutes initial wait
         self.max_connection_attempts = 3
+        
+        # Endless Loop Timing Configuration
+        self.endless_loop_active = False
+        self.endless_loop_start_time = None
+        self.boot_completed_time = None
+        self.wifi_search_timeout = 120  # 2 minutes to search for WiFi
+        self.ap_mode_timeout = 180  # 3 minutes in AP mode
+        self.wifi_validation_interval = 180  # 3 minutes between WiFi validations
+        self.wifi_validation_retries = 3  # 3 validation attempts
+        self.wifi_validation_retry_interval = 10  # 10 seconds between validation retries
+        self.last_wifi_validation = None
+        self.wifi_validation_failures = 0
         
         # Smart AP mode management
         self.ap_mode_start_time = None
-        self.ap_timeout = shared_data.config.get('wifi_ap_timeout', 180)  # 3 minutes
-        self.ap_idle_timeout = shared_data.config.get('wifi_ap_idle_timeout', 180)  # 3 minutes
-        self.reconnect_interval = shared_data.config.get('wifi_reconnect_interval', 20)  # 20 seconds
-        self.ap_cycle_enabled = shared_data.config.get('wifi_ap_cycle_enabled', True)
+        self.ap_timeout = self.ap_mode_timeout  # Use endless loop timeout
+        self.ap_idle_timeout = self.ap_mode_timeout  # 3 minutes in AP mode
+        self.reconnect_interval = self.wifi_search_timeout  # 2 minutes to search for WiFi
+        self.ap_cycle_enabled = True  # Always enable cycling for endless loop
         self.last_ap_stop_time = None
         self.ap_clients_connected = False
         self.ap_clients_count = 0
         self.cycling_mode = False  # Track if we're in AP/reconnect cycle
+        self.user_connected_to_ap = False  # Track if user has connected to AP
+        self.ap_user_connection_time = None  # When user connected to AP
+        self.force_exit_ap_mode = False  # Flag to force exit AP mode from web interface
         
         # Network management
         self.known_networks = []
@@ -151,19 +166,22 @@ class WiFiManager:
             self.ap_logger = self.logger
     
     def start(self):
-        """Start the Wi-Fi management system"""
-        self.logger.info("Starting Wi-Fi Manager...")
+        """Start the Wi-Fi management system with endless loop behavior"""
+        self.logger.info("Starting Wi-Fi Manager with Endless Loop behavior...")
+        
+        # Mark boot completion time for endless loop timing
+        self.boot_completed_time = time.time()
         
         # Create a restart detection file to help identify service restarts
         self._create_restart_marker()
         
         # Start monitoring thread
         if not self.monitoring_thread or not self.monitoring_thread.is_alive():
-            self.monitoring_thread = threading.Thread(target=self._monitoring_loop, daemon=True)
+            self.monitoring_thread = threading.Thread(target=self._endless_loop_monitoring, daemon=True)
             self.monitoring_thread.start()
         
-        # Initial connection attempt
-        self._initial_connection_sequence()
+        # Initial connection assessment and endless loop startup
+        self._initial_endless_loop_sequence()
     
     def stop(self):
         """Stop the Wi-Fi management system"""
@@ -270,117 +288,235 @@ class WiFiManager:
             self.logger.warning(f"Could not check restart marker: {e}")
             return False
     
-    def _initial_connection_sequence(self):
-        """Handle initial Wi-Fi connection on startup - with smart existing connection detection"""
-        self.logger.info("Starting Wi-Fi connection assessment...")
+    def _initial_endless_loop_sequence(self):
+        """Handle initial Wi-Fi connection with endless loop behavior"""
+        self.logger.info("Starting Endless Loop Wi-Fi management...")
         
-        # Check if this is a fresh boot or service restart
-        is_fresh_boot = self._is_fresh_boot()
-        
-        # Load previous connection state for service restarts
-        previous_state = None if is_fresh_boot else self._load_connection_state()
-        
-        if previous_state:
-            self.logger.info(f"Previous state: connected={previous_state.get('connected')}, "
-                           f"ssid={previous_state.get('ssid')}, ap_mode={previous_state.get('ap_mode')}")
-        
-        # First, check if we're already connected
-        initial_check_start = time.time()
-        for i in range(3):  # Check 3 times over 15 seconds to allow network to stabilize
-            if self.check_wifi_connection():
-                self.wifi_connected = True
-                self.shared_data.wifi_connected = True
-                self.current_ssid = self.get_current_ssid()
-                self.logger.info(f"Already connected to Wi-Fi network: {self.current_ssid}")
-                self._save_connection_state(self.current_ssid, True)  # Save successful connection
-                self.startup_complete = True
-                return  # Exit early - we're already connected!
+        # Wait 2 minutes after boot before starting the endless loop
+        if self.boot_completed_time:
+            boot_wait_time = 120  # 2 minutes
+            elapsed_since_boot = time.time() - self.boot_completed_time
+            remaining_wait = boot_wait_time - elapsed_since_boot
             
-            # If this is a service restart, don't wait too long
-            wait_time = 5 if i < 2 else 10
-            self.logger.info(f"Checking existing connection... attempt {i+1}/3 (waiting {wait_time}s)")
-            time.sleep(wait_time)
+            if remaining_wait > 0:
+                self.logger.info(f"Waiting {remaining_wait:.1f}s more before starting endless loop (2 minutes after boot)")
+                time.sleep(remaining_wait)
         
-        # Not connected, but check previous state for service restarts
-        if not is_fresh_boot and previous_state and previous_state.get('connected'):
-            prev_ssid = previous_state.get('ssid')
-            if prev_ssid:
-                self.logger.info(f"Service restart detected - attempting to reconnect to previous network: {prev_ssid}")
-                if self.connect_to_network(prev_ssid):
-                    # Give it a moment to establish connection
-                    time.sleep(5)
-                    if self.check_wifi_connection():
-                        self.wifi_connected = True
-                        self.shared_data.wifi_connected = True
-                        self.current_ssid = prev_ssid
-                        self.logger.info(f"Successfully reconnected to previous network: {prev_ssid}")
-                        self._save_connection_state(prev_ssid, True)
-                        self.startup_complete = True
-                        return
+        # Check if we're already connected before starting the loop
+        if self.check_wifi_connection():
+            self.wifi_connected = True
+            self.shared_data.wifi_connected = True
+            self.current_ssid = self.get_current_ssid()
+            self.logger.info(f"Already connected to Wi-Fi network: {self.current_ssid}")
+            self._save_connection_state(self.current_ssid, True)
+            self.last_wifi_validation = time.time()
+            self.startup_complete = True
+            self.endless_loop_active = True
+            return
         
-        self.logger.info("No existing connection found, determining startup type...")
-        
-        if is_fresh_boot:
-            # Fresh boot - use full startup delay
-            if hasattr(self.shared_data, 'startup_delay') and self.shared_data.startup_delay > 0:
-                self.logger.info(f"Fresh boot detected - waiting full startup delay: {self.shared_data.startup_delay}s")
-                time.sleep(self.shared_data.startup_delay)
-        else:
-            # Service restart - use shorter delay
-            restart_delay = 15  # Much shorter delay for service restarts
-            self.logger.info(f"Service restart detected - using shorter delay: {restart_delay}s")
-            time.sleep(restart_delay)
-        
-        # Now try to connect to known networks
-        self.logger.info("Attempting to connect to known networks...")
-        connection_start = time.time()
-        connected = False
-        
-        # Adjust timeout based on startup type
-        timeout = self.connection_timeout if is_fresh_boot else min(30, self.connection_timeout)
-        
-        while (time.time() - connection_start) < timeout and not connected and not self.should_exit:
-            self.logger.info(f"Connection attempt {self.connection_attempts + 1}/{self.max_connection_attempts}")
-            
-            if self.try_connect_known_networks():
-                connected = True
-                self.wifi_connected = True
-                self.shared_data.wifi_connected = True
-                self.current_ssid = self.get_current_ssid()
-                self.logger.info(f"Successfully connected to network: {self.current_ssid}")
-                self._save_connection_state(self.current_ssid, True)  # Save successful connection
-                break
-            
-            self.connection_attempts += 1
-            if self.connection_attempts >= self.max_connection_attempts:
-                self.logger.warning("Max connection attempts reached")
-                break
-            
-            # Shorter wait between attempts for service restarts
-            wait_time = 10 if is_fresh_boot else 5
-            time.sleep(wait_time)
-        
-        # If no connection established, decide whether to start AP mode
-        if not connected and not self.should_exit:
-            self.last_connection_attempt = time.time()  # Track when we last tried
-            
-            # For service restarts, only start AP mode if we weren't previously connected
-            should_start_ap = is_fresh_boot
-            if previous_state and not previous_state.get('connected'):
-                should_start_ap = True
-            
-            if should_start_ap and self.shared_data.config.get('wifi_auto_ap_fallback', True):
-                if self.ap_cycle_enabled:
-                    self.logger.info("No Wi-Fi connection established, starting AP cycling mode...")
-                    self.start_ap_mode_with_timeout()
-                else:
-                    self.logger.info("No Wi-Fi connection established, starting AP mode...")
-                    self.start_ap_mode()
-            else:
-                self.logger.info("Skipping AP mode - will retry connection in monitoring loop")
-                self._save_connection_state(None, False)  # Save disconnected state
-        
+        # Start the endless loop
+        self.endless_loop_active = True
+        self.endless_loop_start_time = time.time()
         self.startup_complete = True
+        self.logger.info("Endless Loop started - beginning WiFi search phase")
+        
+        # Try to connect to known networks for 2 minutes
+        self._endless_loop_wifi_search()
+
+    def _endless_loop_wifi_search(self):
+        """Search for and connect to known WiFi networks for 2 minutes"""
+        self.logger.info("Endless Loop: Starting WiFi search phase (2 minutes)")
+        search_start_time = time.time()
+        
+        while (time.time() - search_start_time) < self.wifi_search_timeout and not self.should_exit:
+            if self.try_connect_known_networks():
+                self.wifi_connected = True
+                self.shared_data.wifi_connected = True
+                self.current_ssid = self.get_current_ssid()
+                self.logger.info(f"Endless Loop: Successfully connected to {self.current_ssid}")
+                self._save_connection_state(self.current_ssid, True)
+                self.last_wifi_validation = time.time()
+                return True
+            
+            # Try autoconnect networks too
+            if self.try_autoconnect_networks():
+                self.wifi_connected = True
+                self.shared_data.wifi_connected = True
+                self.current_ssid = self.get_current_ssid()
+                self.logger.info(f"Endless Loop: Successfully connected to autoconnect network {self.current_ssid}")
+                self._save_connection_state(self.current_ssid, True)
+                self.last_wifi_validation = time.time()
+                return True
+            
+            # Wait 10 seconds before next attempt
+            time.sleep(10)
+        
+        # No WiFi found after 2 minutes, switch to AP mode
+        self.logger.info("Endless Loop: No WiFi found after 2 minutes, switching to AP mode")
+        self._endless_loop_start_ap_mode()
+        return False
+
+    def _endless_loop_start_ap_mode(self):
+        """Start AP mode as part of endless loop"""
+        self.logger.info("Endless Loop: Starting AP mode (3 minutes)")
+        
+        if self.start_ap_mode():
+            self.ap_mode_start_time = time.time()
+            self.user_connected_to_ap = False
+            self.ap_user_connection_time = None
+            self.force_exit_ap_mode = False
+            self.logger.info("Endless Loop: AP mode started, waiting for connections or timeout")
+        else:
+            self.logger.error("Endless Loop: Failed to start AP mode, retrying WiFi search")
+            # If AP fails, try WiFi search again after short delay
+            time.sleep(30)
+            self._endless_loop_wifi_search()
+
+    def _endless_loop_monitoring(self):
+        """Main endless loop monitoring thread"""
+        last_state_save = 0
+        
+        while not self.should_exit:
+            try:
+                current_time = time.time()
+                
+                # Wait for endless loop to be active
+                if not self.endless_loop_active:
+                    time.sleep(5)
+                    continue
+                
+                # Check current connection status
+                was_connected = self.wifi_connected
+                self.wifi_connected = self.check_wifi_connection()
+                self.shared_data.wifi_connected = self.wifi_connected
+                
+                # Handle WiFi connection state changes
+                if was_connected and not self.wifi_connected:
+                    self.logger.warning("Endless Loop: Wi-Fi connection lost!")
+                    self._save_connection_state(None, False)
+                    self.wifi_validation_failures = 0  # Reset validation failures
+                    self._endless_loop_wifi_search()
+                elif not was_connected and self.wifi_connected:
+                    self.logger.info("Endless Loop: Wi-Fi connection established!")
+                    current_ssid = self.get_current_ssid()
+                    self._save_connection_state(current_ssid, True)
+                    self.last_wifi_validation = current_time
+                    self.wifi_validation_failures = 0
+                    if self.ap_mode_active:
+                        self.logger.info("Endless Loop: Stopping AP mode due to successful WiFi connection")
+                        self.stop_ap_mode()
+                
+                # Handle WiFi validation every 3 minutes when connected
+                if (self.wifi_connected and self.last_wifi_validation and 
+                    (current_time - self.last_wifi_validation) >= self.wifi_validation_interval):
+                    self._perform_wifi_validation()
+                
+                # Handle AP mode timeout and user connection monitoring
+                if self.ap_mode_active:
+                    self._handle_ap_mode_monitoring(current_time)
+                
+                # Handle force exit AP mode from web interface
+                if self.force_exit_ap_mode and self.ap_mode_active:
+                    self.logger.info("Endless Loop: Force exit AP mode requested from web interface")
+                    self.stop_ap_mode()
+                    self.force_exit_ap_mode = False
+                    self._endless_loop_wifi_search()
+                
+                # Update current SSID if connected
+                if self.wifi_connected:
+                    self.current_ssid = self.get_current_ssid()
+                
+                # Periodically save connection state (every 2 minutes)
+                if current_time - last_state_save > 120:
+                    ssid = self.current_ssid if self.wifi_connected else None
+                    self._save_connection_state(ssid, self.wifi_connected)
+                    last_state_save = current_time
+                
+                time.sleep(self.connection_check_interval)
+                
+            except Exception as e:
+                self.logger.error(f"Error in endless loop monitoring: {e}")
+                time.sleep(5)
+
+    def _perform_wifi_validation(self):
+        """Perform 3 WiFi validation checks, 10 seconds apart"""
+        self.logger.info("Endless Loop: Starting WiFi validation (3 checks, 10s apart)")
+        validation_failures = 0
+        
+        for i in range(self.wifi_validation_retries):
+            if not self.check_wifi_connection():
+                validation_failures += 1
+                self.logger.warning(f"Endless Loop: WiFi validation failed ({validation_failures}/{self.wifi_validation_retries})")
+            else:
+                self.logger.info(f"Endless Loop: WiFi validation passed ({i+1}/{self.wifi_validation_retries})")
+            
+            # Don't wait after the last check
+            if i < self.wifi_validation_retries - 1:
+                time.sleep(self.wifi_validation_retry_interval)
+        
+        # Update validation time
+        self.last_wifi_validation = time.time()
+        
+        # If ALL validations failed, disconnect and start endless loop
+        if validation_failures == self.wifi_validation_retries:
+            self.logger.warning("Endless Loop: All WiFi validations failed! Switching to AP mode")
+            self.wifi_connected = False
+            self.shared_data.wifi_connected = False
+            self.disconnect_wifi()  # Disconnect from current network
+            self._endless_loop_start_ap_mode()
+        else:
+            self.logger.info(f"Endless Loop: WiFi validation completed - {self.wifi_validation_retries - validation_failures}/{self.wifi_validation_retries} passed")
+
+    def _handle_ap_mode_monitoring(self, current_time):
+        """Handle AP mode monitoring for endless loop"""
+        if not self.ap_mode_active or not self.ap_mode_start_time:
+            return
+        
+        ap_uptime = current_time - self.ap_mode_start_time
+        
+        # Check for client connections
+        current_client_count = self.check_ap_clients()
+        
+        # Detect new user connection
+        if current_client_count > 0 and not self.user_connected_to_ap:
+            self.user_connected_to_ap = True
+            self.ap_user_connection_time = current_time
+            self.logger.info("Endless Loop: User connected to AP - monitoring user activity")
+        
+        # Handle user-connected AP mode
+        if self.user_connected_to_ap and self.ap_user_connection_time:
+            user_connection_time = current_time - self.ap_user_connection_time
+            
+            # Check if user is still connected every 30 seconds
+            if current_client_count == 0:
+                self.logger.info("Endless Loop: User disconnected from AP - switching back to WiFi search")
+                self.stop_ap_mode()
+                self._endless_loop_wifi_search()
+                return
+            
+            # After 3 minutes with user connected, validate user still connected
+            if user_connection_time >= self.ap_mode_timeout:
+                if current_client_count > 0:
+                    self.logger.info("Endless Loop: User still connected after 3 minutes - continuing AP mode")
+                    # Reset the timer to check again in 3 minutes
+                    self.ap_user_connection_time = current_time
+                else:
+                    self.logger.info("Endless Loop: User no longer connected after 3 minutes - switching to WiFi search")
+                    self.stop_ap_mode()
+                    self._endless_loop_wifi_search()
+                    return
+        
+        # Handle AP timeout when no user connected
+        elif not self.user_connected_to_ap and ap_uptime >= self.ap_mode_timeout:
+            self.logger.info("Endless Loop: AP mode timeout (3 minutes) - no users connected, switching to WiFi search")
+            self.stop_ap_mode()
+            self._endless_loop_wifi_search()
+
+    def exit_ap_mode_from_web(self):
+        """Exit AP mode and start WiFi search (called from web interface)"""
+        self.logger.info("Endless Loop: Exit AP mode requested from web interface")
+        self.force_exit_ap_mode = True
+        return True
 
     def _is_fresh_boot(self):
         """Determine if this is a fresh system boot or just a service restart"""
@@ -420,96 +556,27 @@ class WiFiManager:
             self.logger.warning(f"Could not determine boot type: {e} - assuming fresh boot")
             return True  # Default to fresh boot for safety
     
+    # ============================================================================
+    # LEGACY METHODS - DEPRECATED (replaced by endless loop monitoring)
+    # ============================================================================
+    
     def _monitoring_loop(self):
-        """Background monitoring loop for Wi-Fi status with smart AP cycling"""
-        last_state_save = 0
-        
-        while not self.should_exit:
-            try:
-                # Check current connection status
-                was_connected = self.wifi_connected
-                self.wifi_connected = self.check_wifi_connection()
-                self.shared_data.wifi_connected = self.wifi_connected
-                
-                # Handle connection state changes
-                if was_connected and not self.wifi_connected:
-                    self.logger.warning("Wi-Fi connection lost!")
-                    self._save_connection_state(None, False)  # Save disconnected state
-                    self._handle_connection_lost()
-                elif not was_connected and self.wifi_connected:
-                    self.logger.info("Wi-Fi connection established!")
-                    current_ssid = self.get_current_ssid()
-                    self._save_connection_state(current_ssid, True)  # Save connected state
-                    if self.ap_mode_active:
-                        self.logger.info("Stopping AP mode due to successful connection")
-                        self.stop_ap_mode()
-                        self.cycling_mode = False
-                
-                # Smart AP mode management
-                if self.ap_mode_active:
-                    # Check AP clients
-                    self.check_ap_clients()
-                    
-                    # Check if AP should be stopped due to inactivity or timeout
-                    if self.should_stop_idle_ap() and self.ap_cycle_enabled:
-                        self.logger.info("Stopping AP mode - switching to reconnection attempt")
-                        self.ap_logger.info("Stopping AP due to idle timeout/cycling, entering reconnection phase")
-                        self.stop_ap_mode()
-                        self.last_ap_stop_time = time.time()
-                        
-                        # Try to connect to autoconnect networks
-                        self.ap_logger.info("Attempting to connect to autoconnect networks...")
-                        if not self.try_autoconnect_networks():
-                            self.logger.info("No autoconnect networks available, will retry in cycle")
-                            self.ap_logger.info("No autoconnect networks available, will restart AP after timeout")
-                
-                # Handle reconnection attempts when in cycling mode
-                if (self.cycling_mode and not self.ap_mode_active and not self.wifi_connected 
-                    and self.last_ap_stop_time):
-                    
-                    time_since_ap_stop = time.time() - self.last_ap_stop_time
-                    
-                    if time_since_ap_stop >= self.reconnect_interval:
-                        self.logger.info("Reconnection timeout reached - restarting AP mode")
-                        self.ap_logger.info(f"Reconnection timeout ({self.reconnect_interval}s) reached - restarting AP mode")
-                        self.ap_logger.info("Starting new AP cycle...")
-                        self.start_ap_mode_with_timeout()
-                
-                # Handle initial connection timeout (for startup)
-                if (not self.cycling_mode and not self.wifi_connected and not self.ap_mode_active 
-                    and self.startup_complete):
-                    
-                    # Check if we should start cycling mode
-                    if (self.last_connection_attempt and 
-                        time.time() - self.last_connection_attempt > self.connection_timeout):
-                        
-                        if self.shared_data.config.get('wifi_auto_ap_fallback', True):
-                            self.logger.info("Connection timeout reached - starting AP cycling mode")
-                            self.ap_logger.info("Initial connection timeout reached - starting AP cycling mode")
-                            self.ap_logger.info(f"Connection timeout was {self.connection_timeout}s")
-                            self.start_ap_mode_with_timeout()
-                
-                # Update current SSID if connected
-                if self.wifi_connected:
-                    self.current_ssid = self.get_current_ssid()
-                
-                # Periodically save connection state (every 2 minutes)
-                current_time = time.time()
-                if current_time - last_state_save > 120:
-                    ssid = self.current_ssid if self.wifi_connected else None
-                    self._save_connection_state(ssid, self.wifi_connected)
-                    last_state_save = current_time
-                
-                time.sleep(self.connection_check_interval)
-                
-            except Exception as e:
-                self.logger.error(f"Error in monitoring loop: {e}")
-                time.sleep(5)
+        """DEPRECATED: Old monitoring loop - replaced by _endless_loop_monitoring"""
+        self.logger.warning("DEPRECATED: _monitoring_loop called - this should not happen in endless loop mode")
+        # Fallback to endless loop monitoring
+        self._endless_loop_monitoring()
     
     def _handle_connection_lost(self):
-        """Handle when Wi-Fi connection is lost"""
+        """DEPRECATED: Old connection loss handler - replaced by endless loop logic"""
+        self.logger.warning("DEPRECATED: _handle_connection_lost called - this should not happen in endless loop mode")
+        # In endless loop mode, connection loss is handled by the main monitoring thread
+        if self.endless_loop_active:
+            self.logger.info("Connection loss detected - endless loop will handle reconnection")
+            return
+        
+        # Legacy fallback behavior
         if not self.startup_complete:
-            return  # Don't interfere with startup sequence
+            return
         
         self.last_connection_attempt = time.time()
         
