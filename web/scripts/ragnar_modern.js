@@ -3117,6 +3117,8 @@ function updateThreatIntelStats(data) {
     updateSourceStatus('nvd-status', sources.nvd_cve || false);
     updateSourceStatus('otx-status', sources.alienvault_otx || false);
     updateSourceStatus('mitre-status', sources.mitre_attack || false);
+
+    updateTopThreatsList(data.top_threats || [], data.last_update || data.last_intelligence_update || null);
 }
 
 // Update source status indicator
@@ -3130,12 +3132,12 @@ function updateSourceStatus(elementId, isActive) {
 // Update enriched findings table
 function updateEnrichedFindingsTable(findings) {
     const tableBody = document.getElementById('enriched-findings-table');
-    
+
     if (!findings || findings.length === 0) {
         tableBody.innerHTML = `
             <tr>
                 <td colspan="6" class="text-center py-8 text-slate-400">
-                    No enriched findings available. Run network scans to generate threat intelligence data.
+                    No threats detected. Run network scans to generate threat intelligence data.
                 </td>
             </tr>
         `;
@@ -3162,6 +3164,45 @@ function updateEnrichedFindingsTable(findings) {
                 </button>
             </td>
         </tr>
+    `).join('');
+}
+
+// Update top threats list
+function updateTopThreatsList(threats, lastUpdated) {
+    const listElement = document.getElementById('top-threats-list');
+    const updatedElement = document.getElementById('top-threats-updated');
+
+    if (!listElement) {
+        return;
+    }
+
+    if (updatedElement) {
+        updatedElement.textContent = `Last updated: ${lastUpdated ? formatTimestamp(lastUpdated) : 'N/A'}`;
+    }
+
+    if (!threats || threats.length === 0) {
+        listElement.innerHTML = `
+            <li class="text-slate-400">
+                No threats detected. You're all clear!
+            </li>
+        `;
+        return;
+    }
+
+    listElement.innerHTML = threats.slice(0, 5).map(threat => `
+        <li class="bg-slate-800/60 rounded-lg p-4 flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+            <div class="space-y-1">
+                <p class="text-white font-semibold">${escapeHtml(threat.target || 'Unknown Target')}</p>
+                <p class="text-slate-400 text-sm">${escapeHtml(threat.summary || 'No summary available')}</p>
+                <div class="text-xs text-slate-500 space-x-3">
+                    <span>Last Seen: ${formatTimestamp(threat.last_seen)}</span>
+                    ${threat.attribution ? `<span>Attributed to: ${escapeHtml(threat.attribution)}</span>` : ''}
+                </div>
+            </div>
+            <span class="self-start sm:self-center px-2 py-1 rounded text-xs font-semibold ${getRiskScoreClass(threat.risk_score)}">
+                ${threat.risk_score}/100
+            </span>
+        </li>
     `).join('');
 }
 

@@ -552,7 +552,7 @@
         </div>
 
         <!-- Threat Intelligence Tab -->
-        <div id="threat-intel" class="tab-content hidden">
+        <div id="threat-intel-tab" class="tab-content hidden">
             <div class="mb-6">
                 <h1 class="text-3xl font-bold text-white mb-2">🛡️ Threat Intelligence</h1>
                 <p class="text-slate-400">Global threat intelligence fusion and real-time threat analysis</p>
@@ -615,6 +615,17 @@
                         </div>
                     </div>
                 </div>
+            </div>
+
+            <!-- Top Threats -->
+            <div class="glass rounded-lg p-6 mb-8">
+                <div class="flex items-center justify-between mb-4">
+                    <h3 class="text-lg font-semibold text-white">Top Threats</h3>
+                    <span class="text-sm text-slate-400" id="top-threats-updated">Last updated: N/A</span>
+                </div>
+                <ul id="top-threats-list" class="space-y-3 text-slate-300">
+                    <li class="text-slate-400">No threats detected. You're all clear!</li>
+                </ul>
             </div>
 
             <!-- Control Panel -->
@@ -703,7 +714,7 @@
                             <tbody id="enriched-findings-table">
                                 <tr>
                                     <td colspan="6" class="text-center py-8 text-slate-400">
-                                        No enriched findings available. Run network scans to generate threat intelligence data.
+                                        No threats detected. Run network scans to generate threat intelligence data.
                                     </td>
                                 </tr>
                             </tbody>

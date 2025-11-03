@@ -2145,22 +2145,100 @@ def get_stats():
 # THREAT INTELLIGENCE ENDPOINTS
 # ============================================================================
 
+def _serialize_enriched_finding(finding_id, enriched_finding, default_last_update=None):
+    """Serialize enriched finding details for the modern web UI."""
+    original = enriched_finding.original_finding or {}
+
+    target = (
+        original.get('host')
+        or original.get('ip')
+        or original.get('target')
+        or original.get('id')
+        or finding_id
+    )
+
+    primary_context = enriched_finding.threat_contexts[0] if enriched_finding.threat_contexts else None
+    threat_context = 'No additional context available'
+    last_seen = None
+
+    if primary_context:
+        threat_context = primary_context.description or primary_context.threat_type or threat_context
+        last_seen = primary_context.last_seen or primary_context.first_seen
+
+    if not last_seen:
+        last_seen = (
+            original.get('timestamp')
+            or original.get('last_seen')
+            or default_last_update
+        )
+
+    attribution = None
+    if enriched_finding.attribution and enriched_finding.attribution.actor_name:
+        confidence = enriched_finding.attribution.confidence
+        if confidence:
+            attribution = f"{enriched_finding.attribution.actor_name} ({int(round(confidence * 100))}% confidence)"
+        else:
+            attribution = enriched_finding.attribution.actor_name
+
+    summary = (enriched_finding.executive_summary or '').strip()
+    if summary and len(summary) > 160:
+        summary = summary[:157] + '...'
+
+    risk_score = int(round(min(enriched_finding.dynamic_risk_score or 0.0, 10.0) * 10))
+
+    return {
+        'id': finding_id,
+        'target': target,
+        'risk_score': risk_score,
+        'threat_context': threat_context,
+        'attribution': attribution,
+        'last_updated': last_seen,
+        'summary': summary,
+        'last_seen': last_seen
+    }
+
+
 @app.route('/api/threat-intelligence/status')
 def get_threat_intelligence_status():
     """Get threat intelligence system status"""
     try:
         if not threat_intelligence:
             return jsonify({'error': 'Threat intelligence system not available'}), 503
-        
-        status = {
-            'enabled': True,
-            'sources_configured': len(threat_intelligence.threat_sources),
-            'sources_enabled': sum(1 for s in threat_intelligence.threat_sources.values() if s.enabled),
-            'cache_entries': len(threat_intelligence.threat_cache),
-            'enriched_findings': len(threat_intelligence.enriched_findings)
+
+        summary = threat_intelligence.get_enriched_findings_summary() or {}
+        default_last_update = summary.get('last_intelligence_update')
+
+        serialized_findings = [
+            _serialize_enriched_finding(finding_id, enriched_finding, default_last_update)
+            for finding_id, enriched_finding in threat_intelligence.enriched_findings.items()
+        ]
+
+        risk_distribution = {'critical': 0, 'high': 0, 'medium': 0, 'low': 0}
+        active_campaigns = set()
+
+        for enriched_finding in threat_intelligence.enriched_findings.values():
+            score = enriched_finding.dynamic_risk_score or 0.0
+            if score >= 9.0:
+                risk_distribution['critical'] += 1
+            elif score >= 7.0:
+                risk_distribution['high'] += 1
+            elif score >= 4.0:
+                risk_distribution['medium'] += 1
+            else:
+                risk_distribution['low'] += 1
+
+            for campaign in enriched_finding.active_campaigns or []:
+                if campaign:
+                    active_campaigns.add(campaign)
+
+        type_to_status_key = {
+            'cisa': 'cisa_kev',
+            'nvd': 'nvd_cve',
+            'otx': 'alienvault_otx',
+            'mitre': 'mitre_attack'
         }
-        
-        # Add source details
+
+        source_status = {key: False for key in type_to_status_key.values()}
         sources = []
         for name, source in threat_intelligence.threat_sources.items():
             sources.append({
@@ -2170,9 +2248,31 @@ def get_threat_intelligence_status():
                 'confidence_weight': source.confidence_weight,
                 'last_updated': source.last_updated
             })
-        
-        status['sources'] = sources
-        
+
+            status_key = type_to_status_key.get(source.type)
+            if status_key:
+                source_status[status_key] = source_status.get(status_key, False) or source.enabled
+
+        top_threats = sorted(serialized_findings, key=lambda f: f['risk_score'], reverse=True)[:5]
+
+        total_enriched = summary.get('total_enriched_findings', len(serialized_findings))
+        high_risk_total = risk_distribution['critical'] + risk_distribution['high']
+
+        status = {
+            'enabled': True,
+            'active_sources': summary.get('threat_sources_enabled', 0),
+            'enriched_findings_count': total_enriched,
+            'high_risk_count': high_risk_total,
+            'active_campaigns': len(active_campaigns),
+            'risk_distribution': risk_distribution,
+            'source_status': source_status,
+            'last_update': default_last_update,
+            'top_threats': top_threats,
+            'sources': sources,
+            'cache_entries': len(threat_intelligence.threat_cache),
+            'total_enriched_findings': total_enriched
+        }
+
         return jsonify(status)
     except Exception as e:
         logger.error(f"Error getting threat intelligence status: {e}")
@@ -2185,43 +2285,23 @@ def get_enriched_findings():
         if not threat_intelligence:
             return jsonify({'error': 'Threat intelligence system not available'}), 503
         
-        enriched_findings = []
-        
-        for finding_id, enriched_finding in threat_intelligence.enriched_findings.items():
-            finding_data = {
-                'id': finding_id,
-                'original_finding': enriched_finding.original_finding,
-                'dynamic_risk_score': enriched_finding.dynamic_risk_score,
-                'executive_summary': enriched_finding.executive_summary,
-                'recommended_actions': enriched_finding.recommended_actions,
-                'threat_contexts_count': len(enriched_finding.threat_contexts),
-                'active_campaigns': enriched_finding.active_campaigns,
-                'attribution': {
-                    'actor_name': enriched_finding.attribution.actor_name if enriched_finding.attribution else None,
-                    'confidence': enriched_finding.attribution.confidence if enriched_finding.attribution else 0.0
-                }
-            }
-            
-            # Add threat context summaries
-            threat_contexts = []
-            for context in enriched_finding.threat_contexts:
-                threat_contexts.append({
-                    'source': context.source,
-                    'threat_type': context.threat_type,
-                    'severity': context.severity,
-                    'confidence': context.confidence,
-                    'tags': context.tags
-                })
-            
-            finding_data['threat_contexts'] = threat_contexts
-            enriched_findings.append(finding_data)
-        
+        summary = threat_intelligence.get_enriched_findings_summary() or {}
+        default_last_update = summary.get('last_intelligence_update')
+
+        enriched_findings = [
+            _serialize_enriched_finding(finding_id, enriched_finding, default_last_update)
+            for finding_id, enriched_finding in threat_intelligence.enriched_findings.items()
+        ]
+
+        top_threats = sorted(enriched_findings, key=lambda f: f['risk_score'], reverse=True)[:5]
+
         return jsonify({
             'enriched_findings': enriched_findings,
             'total_count': len(enriched_findings),
-            'summary': threat_intelligence.get_enriched_findings_summary()
+            'summary': summary,
+            'top_threats': top_threats
         })
-        
+
     except Exception as e:
         logger.error(f"Error getting enriched findings: {e}")
         return jsonify({'error': str(e)}), 500
