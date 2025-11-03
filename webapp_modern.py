@@ -964,8 +964,8 @@ def get_logs():
         # Enhanced logging - aggregate from multiple sources
         all_logs = []
         
-        # Get terminal log level filter from config
-        terminal_log_level = shared_data.config.get('terminal_log_level', 'all')
+        # Get terminal log level filter from config - default to 'security' for focused logging
+        terminal_log_level = shared_data.config.get('terminal_log_level', 'security')
         
         # 1. Get web console logs (existing functionality)
         log_file = shared_data.webconsolelog
@@ -1063,39 +1063,74 @@ def get_logs():
         
         # Filter logs based on terminal_log_level setting
         def should_include_log(log_line):
-            """Filter logs based on terminal_log_level setting"""
-            if terminal_log_level == 'all':
-                return True
+            """Filter logs to focus on security scanning activities"""
+            if not log_line:
+                return False
             
+            log_lower = log_line.lower()
             log_upper = log_line.upper()
             
-            # Check for error indicators
+            # Exclude comment.py and other non-essential logs
+            exclude_sources = [
+                'comment.py', 'comments.py', 'comment_', 'comments_',
+                'display.py', 'epd_helper.py', 'webapp_', 'flask',
+                'socketio', 'werkzeug', 'http.server', 'static'
+            ]
+            
+            if any(source in log_lower for source in exclude_sources):
+                return False
+            
+            # Always include security scanning and vulnerability logs
+            high_priority_keywords = [
+                'nmap', 'scan', 'scanning', 'port scan', 'host discovery',
+                'vulnerability', 'vuln', 'exploit', 'cve-', 'exploit-db',
+                'credential', 'cred', 'password', 'login', 'auth',
+                'ssh', 'ftp', 'smb', 'telnet', 'rdp', 'sql', 'mysql', 'postgres',
+                'attack', 'brute', 'crack', 'penetration', 'pentest',
+                'target', 'host found', 'port open', 'service', 'banner',
+                'network intelligence', 'threat intelligence', 'orchestrator'
+            ]
+            
+            if any(keyword in log_lower for keyword in high_priority_keywords):
+                return True
+            
+            # Check for error indicators (always important)
             is_error = any(keyword in log_upper for keyword in [
                 'ERROR', 'CRITICAL', 'EXCEPTION', 'FAILED', 'FAILURE'
             ])
             
-            # Check for warning/info indicators
-            is_info_or_warning = any(keyword in log_upper for keyword in [
-                'WARNING', 'WARN', 'INFO', 'SUCCESS', 'DISCOVERED', 
-                'FOUND', 'STATUS', 'CREDENTIALS', 'VULNERABILITIES', 'DISCOVERY'
+            if is_error:
+                return True
+            
+            # Check for important discovery indicators
+            is_discovery = any(keyword in log_upper for keyword in [
+                'DISCOVERED', 'FOUND', 'CREDENTIALS', 'VULNERABILITIES', 
+                'DISCOVERY', 'SUCCESS'
             ])
             
+            if is_discovery:
+                return True
+            
+            # Filter based on terminal_log_level setting for other logs
             if terminal_log_level == 'error':
-                # Only show errors
                 return is_error
             elif terminal_log_level == 'info':
-                # Show info/warnings and errors
-                return is_error or is_info_or_warning
+                return is_error or is_discovery
+            elif terminal_log_level == 'security':
+                # Security mode: show only security-related logs (default)
+                return True  # Already filtered by high_priority_keywords above
+            elif terminal_log_level == 'all':
+                return True
             
-            # Default: show the log if we can't determine (safer to show)
-            return True
+            # Default to security mode: be more selective to reduce noise
+            return True  # Already filtered by high_priority_keywords above
         
         # Apply filtering
         filtered_logs = [log for log in all_logs if should_include_log(log)]
         
         # Sort logs by timestamp if possible, otherwise keep recent additions at the end
-        # Limit to last 100 entries to avoid overwhelming the UI
-        recent_logs = filtered_logs[-100:] if filtered_logs else []
+        # Limit to last 150 entries for security-focused logging
+        recent_logs = filtered_logs[-150:] if filtered_logs else []
         
         return jsonify({'logs': recent_logs})
     except Exception as e:
@@ -3262,40 +3297,81 @@ def get_current_status():
     }
 
 def get_recent_logs():
-    """Get recent log entries with enhanced activity information"""
+    """Get recent log entries with enhanced activity information focused on security scanning"""
     logs = []
     try:
         # Enhanced logging - aggregate from multiple sources for real-time updates
         
-        # 1. Get web console logs (existing functionality)
+        # Function to filter logs for security focus
+        def should_include_realtime_log(log_line):
+            """Filter real-time logs to focus on security scanning activities"""
+            if not log_line:
+                return False
+            
+            log_lower = log_line.lower()
+            
+            # Exclude comment.py and other non-essential logs
+            exclude_sources = [
+                'comment.py', 'comments.py', 'comment_', 'comments_',
+                'display.py', 'epd_helper.py', 'webapp_', 'flask',
+                'socketio', 'werkzeug', 'http.server', 'static'
+            ]
+            
+            if any(source in log_lower for source in exclude_sources):
+                return False
+            
+            # Always include security scanning and vulnerability logs
+            high_priority_keywords = [
+                'nmap', 'scan', 'scanning', 'port scan', 'host discovery',
+                'vulnerability', 'vuln', 'exploit', 'cve-', 'exploit-db',
+                'credential', 'cred', 'password', 'login', 'auth',
+                'ssh', 'ftp', 'smb', 'telnet', 'rdp', 'sql', 'mysql', 'postgres',
+                'attack', 'brute', 'crack', 'penetration', 'pentest',
+                'target', 'host found', 'port open', 'service', 'banner',
+                'network intelligence', 'threat intelligence', 'orchestrator',
+                'error', 'critical', 'warning', 'fail', 'timeout',
+                'discovered', 'found'
+            ]
+            
+            return any(keyword in log_lower for keyword in high_priority_keywords)
+        
+        # 1. Get web console logs (filtered for security content)
         log_file = shared_data.webconsolelog
         if os.path.exists(log_file):
             with open(log_file, 'r', encoding='utf-8', errors='ignore') as f:
                 lines = f.readlines()
-                web_logs = [line.strip() for line in lines[-20:] if line.strip()]
-                logs.extend([f"[WEB] {log}" for log in web_logs])
+                web_logs = [line.strip() for line in lines[-50:] if line.strip()]
+                # Filter for security-relevant logs only
+                filtered_web_logs = [log for log in web_logs if should_include_realtime_log(log)]
+                logs.extend([f"[WEB] {log}" for log in filtered_web_logs[-10:]])  # Last 10 relevant logs
         
-        # 2. Add recent activity summary
+        # 2. Add recent activity summary (only if security-related)
         current_time = datetime.now().strftime("%H:%M:%S")
         
-        # Add Ragnar status
+        # Add Ragnar status (only if active scanning/attacking)
         ragnar_status = safe_str(shared_data.ragnarstatustext)
         if ragnar_status and ragnar_status != "Idle":
-            logs.append(f"[{current_time}] [RAGNAR] {ragnar_status}")
+            status_lower = ragnar_status.lower()
+            if any(keyword in status_lower for keyword in ['scan', 'attack', 'discovery', 'exploit', 'brute', 'crack']):
+                logs.append(f"[{current_time}] [RAGNAR] 🎯 {ragnar_status}")
         
-        # Add orchestrator status
+        # Add orchestrator status (only if active)
         orch_status = safe_str(shared_data.ragnarorch_status)
         if orch_status and orch_status != "Idle":
-            logs.append(f"[{current_time}] [ORCHESTRATOR] {orch_status}")
+            orch_lower = orch_status.lower()
+            if any(keyword in orch_lower for keyword in ['scan', 'attack', 'discovery', 'exploit', 'target', 'running']):
+                logs.append(f"[{current_time}] [ORCHESTRATOR] ⚡ {orch_status}")
         
-        # Add what Ragnar says (activity description)
+        # Add what Ragnar says (activity description) - only if security-related
         ragnar_says = safe_str(shared_data.ragnarsays)
         if ragnar_says and ragnar_says.strip():
-            logs.append(f"[{current_time}] [ACTIVITY] {ragnar_says}")
+            if should_include_realtime_log(ragnar_says):
+                logs.append(f"[{current_time}] [ACTIVITY] 🔍 {ragnar_says}")
         
-        # 3. Add quick stats summary every few updates
-        stats_summary = f"📊 Active: {safe_int(shared_data.targetnbr)} targets | {safe_int(shared_data.portnbr)} ports | {safe_int(shared_data.vulnnbr)} vulns | {safe_int(shared_data.crednbr)} creds | {safe_int(shared_data.datanbr)} data"
-        logs.append(f"[{current_time}] [STATS] {stats_summary}")
+        # 3. Add concise stats summary (less frequent)
+        if safe_int(shared_data.vulnnbr) > 0 or safe_int(shared_data.crednbr) > 0:
+            stats_summary = f"Findings: {safe_int(shared_data.vulnnbr)} vulns | {safe_int(shared_data.crednbr)} creds | {safe_int(shared_data.targetnbr)} targets"
+            logs.append(f"[{current_time}] [STATS] 📊 {stats_summary}")
         
         # 4. Check for very recent discoveries (last 5 minutes)
         if os.path.exists(shared_data.livestatusfile):
@@ -3307,22 +3383,11 @@ def get_recent_logs():
             except Exception:
                 pass
         
-        # 5. Check connectivity status
-        connection_status = []
-        if safe_bool(shared_data.wifi_connected):
-            connection_status.append("📶 WiFi")
-        if safe_bool(shared_data.bluetooth_active):
-            connection_status.append("📱 Bluetooth")
-        if safe_bool(shared_data.pan_connected):
-            connection_status.append("🌐 PAN")
-        if safe_bool(shared_data.usb_active):
-            connection_status.append("🔌 USB")
+        # 5. Only show connectivity if there are security implications
+        # Skip general connectivity status to focus on security logs
         
-        if connection_status:
-            logs.append(f"[{current_time}] [CONNECTIVITY] Active: {' | '.join(connection_status)}")
-        
-        # Limit to last 30 entries for real-time updates
-        recent_logs = logs[-30:] if logs else []
+        # Limit to last 20 entries for focused real-time updates
+        recent_logs = logs[-20:] if logs else []
         
     except Exception as e:
         logger.error(f"Error reading enhanced logs: {e}")
