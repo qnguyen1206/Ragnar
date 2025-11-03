@@ -3350,7 +3350,7 @@ async function enrichTarget() {
 // Download threat intelligence report
 async function downloadThreatReport(target) {
     try {
-        showNotification(`Generating threat intelligence report for ${target}...`, 'info');
+        showNotification(`Analyzing ${target} for threat intelligence...`, 'info');
         
         const response = await fetch('/api/threat-intelligence/download-report', {
             method: 'POST',
@@ -3376,10 +3376,14 @@ async function downloadThreatReport(target) {
             window.URL.revokeObjectURL(url);
             document.body.removeChild(a);
             
-            showNotification(`Report downloaded successfully for ${target}`, 'success');
+            showNotification(`Threat intelligence report downloaded for ${target}`, 'success');
         } else {
             const error = await response.json();
-            showNotification(`Failed to generate report: ${error.error}`, 'error');
+            if (error.target_type === 'no_findings') {
+                showNotification(`No vulnerability findings detected for ${target} - run network scans first to discover vulnerabilities for threat intelligence enrichment`, 'warning');
+            } else {
+                showNotification(`Failed to generate report: ${error.error}`, 'error');
+            }
         }
     } catch (error) {
         console.error('Error downloading threat report:', error);

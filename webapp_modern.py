@@ -964,8 +964,8 @@ def get_logs():
         # Enhanced logging - aggregate from multiple sources
         all_logs = []
         
-        # Get terminal log level filter from config
-        terminal_log_level = shared_data.config.get('terminal_log_level', 'all')
+        # Get terminal log level filter from config - default to 'security' for focused logging
+        terminal_log_level = shared_data.config.get('terminal_log_level', 'security')
         
         # 1. Get web console logs (existing functionality)
         log_file = shared_data.webconsolelog
@@ -1063,39 +1063,74 @@ def get_logs():
         
         # Filter logs based on terminal_log_level setting
         def should_include_log(log_line):
-            """Filter logs based on terminal_log_level setting"""
-            if terminal_log_level == 'all':
-                return True
+            """Filter logs to focus on security scanning activities"""
+            if not log_line:
+                return False
             
+            log_lower = log_line.lower()
             log_upper = log_line.upper()
             
-            # Check for error indicators
+            # Exclude comment.py and other non-essential logs
+            exclude_sources = [
+                'comment.py', 'comments.py', 'comment_', 'comments_',
+                'display.py', 'epd_helper.py', 'webapp_', 'flask',
+                'socketio', 'werkzeug', 'http.server', 'static'
+            ]
+            
+            if any(source in log_lower for source in exclude_sources):
+                return False
+            
+            # Always include security scanning and vulnerability logs
+            high_priority_keywords = [
+                'nmap', 'scan', 'scanning', 'port scan', 'host discovery',
+                'vulnerability', 'vuln', 'exploit', 'cve-', 'exploit-db',
+                'credential', 'cred', 'password', 'login', 'auth',
+                'ssh', 'ftp', 'smb', 'telnet', 'rdp', 'sql', 'mysql', 'postgres',
+                'attack', 'brute', 'crack', 'penetration', 'pentest',
+                'target', 'host found', 'port open', 'service', 'banner',
+                'network intelligence', 'threat intelligence', 'orchestrator'
+            ]
+            
+            if any(keyword in log_lower for keyword in high_priority_keywords):
+                return True
+            
+            # Check for error indicators (always important)
             is_error = any(keyword in log_upper for keyword in [
                 'ERROR', 'CRITICAL', 'EXCEPTION', 'FAILED', 'FAILURE'
             ])
             
-            # Check for warning/info indicators
-            is_info_or_warning = any(keyword in log_upper for keyword in [
-                'WARNING', 'WARN', 'INFO', 'SUCCESS', 'DISCOVERED', 
-                'FOUND', 'STATUS', 'CREDENTIALS', 'VULNERABILITIES', 'DISCOVERY'
+            if is_error:
+                return True
+            
+            # Check for important discovery indicators
+            is_discovery = any(keyword in log_upper for keyword in [
+                'DISCOVERED', 'FOUND', 'CREDENTIALS', 'VULNERABILITIES', 
+                'DISCOVERY', 'SUCCESS'
             ])
             
+            if is_discovery:
+                return True
+            
+            # Filter based on terminal_log_level setting for other logs
             if terminal_log_level == 'error':
-                # Only show errors
                 return is_error
             elif terminal_log_level == 'info':
-                # Show info/warnings and errors
-                return is_error or is_info_or_warning
+                return is_error or is_discovery
+            elif terminal_log_level == 'security':
+                # Security mode: show only security-related logs (default)
+                return True  # Already filtered by high_priority_keywords above
+            elif terminal_log_level == 'all':
+                return True
             
-            # Default: show the log if we can't determine (safer to show)
-            return True
+            # Default to security mode: be more selective to reduce noise
+            return True  # Already filtered by high_priority_keywords above
         
         # Apply filtering
         filtered_logs = [log for log in all_logs if should_include_log(log)]
         
         # Sort logs by timestamp if possible, otherwise keep recent additions at the end
-        # Limit to last 100 entries to avoid overwhelming the UI
-        recent_logs = filtered_logs[-100:] if filtered_logs else []
+        # Limit to last 150 entries for security-focused logging
+        recent_logs = filtered_logs[-150:] if filtered_logs else []
         
         return jsonify({'logs': recent_logs})
     except Exception as e:
@@ -2449,15 +2484,69 @@ def enrich_target_endpoint():
         if not target:
             return jsonify({'error': 'Target is required'}), 400
         
-        # Create a finding object from the target
+        # Look for actual vulnerability findings for this target
+        actual_findings = []
+        if hasattr(shared_data, 'network_intelligence') and shared_data.network_intelligence:
+            try:
+                # Check active findings
+                active_findings = shared_data.network_intelligence.get_active_findings_for_dashboard()
+                
+                # Check for vulnerabilities on this target
+                for vuln_id, vuln_data in active_findings.get('vulnerabilities', {}).items():
+                    if vuln_data.get('host') == target:
+                        actual_findings.append(vuln_data)
+                
+                # Check for compromised credentials on this target  
+                for cred_id, cred_data in active_findings.get('credentials', {}).items():
+                    if cred_data.get('host') == target:
+                        actual_findings.append(cred_data)
+                        
+            except AttributeError as e:
+                logger.warning(f"Network intelligence method not available: {e}")
+                # Fallback: check if we have scan data directly from files
+                try:
+                    scan_results_dir = os.path.join(shared_data.datadir, 'output', 'scan_results')
+                    if os.path.exists(scan_results_dir):
+                        for filename in os.listdir(scan_results_dir):
+                            if filename.endswith('.csv') and target in filename:
+                                # Found scan results for this target
+                                actual_findings.append({
+                                    'host': target,
+                                    'vulnerability': 'Network scan findings available',
+                                    'source': 'scan_results',
+                                    'details': {'scan_file': filename}
+                                })
+                                break
+                except Exception as scan_e:
+                    logger.warning(f"Could not check scan results: {scan_e}")
+                    
+            except Exception as e:
+                logger.warning(f"Could not retrieve network intelligence findings: {e}")
+        
+        # If no findings but target looks like it might have vulnerabilities, create a placeholder
+        if not actual_findings:
+            # For demonstration/testing purposes, allow manual vulnerability analysis
+            # This should ideally be replaced with real vulnerability scanner integration
+            return jsonify({
+                'error': f'No vulnerability findings detected for target: {target}',
+                'message': 'Ragnar needs to discover vulnerabilities first through network scanning. Try running vulnerability scans on this target.',
+                'target_type': 'no_findings',
+                'suggestion': f'Run network scan on {target} first, then threat intelligence can enrich any discovered vulnerabilities'
+            }), 404
+
+        # Use the first real finding for enrichment (or combine multiple findings)
+        base_finding = actual_findings[0]
+        
+        # Create enriched finding object from actual scan data
         finding = {
-            'id': hashlib.md5(target.encode()).hexdigest()[:12],
-            'host': target if _is_ip_address(target) else None,
-            'domain': target if '.' in target and not _is_ip_address(target) else None,
-            'hash': target if len(target) >= 32 and all(c in '0123456789abcdefABCDEF' for c in target) else None,
-            'vulnerability': f'Manual threat intelligence lookup for {target}',
-            'severity': 'medium',
-            'details': {'manual_lookup': True, 'target': target}
+            'id': base_finding.get('id', hashlib.md5(target.encode()).hexdigest()[:12]),
+            'host': target,
+            'vulnerability': base_finding.get('vulnerability', base_finding.get('service', 'Unknown')),
+            'severity': base_finding.get('severity', 'medium'),
+            'port': base_finding.get('port'),
+            'service': base_finding.get('service'),
+            'details': base_finding.get('details', {}),
+            'scan_timestamp': base_finding.get('timestamp', datetime.now().isoformat())
         }
         
         # Enrich the finding
@@ -2545,6 +2634,17 @@ def generate_threat_intelligence_report(target, enriched_finding):
     try:
         from datetime import datetime
         
+        # Check if this is a meaningful finding
+        if not enriched_finding.threat_contexts or enriched_finding.dynamic_risk_score < 3.0:
+            return {
+                'title': f'Threat Intelligence Report - {target}',
+                'generated_at': datetime.now().strftime("%B %d, %Y at %H:%M:%S"),
+                'target': target,
+                'message': 'No significant threat intelligence available for this target',
+                'risk_score': enriched_finding.dynamic_risk_score,
+                'note': 'This target may be internal or not present in threat intelligence databases'
+            }
+        
         report_content = {
             'title': f'Threat Intelligence Report - {target}',
             'generated_at': datetime.now().strftime("%B %d, %Y at %H:%M:%S"),
@@ -2596,6 +2696,33 @@ def generate_threat_intelligence_report(target, enriched_finding):
 def create_text_report(report_content):
     """Create text report from content"""
     try:
+        # Check if this is a low-value report
+        if 'message' in report_content:
+            return f"""THREAT INTELLIGENCE REPORT
+===========================
+
+Target: {report_content['target']}
+Generated: {report_content['generated_at']}
+
+STATUS
+------
+{report_content['message']}
+
+ANALYSIS NOTES
+--------------
+{report_content.get('note', 'No additional information available')}
+
+Risk Score: {report_content.get('risk_score', 0):.1f}/10
+
+REPORT METADATA
+---------------
+Generated by: Ragnar Threat Intelligence System
+Report ID: {hashlib.md5(report_content['target'].encode()).hexdigest()[:12]}
+Timestamp: {report_content['generated_at']}
+
+Note: This target may be internal infrastructure or not present in external threat databases.
+""".encode('utf-8')
+
         report_text = f"""THREAT INTELLIGENCE REPORT
 ===========================
 
@@ -2618,6 +2745,10 @@ Dynamic Risk Score: {report_content['risk_score']:.1f}/10
             for context in report_content['threat_contexts']:
                 report_text += f"• {context['source']}: {context['description']}\n"
                 report_text += f"  Severity: {context['severity']}, Confidence: {context['confidence']:.1f}\n\n"
+        else:
+            report_text += "THREAT INTELLIGENCE SOURCES\n"
+            report_text += "----------------------------\n"
+            report_text += "No external threat intelligence sources matched this target.\n\n"
         
         if report_content.get('attribution'):
             attr = report_content['attribution']
@@ -2634,6 +2765,12 @@ Dynamic Risk Score: {report_content['risk_score']:.1f}/10
             for action in report_content['recommended_actions']:
                 report_text += f"• {action}\n"
             report_text += "\n"
+        else:
+            report_text += "RECOMMENDED ACTIONS\n"
+            report_text += "-------------------\n"
+            report_text += "• Review target for legitimate business purpose\n"
+            report_text += "• Monitor for unusual activity\n"
+            report_text += "• Apply standard security controls\n\n"
         
         if report_content.get('exploitation_prediction'):
             pred = report_content['exploitation_prediction']
@@ -3160,40 +3297,81 @@ def get_current_status():
     }
 
 def get_recent_logs():
-    """Get recent log entries with enhanced activity information"""
+    """Get recent log entries with enhanced activity information focused on security scanning"""
     logs = []
     try:
         # Enhanced logging - aggregate from multiple sources for real-time updates
         
-        # 1. Get web console logs (existing functionality)
+        # Function to filter logs for security focus
+        def should_include_realtime_log(log_line):
+            """Filter real-time logs to focus on security scanning activities"""
+            if not log_line:
+                return False
+            
+            log_lower = log_line.lower()
+            
+            # Exclude comment.py and other non-essential logs
+            exclude_sources = [
+                'comment.py', 'comments.py', 'comment_', 'comments_',
+                'display.py', 'epd_helper.py', 'webapp_', 'flask',
+                'socketio', 'werkzeug', 'http.server', 'static'
+            ]
+            
+            if any(source in log_lower for source in exclude_sources):
+                return False
+            
+            # Always include security scanning and vulnerability logs
+            high_priority_keywords = [
+                'nmap', 'scan', 'scanning', 'port scan', 'host discovery',
+                'vulnerability', 'vuln', 'exploit', 'cve-', 'exploit-db',
+                'credential', 'cred', 'password', 'login', 'auth',
+                'ssh', 'ftp', 'smb', 'telnet', 'rdp', 'sql', 'mysql', 'postgres',
+                'attack', 'brute', 'crack', 'penetration', 'pentest',
+                'target', 'host found', 'port open', 'service', 'banner',
+                'network intelligence', 'threat intelligence', 'orchestrator',
+                'error', 'critical', 'warning', 'fail', 'timeout',
+                'discovered', 'found'
+            ]
+            
+            return any(keyword in log_lower for keyword in high_priority_keywords)
+        
+        # 1. Get web console logs (filtered for security content)
         log_file = shared_data.webconsolelog
         if os.path.exists(log_file):
             with open(log_file, 'r', encoding='utf-8', errors='ignore') as f:
                 lines = f.readlines()
-                web_logs = [line.strip() for line in lines[-20:] if line.strip()]
-                logs.extend([f"[WEB] {log}" for log in web_logs])
+                web_logs = [line.strip() for line in lines[-50:] if line.strip()]
+                # Filter for security-relevant logs only
+                filtered_web_logs = [log for log in web_logs if should_include_realtime_log(log)]
+                logs.extend([f"[WEB] {log}" for log in filtered_web_logs[-10:]])  # Last 10 relevant logs
         
-        # 2. Add recent activity summary
+        # 2. Add recent activity summary (only if security-related)
         current_time = datetime.now().strftime("%H:%M:%S")
         
-        # Add Ragnar status
+        # Add Ragnar status (only if active scanning/attacking)
         ragnar_status = safe_str(shared_data.ragnarstatustext)
         if ragnar_status and ragnar_status != "Idle":
-            logs.append(f"[{current_time}] [RAGNAR] {ragnar_status}")
+            status_lower = ragnar_status.lower()
+            if any(keyword in status_lower for keyword in ['scan', 'attack', 'discovery', 'exploit', 'brute', 'crack']):
+                logs.append(f"[{current_time}] [RAGNAR] 🎯 {ragnar_status}")
         
-        # Add orchestrator status
+        # Add orchestrator status (only if active)
         orch_status = safe_str(shared_data.ragnarorch_status)
         if orch_status and orch_status != "Idle":
-            logs.append(f"[{current_time}] [ORCHESTRATOR] {orch_status}")
+            orch_lower = orch_status.lower()
+            if any(keyword in orch_lower for keyword in ['scan', 'attack', 'discovery', 'exploit', 'target', 'running']):
+                logs.append(f"[{current_time}] [ORCHESTRATOR] ⚡ {orch_status}")
         
-        # Add what Ragnar says (activity description)
+        # Add what Ragnar says (activity description) - only if security-related
         ragnar_says = safe_str(shared_data.ragnarsays)
         if ragnar_says and ragnar_says.strip():
-            logs.append(f"[{current_time}] [ACTIVITY] {ragnar_says}")
+            if should_include_realtime_log(ragnar_says):
+                logs.append(f"[{current_time}] [ACTIVITY] 🔍 {ragnar_says}")
         
-        # 3. Add quick stats summary every few updates
-        stats_summary = f"📊 Active: {safe_int(shared_data.targetnbr)} targets | {safe_int(shared_data.portnbr)} ports | {safe_int(shared_data.vulnnbr)} vulns | {safe_int(shared_data.crednbr)} creds | {safe_int(shared_data.datanbr)} data"
-        logs.append(f"[{current_time}] [STATS] {stats_summary}")
+        # 3. Add concise stats summary (less frequent)
+        if safe_int(shared_data.vulnnbr) > 0 or safe_int(shared_data.crednbr) > 0:
+            stats_summary = f"Findings: {safe_int(shared_data.vulnnbr)} vulns | {safe_int(shared_data.crednbr)} creds | {safe_int(shared_data.targetnbr)} targets"
+            logs.append(f"[{current_time}] [STATS] 📊 {stats_summary}")
         
         # 4. Check for very recent discoveries (last 5 minutes)
         if os.path.exists(shared_data.livestatusfile):
@@ -3205,22 +3383,11 @@ def get_recent_logs():
             except Exception:
                 pass
         
-        # 5. Check connectivity status
-        connection_status = []
-        if safe_bool(shared_data.wifi_connected):
-            connection_status.append("📶 WiFi")
-        if safe_bool(shared_data.bluetooth_active):
-            connection_status.append("📱 Bluetooth")
-        if safe_bool(shared_data.pan_connected):
-            connection_status.append("🌐 PAN")
-        if safe_bool(shared_data.usb_active):
-            connection_status.append("🔌 USB")
+        # 5. Only show connectivity if there are security implications
+        # Skip general connectivity status to focus on security logs
         
-        if connection_status:
-            logs.append(f"[{current_time}] [CONNECTIVITY] Active: {' | '.join(connection_status)}")
-        
-        # Limit to last 30 entries for real-time updates
-        recent_logs = logs[-30:] if logs else []
+        # Limit to last 20 entries for focused real-time updates
+        recent_logs = logs[-20:] if logs else []
         
     except Exception as e:
         logger.error(f"Error reading enhanced logs: {e}")

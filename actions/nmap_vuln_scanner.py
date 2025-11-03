@@ -3,6 +3,7 @@
 # It scans for vulnerabilities on various ports and saves the results and progress.
 
 import os
+import re
 import pandas as pd
 import subprocess
 import logging
@@ -80,6 +81,10 @@ class NmapVulnScanner:
 
             vulnerabilities = self.parse_vulnerabilities(result.stdout)
             self.update_summary_file(ip, hostname, mac, ",".join(ports), vulnerabilities)
+            
+            # Feed vulnerabilities into network intelligence system
+            self.feed_to_network_intelligence(ip, result.stdout, ports)
+            
         except Exception as e:
             logger.error(f"Error scanning {ip}: {e}")
             success = False  # Mark as failed if an error occurs
@@ -117,6 +122,88 @@ class NmapVulnScanner:
                 else:
                     capture = False
         return "; ".join(vulnerabilities)
+
+    def feed_to_network_intelligence(self, ip, scan_output, ports):
+        """
+        Feed vulnerability scan results to the network intelligence system
+        """
+        try:
+            # Check if network intelligence is available
+            if not hasattr(self.shared_data, 'network_intelligence') or not self.shared_data.network_intelligence:
+                logger.debug("Network intelligence not available, skipping vulnerability feed")
+                return
+            
+            # Extract service information and vulnerabilities from nmap output
+            current_port = None
+            current_service = None
+            
+            for line in scan_output.splitlines():
+                line = line.strip()
+                
+                # Parse port/service information
+                if "/tcp" in line and ("open" in line or "closed" in line):
+                    parts = line.split()
+                    if len(parts) >= 3:
+                        port_info = parts[0]  # e.g., "22/tcp"
+                        current_port = int(port_info.split('/')[0])
+                        if len(parts) >= 4:
+                            current_service = parts[3]  # service name
+                        else:
+                            current_service = "unknown"
+                
+                # Parse vulnerability lines
+                elif ("CVE-" in line or "VULNERABLE" in line or "*EXPLOIT*" in line) and current_port:
+                    # Extract CVE ID or vulnerability description
+                    vulnerability_desc = line.strip()
+                    
+                    # For CVE lines, try to extract just the CVE and score
+                    severity = "medium"  # Default severity
+                    if "CVE-" in line:
+                        cve_match = re.search(r'(CVE-\d{4}-\d+)', line)
+                        if cve_match:
+                            cve_id = cve_match.group(1)
+                            # Try to extract score
+                            score_match = re.search(r'(\d+\.\d+|\d+)', line)
+                            score = score_match.group(1) if score_match else "unknown"
+                            vulnerability_desc = f"{cve_id} (Score: {score})"
+                            
+                            # Determine severity based on CVSS score
+                            if score != "unknown":
+                                try:
+                                    score_float = float(score)
+                                    if score_float >= 9.0:
+                                        severity = "critical"
+                                    elif score_float >= 7.0:
+                                        severity = "high"
+                                    elif score_float >= 4.0:
+                                        severity = "medium"
+                                    else:
+                                        severity = "low"
+                                except ValueError:
+                                    severity = "medium"
+                    elif "*EXPLOIT*" in line:
+                        # Exploitable vulnerabilities are high severity by default
+                        severity = "high"
+                    elif "VULNERABLE" in line:
+                        # Generic vulnerabilities are medium severity
+                        severity = "medium"
+                    
+                    # Add to network intelligence
+                    try:
+                        self.shared_data.network_intelligence.add_vulnerability(
+                            host=ip,
+                            port=current_port,
+                            service=current_service or "unknown",
+                            vulnerability=vulnerability_desc,
+                            severity=severity,
+                            details=line.strip()
+                        )
+                        logger.debug(f"Added vulnerability to network intelligence: {ip}:{current_port} - {vulnerability_desc}")
+                    except Exception as e:
+                        logger.warning(f"Failed to add vulnerability to network intelligence: {e}")
+                        
+        except Exception as e:
+            logger.error(f"Error feeding vulnerabilities to network intelligence: {e}")
 
     def save_results(self, mac_address, ip, scan_result):
         """
