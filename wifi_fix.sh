@@ -1,6 +1,4 @@
 #!/bin/bash
-# Author : Infinition
-
 # Log file
 LOG_FILE="/var/log/wifi-manager.log"
 
