@@ -1454,6 +1454,25 @@ def get_stable_network_data():
         # Also get any recent ARP scan cache data
         recent_arp_data = network_scan_cache.get('arp_hosts', {})
         
+        # Read NetKB data for additional enrichment (ports, MACs, etc.)
+        netkb_data = []
+        try:
+            netkb_data = shared_data.read_data()
+        except Exception as e:
+            logger.warning(f"Could not read NetKB data for enrichment: {e}")
+        
+        # Create enrichment map from NetKB data
+        netkb_enrichment = {}
+        for entry in netkb_data:
+            ip = entry.get('IPs', '').strip()
+            if ip and ip not in ['STANDALONE']:
+                netkb_enrichment[ip] = {
+                    'mac': entry.get('MAC Address', '').strip(),
+                    'hostname': entry.get('Hostnames', '').strip(),
+                    'ports': entry.get('Ports', '').strip(),
+                    'alive': entry.get('Alive', '0')
+                }
+        
         # Merge and enrich the data
         enriched_hosts = []
         processed_ips = set()
@@ -1468,27 +1487,42 @@ def get_stable_network_data():
             
             host_data = {
                 'ip': ip,
-                'hostname': entry.get('Hostnames', '').strip() or 'Unknown',  # Fixed: Use 'Hostnames'
-                'mac': entry.get('MAC Address', '').strip() or 'Unknown',  # Fixed: Use 'MAC Address'
+                'hostname': entry.get('Hostnames', '').strip() or 'Unknown',
+                'mac': entry.get('MAC Address', '').strip() or 'Unknown',
                 'status': 'up' if entry.get('Alive') in [True, 'True', '1', 1] else 'unknown',
                 'ports': entry.get('Ports', '').strip() or 'Unknown',
                 'vulnerabilities': str(entry.get('Vulnerabilities', '0')).strip() or '0',
-                'last_scan': entry.get('LastSeen', '').strip() or 'Never',  # Fixed: Use 'LastSeen'
+                'last_scan': entry.get('LastSeen', '').strip() or 'Never',
                 'first_seen': entry.get('First_Seen', '').strip() or 'Unknown',
                 'os': entry.get('OS', '').strip() or 'Unknown',
                 'services': entry.get('Services', '').strip() or 'Unknown',
                 'source': 'network_data'
             }
             
+            # Enhance with NetKB data if available
+            if ip in netkb_enrichment:
+                netkb_entry = netkb_enrichment[ip]
+                # Use NetKB data to fill in missing information
+                if netkb_entry.get('mac') and host_data['mac'] in ['Unknown', '00:00:00:00:00:00', '']:
+                    host_data['mac'] = netkb_entry['mac']
+                if netkb_entry.get('hostname') and host_data['hostname'] in ['Unknown', '']:
+                    host_data['hostname'] = netkb_entry['hostname']
+                if netkb_entry.get('ports') and host_data['ports'] in ['Unknown', '']:
+                    host_data['ports'] = netkb_entry['ports']
+                # Check if NetKB shows host as alive
+                if netkb_entry.get('alive') in ['1', 1]:
+                    host_data['status'] = 'up'
+                    host_data['source'] = 'network_data+netkb'
+            
             # Enhance with recent ARP data if available
             if ip in recent_arp_data:
                 arp_entry = recent_arp_data[ip]
-                if arp_entry.get('mac') and host_data['mac'] in ['Unknown', '00:00:00:00:00:00']:
+                if arp_entry.get('mac') and host_data['mac'] in ['Unknown', '00:00:00:00:00:00', '']:
                     host_data['mac'] = arp_entry['mac']
-                if arp_entry.get('hostname') and host_data['hostname'] == 'Unknown':
+                if arp_entry.get('hostname') and host_data['hostname'] in ['Unknown', '']:
                     host_data['hostname'] = arp_entry['hostname']
                 host_data['status'] = 'up'  # ARP means it's definitely up
-                host_data['source'] = 'network_data+arp'
+                host_data['source'] = 'network_data+arp+netkb' if 'netkb' in host_data['source'] else 'network_data+arp'
             
             enriched_hosts.append(host_data)
         
