@@ -5,6 +5,7 @@
 import os
 import threading
 import csv
+from concurrent.futures import ThreadPoolExecutor
 import pandas as pd
 import socket
 try:
@@ -68,7 +69,11 @@ class NetworkScanner:
         self.currentdir = shared_data.currentdir
         # CRITICAL: Pi Zero W2 has limited resources - use conservative thread count
         # 512MB RAM, 4 cores @ 1GHz can only handle a few concurrent operations
-        self.semaphore = threading.Semaphore(3)  # Max 3 concurrent port scans for Pi Zero W2
+        cpu_count = os.cpu_count() or 1
+        # Limit concurrent socket operations aggressively on the Pi Zero 2 W
+        self.port_scan_workers = max(2, min(6, cpu_count))
+        self.host_scan_workers = max(2, min(6, cpu_count))
+        self.semaphore = threading.Semaphore(min(4, max(1, cpu_count // 2 or 1)))
         self.nm = nmap.PortScanner()  # Initialize nmap.PortScanner()
         self.running = False
 
@@ -353,12 +358,22 @@ class NetworkScanner:
             Starts the port scanning process for the specified range and extra ports.
             """
             try:
-                for port in range(self.portstart, self.portend):
-                    t = threading.Thread(target=self.scan_with_semaphore, args=(port,))
-                    t.start()
-                for port in self.extra_ports:
-                    t = threading.Thread(target=self.scan_with_semaphore, args=(port,))
-                    t.start()
+                ports_to_scan = list(range(self.portstart, self.portend))
+                extra_ports = self.extra_ports or []
+                ports_to_scan.extend(extra_ports)
+                # Remove duplicates while preserving order
+                seen_ports = set()
+                ordered_ports = []
+                for port in ports_to_scan:
+                    if port in seen_ports:
+                        continue
+                    seen_ports.add(port)
+                    ordered_ports.append(port)
+
+                with ThreadPoolExecutor(max_workers=self.outer_instance.port_scan_workers) as executor:
+                    futures = [executor.submit(self.scan_with_semaphore, port) for port in ordered_ports]
+                    for future in futures:
+                        future.result()
             except Exception as e:
                 self.logger.info(f"Maximum threads defined in the semaphore reached: {e}")
 
@@ -391,6 +406,7 @@ class NetworkScanner:
             self.open_ports = {}
             self.all_ports = []
             self.ip_hostname_list = []
+            self.total_ips = 0
 
         def scan_network_and_write_to_csv(self):
             """
@@ -413,11 +429,11 @@ class NetworkScanner:
             all_hosts = self.outer_instance.nm.all_hosts()
             nmap_logger.log_scan_operation(f"Host discovery completed", f"Found {len(all_hosts)} hosts: {', '.join(all_hosts)}")
             
-            for host in all_hosts:
-                t = threading.Thread(target=self.scan_host, args=(host,))
-                t.start()
+            with ThreadPoolExecutor(max_workers=self.outer_instance.host_scan_workers) as executor:
+                futures = [executor.submit(self.scan_host, host) for host in all_hosts]
+                for future in futures:
+                    future.result()
 
-            time.sleep(5)
             self.outer_instance.sort_and_write_csv(self.csv_scan_file)
 
         def scan_host(self, ip):
@@ -444,15 +460,17 @@ class NetworkScanner:
             """
             Returns the progress of the scanning process.
             """
-            return (self.progress / self.total_ips) * 100
+            total = self.total_ips if self.total_ips else 1
+            return (self.progress / total) * 100
 
         def start(self):
             """
             Starts the network and port scanning process.
             """
             self.scan_network_and_write_to_csv()
-            time.sleep(7)
+            time.sleep(1)
             self.ip_data = self.outer_instance.GetIpFromCsv(self.outer_instance, self.csv_scan_file)
+            self.total_ips = len(self.ip_data.ip_list)
             self.open_ports = {ip: [] for ip in self.ip_data.ip_list}
             with Progress() as progress:
                 task = progress.add_task("[cyan]Scanning IPs...", total=len(self.ip_data.ip_list))

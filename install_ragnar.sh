@@ -163,10 +163,12 @@ check_system_compatibility() {
 
     # Check if system is 32-bit ARM (armhf) or 64-bit
     architecture=$(dpkg --print-architecture)
-    if [ "$architecture" != "armhf" ]  ||  [ "$architecture" != "aarch64" ]  ; then
-        log "WARNING" "Different architecture detected. Expected: armhf, Found: ${architecture}"
-        echo -e "${YELLOW}This script was tested with armhf architecture${NC}"
+    if [ "$architecture" != "armhf" ] && [ "$architecture" != "arm64" ] && [ "$architecture" != "aarch64" ]; then
+        log "WARNING" "Different architecture detected. Expected: armhf or arm64, Found: ${architecture}"
+        echo -e "${YELLOW}This script was tested with armhf/arm64 architectures${NC}"
         should_ask_confirmation=true
+    else
+        log "SUCCESS" "Architecture check passed: ${architecture}"
     fi
     
     # Additional Pi Zero specific checks if possible
@@ -303,6 +305,21 @@ install_dependencies() {
         fi
     done
     
+    # Ensure vulners.nse script is available for vulnerability scanning
+    local vulners_path="/usr/share/nmap/scripts/vulners.nse"
+    if [ ! -f "$vulners_path" ]; then
+        log "INFO" "Downloading vulners.nse script for nmap..."
+        mkdir -p "$(dirname "$vulners_path")"
+        if wget -q -O "$vulners_path" "https://raw.githubusercontent.com/vulnersCom/nmap-vulners/master/vulners.nse"; then
+            chmod 644 "$vulners_path"
+            log "SUCCESS" "Installed vulners.nse vulnerability script"
+        else
+            log "WARNING" "Failed to download vulners.nse script automatically. Vulnerability scans may be limited."
+        fi
+    else
+        log "INFO" "vulners.nse script already present"
+    fi
+
     # Update nmap scripts
     nmap --script-updatedb
     
@@ -422,7 +439,19 @@ configure_interfaces() {
 # Setup ragnar
 setup_ragnar() {
     log "INFO" "Setting up ragnar..."
-    
+
+    # Use PiWheels for faster installs on Raspberry Pi architectures
+    local machine_arch
+    machine_arch=$(uname -m 2>/dev/null || echo "")
+    if [[ "$machine_arch" == "armv7l" || "$machine_arch" == "armv6l" || "$machine_arch" == "aarch64" || "$machine_arch" == "arm64" ]]; then
+        if [ -z "${PIP_EXTRA_INDEX_URL:-}" ]; then
+            export PIP_EXTRA_INDEX_URL="https://www.piwheels.org/simple"
+        else
+            export PIP_EXTRA_INDEX_URL="$PIP_EXTRA_INDEX_URL https://www.piwheels.org/simple"
+        fi
+        log "INFO" "Using PiWheels Python package index for ${machine_arch}"
+    fi
+
     # Create ragnar user if it doesn't exist
     if ! id -u $ragnar_USER >/dev/null 2>&1; then
         adduser --disabled-password --gecos "" $ragnar_USER

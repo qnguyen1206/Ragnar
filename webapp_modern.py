@@ -1161,22 +1161,53 @@ def load_persistent_network_data():
 
     if network_data:
         ip_to_mac = {}
+        enrichment_map = {}
         for row in netkb_data:
             ip = _extract_value(row, ("IPs", "IP", "ip"))
             mac = _extract_value(row, ("MAC Address", "MAC", "mac"))
+            vuln_summary = _extract_value(row, ("Nmap Vulnerabilities", "nmap_vulnerabilities"))
+            vuln_status = _extract_value(row, ("NmapVulnScanner", "nmap_vuln_scanner"))
+
+            enrichment_payload = {
+                'Nmap Vulnerabilities': vuln_summary or '',
+                'NmapVulnScanner': vuln_status or ''
+            }
+
             if ip and mac and mac.upper() not in {"UNKNOWN", "STANDALONE"}:
                 ip_to_mac[ip] = mac
 
+            if mac:
+                enrichment_map[("mac", mac.lower())] = enrichment_payload
+            if ip:
+                enrichment_map[("ip", ip)] = enrichment_payload
+
         for entry in network_data:
             mac = _extract_value(entry, ("MAC Address", "MAC", "mac"))
+            ip = _extract_value(entry, ("IPs", "IP", "ip"))
             if not mac or mac.upper() in {"UNKNOWN", "STANDALONE", "00:00:00:00:00:00"}:
-                ip = _extract_value(entry, ("IPs", "IP", "ip"))
                 fallback_mac = ip_to_mac.get(ip)
                 if fallback_mac:
                     mac = fallback_mac
-            entry['MAC Address'] = mac or ''
-            entry['MAC'] = entry['MAC Address']
-            entry['mac'] = entry['MAC Address']
+
+            mac = mac or ''
+            entry['MAC Address'] = mac
+            entry['MAC'] = mac
+            entry['mac'] = mac
+
+            enrichment = enrichment_map.get(("mac", mac.lower())) if mac else None
+            if not enrichment and ip:
+                enrichment = enrichment_map.get(("ip", ip))
+
+            if enrichment:
+                entry['Nmap Vulnerabilities'] = enrichment.get('Nmap Vulnerabilities', '')
+                entry['nmap_vulnerabilities'] = entry['Nmap Vulnerabilities']
+                entry['NmapVulnScanner'] = enrichment.get('NmapVulnScanner', '')
+                entry['nmap_vuln_scanner'] = entry['NmapVulnScanner']
+            else:
+                entry.setdefault('Nmap Vulnerabilities', '')
+                entry.setdefault('nmap_vulnerabilities', '')
+                entry.setdefault('NmapVulnScanner', '')
+                entry.setdefault('nmap_vuln_scanner', '')
     else:
         logger.warning("WiFi-specific network data is empty. Falling back to netkb data.")
         if netkb_data:
@@ -1190,6 +1221,8 @@ def load_persistent_network_data():
                 alive = _extract_value(row, ("Alive", "Status", "alive", "status")) or '0'
                 ports = _extract_value(row, ("Ports", "Open Ports", "open_ports"))
                 last_seen = _extract_value(row, ("LastSeen", "Last Seen", "last_seen"))
+                vuln_summary = _extract_value(row, ("Nmap Vulnerabilities", "nmap_vulnerabilities"))
+                vuln_status = _extract_value(row, ("NmapVulnScanner", "nmap_vuln_scanner"))
 
                 normalized_entries.append({
                     'IPs': ip,
@@ -1199,7 +1232,11 @@ def load_persistent_network_data():
                     'MAC': mac,
                     'mac': mac,
                     'Ports': ports,
-                    'LastSeen': last_seen
+                    'LastSeen': last_seen,
+                    'Nmap Vulnerabilities': vuln_summary or '',
+                    'nmap_vulnerabilities': vuln_summary or '',
+                    'NmapVulnScanner': vuln_status or '',
+                    'nmap_vuln_scanner': vuln_status or ''
                 })
 
             network_data = normalized_entries
