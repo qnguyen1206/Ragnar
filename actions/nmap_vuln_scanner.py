@@ -111,6 +111,15 @@ class NmapVulnScanner:
                 )
 
             vulnerability_summary, port_vulnerabilities, port_services = self.parse_vulnerabilities(result.stdout)
+            
+            # Log parsing results for debugging
+            logger.info(f"Parsed {len(port_vulnerabilities)} ports with vulnerabilities for {ip}")
+            for port, vulns in port_vulnerabilities.items():
+                logger.debug(f"Port {port}: {len(vulns)} vulnerabilities found")
+            
+            if not port_vulnerabilities or all(len(v) == 0 for v in port_vulnerabilities.values()):
+                logger.warning(f"No vulnerabilities detected in scan output for {ip}")
+            
             self.update_summary_file(ip, hostname, mac, ",".join(ports_to_scan), vulnerability_summary)
             self.update_netkb_vulnerabilities(mac, ip, port_vulnerabilities, port_services)
 
@@ -196,17 +205,20 @@ class NmapVulnScanner:
 
         current_port: Optional[str] = None
         current_service: str = "unknown"
+        in_vulners_section = False
 
         for raw_line in scan_result.splitlines():
             line = raw_line.strip()
             if not line:
                 continue
 
+            # Detect port lines (e.g., "22/tcp  open   ssh     OpenSSH 9.2p1")
             if "/tcp" in line and any(state in line for state in ["open", "closed", "filtered"]):
                 parts = line.split()
                 if parts:
                     port_info = parts[0]
                     current_port = port_info.split('/')[0]
+                    # Extract service information (usually at index 2 or later)
                     if len(parts) >= 3:
                         current_service = parts[2]
                     elif len(parts) >= 2:
@@ -215,18 +227,38 @@ class NmapVulnScanner:
                         current_service = "unknown"
                     port_services[current_port] = current_service
                     port_vulnerabilities.setdefault(current_port, [])
+                    in_vulners_section = False
                 continue
 
             if current_port is None:
                 continue
 
-            if any(keyword in line for keyword in ("CVE-", "VULNERABLE", "*EXPLOIT*")):
+            # Detect the start of vulners output section
+            if line.startswith('|') and 'vulners:' in line.lower():
+                in_vulners_section = True
+                continue
+
+            # Parse vulnerability lines (lines starting with |)
+            if line.startswith('|'):
                 cleaned_line = line.lstrip('|').strip()
+                
+                # Skip empty lines and section headers
                 if not cleaned_line:
                     continue
-
-                port_vulnerabilities.setdefault(current_port, []).append(cleaned_line)
-                summary_entries.add(f"{current_port}/{current_service}: {cleaned_line}")
+                
+                # Look for vulnerability indicators
+                if any(keyword in cleaned_line for keyword in ("CVE-", "VULNERABLE", "*EXPLOIT*", 
+                                                                "PACKETSTORM:", "cpe:/", "SNYK:",
+                                                                "1337DAY-ID-", "SSV:", "CNVD-")):
+                    port_vulnerabilities.setdefault(current_port, []).append(cleaned_line)
+                    summary_entries.add(f"{current_port}/{current_service}: {cleaned_line}")
+                    continue
+                
+                # Also capture lines with vulnerability scores (numeric patterns)
+                score_pattern = re.search(r'\s+(\d+\.\d+|\d+)\s+https?://', cleaned_line)
+                if score_pattern and in_vulners_section:
+                    port_vulnerabilities.setdefault(current_port, []).append(cleaned_line)
+                    summary_entries.add(f"{current_port}/{current_service}: {cleaned_line}")
 
         summary = "; ".join(sorted(summary_entries))
         return summary, port_vulnerabilities, port_services
