@@ -703,7 +703,19 @@ class NetworkScanner:
             scanner = self.ScanPorts(self, network, portstart, portend, extra_ports)
             ip_data, open_ports, all_ports, csv_result_file, netkbfile, alive_ips = scanner.start()
 
-            alive_macs = set(ip_data.mac_list)
+            # Convert alive MACs to use pseudo-MACs for hosts without real MAC addresses
+            alive_macs = set()
+            for i, mac in enumerate(ip_data.mac_list):
+                if mac == "00:00:00:00:00:00" and i < len(ip_data.ip_list):
+                    # Convert to pseudo-MAC using the same logic as update_netkb
+                    ip = ip_data.ip_list[i]
+                    ip_parts = ip.split('.')
+                    if len(ip_parts) == 4:
+                        pseudo_mac = f"00:00:{int(ip_parts[0]):02x}:{int(ip_parts[1]):02x}:{int(ip_parts[2]):02x}:{int(ip_parts[3]):02x}"
+                        alive_macs.add(pseudo_mac)
+                        self.logger.debug(f"Added pseudo-MAC {pseudo_mac} to alive_macs for IP {ip}")
+                else:
+                    alive_macs.add(mac)
 
             table = Table(title="Scan Results", show_lines=True)
             table.add_column("IP", style="cyan", no_wrap=True)
