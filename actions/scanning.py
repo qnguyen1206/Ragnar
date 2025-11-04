@@ -191,9 +191,17 @@ class NetworkScanner:
                     if not mac or mac == "STANDALONE" or ip == "STANDALONE" or hostname == "STANDALONE":
                         continue
                     
-                    # Check if MAC address is "00:00:00:00:00:00"
+                    # For hosts with unknown MAC (00:00:00:00:00:00), use IP as unique identifier
+                    # This allows tracking hosts across routers or when MAC can't be determined
                     if mac == "00:00:00:00:00:00":
-                        continue
+                        # Create a pseudo-MAC from the IP for tracking purposes
+                        # This ensures each IP is tracked separately even without MAC
+                        ip_parts = ip.split('.')
+                        if len(ip_parts) == 4:
+                            # Convert IP to a unique MAC-like identifier: 00:00:ip1:ip2:ip3:ip4
+                            pseudo_mac = f"00:00:{int(ip_parts[0]):02x}:{int(ip_parts[1]):02x}:{int(ip_parts[2]):02x}:{int(ip_parts[3]):02x}"
+                            mac = pseudo_mac
+                            self.logger.debug(f"Created pseudo-MAC {mac} for IP {ip} (MAC address unavailable)")
 
                     if self.blacklistcheck and (mac in self.mac_scan_blacklist or ip in self.ip_scan_blacklist):
                         continue
