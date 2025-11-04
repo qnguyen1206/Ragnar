@@ -14,6 +14,9 @@ from rich.console import Console
 from rich.progress import Progress, BarColumn, TextColumn
 from shared import SharedData
 from logger import Logger
+import sys
+sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from nmap_logger import nmap_logger
 
 logger = Logger(name="nmap_vuln_scanner.py", level=logging.INFO)
 
@@ -80,17 +83,23 @@ class NmapVulnScanner:
             logger.info(
                 f"Scanning {ip} on ports {','.join(ports_to_scan)} for vulnerabilities with aggressivity {self.shared_data.nmap_scan_aggressivity}"
             )
-            result = subprocess.run(
-                [
-                    "nmap",
-                    self.shared_data.nmap_scan_aggressivity,
-                    "-sV",
-                    "--script",
-                    "vulners.nse",
-                    "-p",
-                    ",".join(ports_to_scan),
-                    ip,
-                ],
+            
+            # Prepare nmap command
+            nmap_command = [
+                "nmap",
+                self.shared_data.nmap_scan_aggressivity,
+                "-sV",
+                "--script",
+                "vulners.nse",
+                "-p",
+                ",".join(ports_to_scan),
+                ip,
+            ]
+            
+            # Execute nmap command with logging
+            result = nmap_logger.run_nmap_command(
+                nmap_command,
+                context=f"Vulnerability scan for {ip}",
                 capture_output=True,
                 text=True,
             )

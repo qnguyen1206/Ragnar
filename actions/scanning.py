@@ -39,6 +39,9 @@ from shared import SharedData
 from logger import Logger
 import ipaddress
 import nmap
+import sys
+sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from nmap_logger import nmap_logger
 
 logger = Logger(name="scanning.py", level=logging.DEBUG)
 
@@ -393,8 +396,14 @@ class NetworkScanner:
                     self.outer_instance.logger.error(f"Error in scan_network_and_write_to_csv (initial write): {e}")
 
             # Use nmap to scan for live hosts
+            nmap_logger.log_scan_operation(f"Host discovery scan", f"Network: {self.network}, Arguments: -sn")
             self.outer_instance.nm.scan(hosts=str(self.network), arguments='-sn')
-            for host in self.outer_instance.nm.all_hosts():
+            
+            # Log the scan results
+            all_hosts = self.outer_instance.nm.all_hosts()
+            nmap_logger.log_scan_operation(f"Host discovery completed", f"Found {len(all_hosts)} hosts: {', '.join(all_hosts)}")
+            
+            for host in all_hosts:
                 t = threading.Thread(target=self.scan_host, args=(host,))
                 t.start()
 
