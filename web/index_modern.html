@@ -1429,11 +1429,65 @@
                     </div>
                 </div>
                 
+                <!-- Hardware Profile Configuration Section -->
+                <div class="mb-8">
+                    <h3 class="text-xl font-semibold mb-4 text-Ragnar-400">Hardware Resource Configuration</h3>
+                    
+                    <!-- Auto-detect Card -->
+                    <div class="glass rounded-lg p-4 mb-4 border-2 border-Ragnar-600">
+                        <div class="flex items-center justify-between mb-3">
+                            <div>
+                                <h4 class="font-medium text-lg">Hardware Detection</h4>
+                                <p class="text-sm text-gray-400 mt-1">Automatically detect your hardware and apply optimal settings</p>
+                            </div>
+                            <button onclick="detectAndApplyHardware()" 
+                                    class="bg-Ragnar-600 hover:bg-Ragnar-700 text-white py-2 px-4 rounded transition-colors">
+                                <svg class="w-4 h-4 inline mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 3v2m6-2v2M9 19v2m6-2v2M5 9H3m2 6H3m18-6h-2m2 6h-2M7 19h10a2 2 0 002-2V7a2 2 0 00-2-2H7a2 2 0 00-2 2v10a2 2 0 002 2zM9 9h6v6H9V9z"></path>
+                                </svg>
+                                Auto-Detect & Apply
+                            </button>
+                        </div>
+                        <div id="hardware-detection-info" class="text-sm text-gray-300 p-3 bg-slate-800 rounded">
+                            Click "Auto-Detect & Apply" to scan your hardware...
+                        </div>
+                    </div>
+                    
+                    <!-- Manual Profile Selection -->
+                    <div class="glass rounded-lg p-4">
+                        <h4 class="font-medium text-lg mb-3">Manual Profile Selection</h4>
+                        <p class="text-sm text-gray-400 mb-4">Choose a predefined configuration for your hardware</p>
+                        
+                        <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4" id="hardware-profiles-grid">
+                            <!-- Profiles will be dynamically loaded here -->
+                            <div class="text-gray-400 col-span-full text-center py-8">
+                                Loading hardware profiles...
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <!-- Current Profile Status -->
+                    <div id="current-profile-status" class="glass rounded-lg p-4 mt-4 hidden">
+                        <div class="flex items-center justify-between">
+                            <div>
+                                <h4 class="font-medium">Currently Applied Profile</h4>
+                                <p class="text-sm text-gray-400 mt-1" id="current-profile-name">None</p>
+                            </div>
+                            <div class="text-sm text-gray-400" id="current-profile-applied">
+                                Not set
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                
                 <!-- Configuration Form -->
                 <div>
-                    <h3 class="text-xl font-semibold mb-4 text-Ragnar-400">Settings</h3>
-                    <div id="config-form">
-                        <p class="text-gray-400">Loading configuration...</p>
+                    <h3 class="text-xl font-semibold mb-4 text-Ragnar-400">Advanced Settings</h3>
+                    <div class="glass rounded-lg p-4">
+                        <p class="text-sm text-gray-400 mb-4">Fine-tune individual settings (changes will override hardware profile)</p>
+                        <div id="config-form">
+                            <p class="text-gray-400">Loading configuration...</p>
+                        </div>
                     </div>
                 </div>
             </div>

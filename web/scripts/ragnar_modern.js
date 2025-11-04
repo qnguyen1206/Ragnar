@@ -995,6 +995,12 @@ async function loadConfigData() {
         const config = await fetchAPI('/api/config');
         displayConfigForm(config);
         
+        // Load hardware profiles
+        await loadHardwareProfiles();
+        
+        // Display current profile if set
+        displayCurrentProfile(config);
+        
         // Also check for updates when loading config tab
         checkForUpdates();
     } catch (error) {
@@ -1008,6 +1014,162 @@ async function loadFilesData() {
         loadFiles('/');
     } catch (error) {
         console.error('Error loading files data:', error);
+    }
+}
+
+// ============================================================================
+// HARDWARE PROFILE MANAGEMENT FUNCTIONS
+// ============================================================================
+
+async function loadHardwareProfiles() {
+    try {
+        const profiles = await fetchAPI('/api/config/hardware-profiles');
+        const grid = document.getElementById('hardware-profiles-grid');
+        
+        if (!grid) return;
+        
+        grid.innerHTML = '';
+        
+        // Create profile cards
+        for (const [profileId, profile] of Object.entries(profiles)) {
+            const card = document.createElement('div');
+            card.className = 'glass rounded-lg p-4 hover:border-2 hover:border-Ragnar-500 transition-all cursor-pointer';
+            card.onclick = () => confirmApplyProfile(profileId, profile);
+            
+            card.innerHTML = `
+                <div class="flex items-center justify-between mb-2">
+                    <h5 class="font-semibold text-white">${profile.name}</h5>
+                    <span class="text-xs px-2 py-1 rounded bg-slate-700 text-slate-300">${profile.ram}MB</span>
+                </div>
+                <p class="text-sm text-gray-400 mb-3">${profile.description}</p>
+                <div class="text-xs space-y-1 text-gray-500">
+                    <div class="flex justify-between">
+                        <span>Max Threads:</span>
+                        <span class="text-gray-300">${profile.settings.scanner_max_threads}</span>
+                    </div>
+                    <div class="flex justify-between">
+                        <span>Concurrent Actions:</span>
+                        <span class="text-gray-300">${profile.settings.orchestrator_max_concurrent}</span>
+                    </div>
+                    <div class="flex justify-between">
+                        <span>Scan Speed:</span>
+                        <span class="text-gray-300">${profile.settings.nmap_scan_aggressivity}</span>
+                    </div>
+                </div>
+                <button class="w-full mt-3 bg-Ragnar-600 hover:bg-Ragnar-700 text-white py-2 px-3 rounded text-sm transition-colors">
+                    Apply Profile
+                </button>
+            `;
+            
+            grid.appendChild(card);
+        }
+        
+    } catch (error) {
+        console.error('Error loading hardware profiles:', error);
+        addConsoleMessage('Failed to load hardware profiles', 'error');
+    }
+}
+
+async function detectAndApplyHardware() {
+    try {
+        addConsoleMessage('Detecting hardware...', 'info');
+        const infoDiv = document.getElementById('hardware-detection-info');
+        infoDiv.innerHTML = '<span class="text-Ragnar-400">🔍 Detecting hardware...</span>';
+        
+        const hardware = await fetchAPI('/api/config/detect-hardware');
+        
+        // Display detection results
+        infoDiv.innerHTML = `
+            <div class="space-y-2">
+                <div class="flex justify-between">
+                    <span class="text-gray-400">Detected Model:</span>
+                    <span class="text-white font-semibold">${hardware.model}</span>
+                </div>
+                <div class="flex justify-between">
+                    <span class="text-gray-400">Total RAM:</span>
+                    <span class="text-white font-semibold">${hardware.ram_gb} GB (${hardware.ram_mb} MB)</span>
+                </div>
+                <div class="flex justify-between">
+                    <span class="text-gray-400">CPU Cores:</span>
+                    <span class="text-white font-semibold">${hardware.cpu_count}</span>
+                </div>
+                <div class="flex justify-between">
+                    <span class="text-gray-400">Recommended Profile:</span>
+                    <span class="text-Ragnar-400 font-semibold">${hardware.recommended_profile}</span>
+                </div>
+            </div>
+        `;
+        
+        addConsoleMessage(`Detected: ${hardware.model} with ${hardware.ram_gb}GB RAM`, 'success');
+        
+        // Auto-apply the recommended profile
+        if (hardware.recommended_profile) {
+            addConsoleMessage(`Applying recommended profile: ${hardware.recommended_profile}`, 'info');
+            await applyHardwareProfile(hardware.recommended_profile);
+        }
+        
+    } catch (error) {
+        console.error('Error detecting hardware:', error);
+        addConsoleMessage('Failed to detect hardware', 'error');
+        document.getElementById('hardware-detection-info').innerHTML = 
+            '<span class="text-red-400">❌ Failed to detect hardware. Try manual selection.</span>';
+    }
+}
+
+async function confirmApplyProfile(profileId, profile) {
+    if (confirm(`Apply profile "${profile.name}"?\n\n${profile.description}\n\nThis will update system resource settings and requires a service restart to take full effect.`)) {
+        await applyHardwareProfile(profileId);
+    }
+}
+
+async function applyHardwareProfile(profileId) {
+    try {
+        addConsoleMessage(`Applying hardware profile: ${profileId}...`, 'info');
+        
+        const result = await postAPI('/api/config/apply-profile', { profile_id: profileId });
+        
+        if (result.success) {
+            addConsoleMessage(`✅ Profile applied: ${result.profile.name}`, 'success');
+            addConsoleMessage('⚠️ Service restart required for changes to take effect', 'warning');
+            
+            // Update current profile display
+            displayCurrentProfile({
+                hardware_profile: profileId,
+                hardware_profile_name: result.profile.name,
+                hardware_profile_applied: result.profile.hardware_profile_applied || new Date().toISOString()
+            });
+            
+            // Show restart prompt
+            if (confirm('Hardware profile applied successfully!\n\nRestart the Ragnar service now to apply changes?')) {
+                await restartService();
+            }
+        } else {
+            addConsoleMessage('❌ Failed to apply profile', 'error');
+        }
+        
+    } catch (error) {
+        console.error('Error applying hardware profile:', error);
+        addConsoleMessage(`Failed to apply hardware profile: ${error.message}`, 'error');
+    }
+}
+
+function displayCurrentProfile(config) {
+    const statusDiv = document.getElementById('current-profile-status');
+    const nameSpan = document.getElementById('current-profile-name');
+    const appliedSpan = document.getElementById('current-profile-applied');
+    
+    if (config.hardware_profile && config.hardware_profile_name) {
+        statusDiv.classList.remove('hidden');
+        nameSpan.textContent = config.hardware_profile_name;
+        
+        if (config.hardware_profile_applied) {
+            const appliedDate = new Date(config.hardware_profile_applied);
+            appliedSpan.textContent = `Applied: ${appliedDate.toLocaleString()}`;
+        } else {
+            appliedSpan.textContent = 'Applied recently';
+        }
+    } else {
+        statusDiv.classList.add('hidden');
     }
 }
 

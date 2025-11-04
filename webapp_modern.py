@@ -846,6 +846,296 @@ def update_config():
         logger.error(f"Error updating config: {e}")
         return jsonify({'error': str(e)}), 500
 
+@app.route('/api/config/hardware-profiles')
+def get_hardware_profiles():
+    """Get predefined hardware profiles for different Raspberry Pi models"""
+    try:
+        profiles = {
+            'pi_zero_2w': {
+                'name': 'Raspberry Pi Zero 2 W',
+                'ram': 512,
+                'description': '512MB RAM - Minimal resource usage',
+                'settings': {
+                    'scanner_max_threads': 3,
+                    'orchestrator_max_concurrent': 2,
+                    'nmap_scan_aggressivity': '-T2',
+                    'scan_interval': 300,
+                    'scan_vuln_interval': 600,
+                    'max_concurrent_scans': 1,
+                    'memory_warning_threshold': 70,
+                    'memory_critical_threshold': 85,
+                    'enable_resource_monitoring': True
+                }
+            },
+            'pi_4_1gb': {
+                'name': 'Raspberry Pi 4 (1GB)',
+                'ram': 1024,
+                'description': '1GB RAM - Light resource usage',
+                'settings': {
+                    'scanner_max_threads': 5,
+                    'orchestrator_max_concurrent': 3,
+                    'nmap_scan_aggressivity': '-T3',
+                    'scan_interval': 240,
+                    'scan_vuln_interval': 480,
+                    'max_concurrent_scans': 2,
+                    'memory_warning_threshold': 75,
+                    'memory_critical_threshold': 90,
+                    'enable_resource_monitoring': True
+                }
+            },
+            'pi_4_2gb': {
+                'name': 'Raspberry Pi 4 (2GB)',
+                'ram': 2048,
+                'description': '2GB RAM - Moderate resource usage',
+                'settings': {
+                    'scanner_max_threads': 10,
+                    'orchestrator_max_concurrent': 5,
+                    'nmap_scan_aggressivity': '-T3',
+                    'scan_interval': 180,
+                    'scan_vuln_interval': 360,
+                    'max_concurrent_scans': 3,
+                    'memory_warning_threshold': 75,
+                    'memory_critical_threshold': 90,
+                    'enable_resource_monitoring': True
+                }
+            },
+            'pi_4_4gb': {
+                'name': 'Raspberry Pi 4 (4GB)',
+                'ram': 4096,
+                'description': '4GB RAM - Standard resource usage',
+                'settings': {
+                    'scanner_max_threads': 20,
+                    'orchestrator_max_concurrent': 8,
+                    'nmap_scan_aggressivity': '-T4',
+                    'scan_interval': 180,
+                    'scan_vuln_interval': 300,
+                    'max_concurrent_scans': 4,
+                    'memory_warning_threshold': 80,
+                    'memory_critical_threshold': 92,
+                    'enable_resource_monitoring': True
+                }
+            },
+            'pi_4_8gb': {
+                'name': 'Raspberry Pi 4 (8GB)',
+                'ram': 8192,
+                'description': '8GB RAM - High performance',
+                'settings': {
+                    'scanner_max_threads': 30,
+                    'orchestrator_max_concurrent': 10,
+                    'nmap_scan_aggressivity': '-T4',
+                    'scan_interval': 120,
+                    'scan_vuln_interval': 240,
+                    'max_concurrent_scans': 6,
+                    'memory_warning_threshold': 80,
+                    'memory_critical_threshold': 92,
+                    'enable_resource_monitoring': True
+                }
+            },
+            'pi_5_2gb': {
+                'name': 'Raspberry Pi 5 (2GB)',
+                'ram': 2048,
+                'description': '2GB RAM - Fast CPU, moderate RAM',
+                'settings': {
+                    'scanner_max_threads': 15,
+                    'orchestrator_max_concurrent': 6,
+                    'nmap_scan_aggressivity': '-T4',
+                    'scan_interval': 150,
+                    'scan_vuln_interval': 300,
+                    'max_concurrent_scans': 4,
+                    'memory_warning_threshold': 75,
+                    'memory_critical_threshold': 90,
+                    'enable_resource_monitoring': True
+                }
+            },
+            'pi_5_4gb': {
+                'name': 'Raspberry Pi 5 (4GB)',
+                'ram': 4096,
+                'description': '4GB RAM - High performance',
+                'settings': {
+                    'scanner_max_threads': 30,
+                    'orchestrator_max_concurrent': 12,
+                    'nmap_scan_aggressivity': '-T4',
+                    'scan_interval': 120,
+                    'scan_vuln_interval': 240,
+                    'max_concurrent_scans': 6,
+                    'memory_warning_threshold': 80,
+                    'memory_critical_threshold': 92,
+                    'enable_resource_monitoring': True
+                }
+            },
+            'pi_5_8gb': {
+                'name': 'Raspberry Pi 5 (8GB)',
+                'ram': 8192,
+                'description': '8GB RAM - Maximum performance',
+                'settings': {
+                    'scanner_max_threads': 40,
+                    'orchestrator_max_concurrent': 15,
+                    'nmap_scan_aggressivity': '-T4',
+                    'scan_interval': 90,
+                    'scan_vuln_interval': 180,
+                    'max_concurrent_scans': 8,
+                    'memory_warning_threshold': 82,
+                    'memory_critical_threshold': 93,
+                    'enable_resource_monitoring': True
+                }
+            },
+            'pi_5_16gb': {
+                'name': 'Raspberry Pi 5 (16GB)',
+                'ram': 16384,
+                'description': '16GB RAM - Extreme performance',
+                'settings': {
+                    'scanner_max_threads': 50,
+                    'orchestrator_max_concurrent': 20,
+                    'nmap_scan_aggressivity': '-T4',
+                    'scan_interval': 60,
+                    'scan_vuln_interval': 120,
+                    'max_concurrent_scans': 10,
+                    'memory_warning_threshold': 85,
+                    'memory_critical_threshold': 94,
+                    'enable_resource_monitoring': True
+                }
+            }
+        }
+        
+        return jsonify(profiles)
+    except Exception as e:
+        logger.error(f"Error getting hardware profiles: {e}")
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/config/detect-hardware')
+def detect_hardware():
+    """Auto-detect current hardware and recommend profile"""
+    try:
+        import subprocess
+        import re
+        
+        # Detect Raspberry Pi model
+        model = 'unknown'
+        ram_mb = 0
+        recommended_profile = 'pi_zero_2w'  # Default to most conservative
+        
+        try:
+            # Read /proc/cpuinfo for model
+            with open('/proc/cpuinfo', 'r') as f:
+                cpuinfo = f.read()
+                
+            # Detect Pi model
+            if 'Raspberry Pi Zero 2' in cpuinfo:
+                model = 'Raspberry Pi Zero 2 W'
+                recommended_profile = 'pi_zero_2w'
+            elif 'Raspberry Pi 5' in cpuinfo:
+                model = 'Raspberry Pi 5'
+            elif 'Raspberry Pi 4' in cpuinfo:
+                model = 'Raspberry Pi 4'
+            elif 'Raspberry Pi 3' in cpuinfo:
+                model = 'Raspberry Pi 3'
+                
+        except Exception as e:
+            logger.warning(f"Could not read cpuinfo: {e}")
+        
+        # Detect RAM
+        if psutil_available:
+            try:
+                mem = psutil.virtual_memory()
+                ram_mb = int(mem.total / (1024 * 1024))
+                
+                # Match to closest profile
+                if model == 'Raspberry Pi Zero 2 W':
+                    recommended_profile = 'pi_zero_2w'
+                elif model == 'Raspberry Pi 5':
+                    if ram_mb >= 15000:
+                        recommended_profile = 'pi_5_16gb'
+                    elif ram_mb >= 7000:
+                        recommended_profile = 'pi_5_8gb'
+                    elif ram_mb >= 3500:
+                        recommended_profile = 'pi_5_4gb'
+                    else:
+                        recommended_profile = 'pi_5_2gb'
+                elif model == 'Raspberry Pi 4':
+                    if ram_mb >= 7000:
+                        recommended_profile = 'pi_4_8gb'
+                    elif ram_mb >= 3500:
+                        recommended_profile = 'pi_4_4gb'
+                    elif ram_mb >= 1800:
+                        recommended_profile = 'pi_4_2gb'
+                    else:
+                        recommended_profile = 'pi_4_1gb'
+                        
+            except Exception as e:
+                logger.warning(f"Could not detect RAM: {e}")
+        
+        # Get CPU count
+        cpu_count = psutil.cpu_count() if psutil_available else 1
+        
+        return jsonify({
+            'model': model,
+            'ram_mb': ram_mb,
+            'ram_gb': round(ram_mb / 1024, 1),
+            'cpu_count': cpu_count,
+            'recommended_profile': recommended_profile,
+            'detection_method': 'cpuinfo + psutil'
+        })
+        
+    except Exception as e:
+        logger.error(f"Error detecting hardware: {e}")
+        return jsonify({
+            'model': 'unknown',
+            'ram_mb': 0,
+            'ram_gb': 0,
+            'cpu_count': 1,
+            'recommended_profile': 'pi_zero_2w',
+            'detection_method': 'fallback',
+            'error': str(e)
+        }), 200
+
+@app.route('/api/config/apply-profile', methods=['POST'])
+def apply_hardware_profile():
+    """Apply a hardware profile to the system configuration"""
+    try:
+        data = request.get_json()
+        profile_id = data.get('profile_id')
+        
+        if not profile_id:
+            return jsonify({'error': 'No profile_id provided'}), 400
+        
+        # Get the profile
+        profiles_response = get_hardware_profiles()
+        profiles = profiles_response.get_json()
+        
+        if profile_id not in profiles:
+            return jsonify({'error': f'Unknown profile: {profile_id}'}), 404
+        
+        profile = profiles[profile_id]
+        settings = profile['settings']
+        
+        # Update configuration with profile settings
+        for key, value in settings.items():
+            shared_data.config[key] = value
+        
+        # Also store the applied profile info
+        shared_data.config['hardware_profile'] = profile_id
+        shared_data.config['hardware_profile_name'] = profile['name']
+        shared_data.config['hardware_profile_applied'] = datetime.now().isoformat()
+        
+        # Save configuration
+        shared_data.save_config()
+        
+        logger.info(f"Applied hardware profile: {profile['name']} ({profile_id})")
+        
+        # Emit update to all connected clients
+        socketio.emit('config_updated', shared_data.config)
+        
+        return jsonify({
+            'success': True,
+            'message': f"Applied profile: {profile['name']}",
+            'profile': profile,
+            'restart_required': True
+        })
+        
+    except Exception as e:
+        logger.error(f"Error applying hardware profile: {e}")
+        return jsonify({'error': str(e)}), 500
+
 
 def load_persistent_network_data():
     """Load the WiFi-specific network data with fallbacks."""
