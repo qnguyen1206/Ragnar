@@ -1460,7 +1460,7 @@ def get_stable_network_data():
         
         # Process network data first (most stable)
         for entry in network_data:
-            ip = entry.get('IP', '').strip()
+            ip = entry.get('IPs', '').strip()  # Fixed: Use 'IPs' not 'IP'
             if not ip or ip in processed_ips:
                 continue
                 
@@ -1468,12 +1468,12 @@ def get_stable_network_data():
             
             host_data = {
                 'ip': ip,
-                'hostname': entry.get('Hostname', '').strip() or 'Unknown',
-                'mac': entry.get('MAC', '').strip() or 'Unknown', 
+                'hostname': entry.get('Hostnames', '').strip() or 'Unknown',  # Fixed: Use 'Hostnames'
+                'mac': entry.get('MAC Address', '').strip() or 'Unknown',  # Fixed: Use 'MAC Address'
                 'status': 'up' if entry.get('Alive') in [True, 'True', '1', 1] else 'unknown',
                 'ports': entry.get('Ports', '').strip() or 'Unknown',
                 'vulnerabilities': str(entry.get('Vulnerabilities', '0')).strip() or '0',
-                'last_scan': entry.get('Last_Seen', '').strip() or 'Never',
+                'last_scan': entry.get('LastSeen', '').strip() or 'Never',  # Fixed: Use 'LastSeen'
                 'first_seen': entry.get('First_Seen', '').strip() or 'Unknown',
                 'os': entry.get('OS', '').strip() or 'Unknown',
                 'services': entry.get('Services', '').strip() or 'Unknown',
@@ -1483,7 +1483,7 @@ def get_stable_network_data():
             # Enhance with recent ARP data if available
             if ip in recent_arp_data:
                 arp_entry = recent_arp_data[ip]
-                if arp_entry.get('mac') and host_data['mac'] == 'Unknown':
+                if arp_entry.get('mac') and host_data['mac'] in ['Unknown', '00:00:00:00:00:00']:
                     host_data['mac'] = arp_entry['mac']
                 if arp_entry.get('hostname') and host_data['hostname'] == 'Unknown':
                     host_data['hostname'] = arp_entry['hostname']
