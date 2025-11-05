@@ -845,7 +845,11 @@ def update_wifi_network_data():
                                     'alive': _normalize_alive_value(row[2] if len(row) > 2 else '1'),
                                     'mac': row[3] if len(row) > 3 else '',
                                     'ports': ports,
-                                    'last_seen': row[5] if len(row) > 5 else datetime.now().isoformat()
+                                    'last_seen': row[5] if len(row) > 5 else datetime.now().isoformat(),
+                                    # New fields for robust connectivity tracking (with backward compatibility)
+                                    'failed_ping_count': int(row[6]) if len(row) > 6 and row[6].isdigit() else 0,
+                                    'last_successful_ping': row[7] if len(row) > 7 else '',
+                                    'last_ping_attempt': row[8] if len(row) > 8 else ''
                                 }
             except Exception as e:
                 logger.debug(f"Could not read existing WiFi network file: {e}")
@@ -886,6 +890,9 @@ def update_wifi_network_data():
                                             existing_data[ip]['alive'] = alive
                                             existing_data[ip]['ports'].update(ports)
                                             existing_data[ip]['last_seen'] = current_time
+                                            # Reset failure counter on successful scan
+                                            existing_data[ip]['failed_ping_count'] = 0
+                                            existing_data[ip]['last_successful_ping'] = current_time
                                         else:
                                             # New entry
                                             existing_data[ip] = {
@@ -893,7 +900,10 @@ def update_wifi_network_data():
                                                 'alive': alive,
                                                 'mac': mac,
                                                 'ports': ports,
-                                                'last_seen': current_time
+                                                'last_seen': current_time,
+                                                'failed_ping_count': 0,
+                                                'last_successful_ping': current_time,
+                                                'last_ping_attempt': current_time
                                             }
                     except Exception as e:
                         logger.debug(f"Could not read scan result file {filepath}: {e}")
@@ -922,15 +932,24 @@ def update_wifi_network_data():
         for ip in stale_hosts:
             existing_data.pop(ip, None)
 
-        # Update alive status based on current ARP cache data
+        # Update alive status based on current ARP cache data with robust connectivity tracking
         current_time = datetime.now().isoformat()
         arp_hosts = network_scan_cache.get('arp_hosts', {})
+        MAX_FAILED_PINGS = shared_data.config.get('network_max_failed_pings', 5)  # Configurable value
         
         for ip, data in existing_data.items():
+            # Initialize failure counter if not present
+            if 'failed_ping_count' not in data:
+                data['failed_ping_count'] = 0
+            
             # Update alive status based on ARP cache
             if ip in arp_hosts:
+                # Device responded - reset failure counter and mark as alive
+                data['failed_ping_count'] = 0
                 data['alive'] = True
                 data['last_seen'] = current_time
+                data['last_successful_ping'] = current_time
+                
                 # Update MAC if we have a better one from ARP
                 arp_mac = arp_hosts[ip].get('mac', '')
                 if arp_mac and (not data.get('mac') or data['mac'] in ['', 'Unknown', '00:00:00:00:00:00'] or 
@@ -942,16 +961,19 @@ def update_wifi_network_data():
                         update_netkb_entry(ip, arp_hostname, arp_mac, True)
                     except Exception as e:
                         logger.debug(f"Could not update NetKB with real MAC for {ip}: {e}")
-            # If device was seen recently but not in ARP, keep it as alive for a grace period
-            elif data.get('alive', False):
-                try:
-                    last_seen_dt = datetime.fromisoformat(data.get('last_seen', current_time))
-                    # Grace period of 30 minutes for devices not in ARP
-                    grace_cutoff = datetime.now() - timedelta(minutes=30)
-                    if last_seen_dt < grace_cutoff:
-                        data['alive'] = False
-                except Exception:
-                    pass
+            else:
+                # Device didn't respond - increment failure counter
+                data['failed_ping_count'] = data.get('failed_ping_count', 0) + 1
+                
+                # Only mark as offline after MAX_FAILED_PINGS consecutive failures
+                if data['failed_ping_count'] >= MAX_FAILED_PINGS:
+                    data['alive'] = False
+                    logger.debug(f"Device {ip} marked offline after {data['failed_ping_count']} consecutive failed pings")
+                else:
+                    # Keep as alive but log the failure
+                    logger.debug(f"Device {ip} failed ping {data['failed_ping_count']}/{MAX_FAILED_PINGS} - keeping alive")
+                    # Don't change alive status yet, but update last attempt time
+                    data['last_ping_attempt'] = current_time
 
         # Add new devices discovered via ARP that aren't in our data yet
         for ip, arp_data in arp_hosts.items():
@@ -961,7 +983,9 @@ def update_wifi_network_data():
                     'alive': True,
                     'mac': arp_data.get('mac', ''),
                     'ports': set(),
-                    'last_seen': current_time
+                    'last_seen': current_time,
+                    'last_successful_ping': current_time,
+                    'failed_ping_count': 0  # New devices start with 0 failures
                 }
                 # Add to NetKB database as well
                 try:
@@ -987,7 +1011,7 @@ def update_wifi_network_data():
         try:
             with open(wifi_network_file, 'w', newline='', encoding='utf-8') as f:
                 writer = csv.writer(f)
-                writer.writerow(['IP', 'Hostname', 'Alive', 'MAC', 'Ports', 'LastSeen'])
+                writer.writerow(['IP', 'Hostname', 'Alive', 'MAC', 'Ports', 'LastSeen', 'FailedPingCount', 'LastSuccessfulPing', 'LastPingAttempt'])
 
                 for ip, data in existing_data.items():
                     def port_sort_key(value):
@@ -1008,7 +1032,10 @@ def update_wifi_network_data():
                         '1' if data.get('alive', True) else '0',
                         data['mac'],
                         ports_str,
-                        data['last_seen']
+                        data['last_seen'],
+                        data.get('failed_ping_count', 0),
+                        data.get('last_successful_ping', ''),
+                        data.get('last_ping_attempt', '')
                     ])
 
             logger.info(f"Updated WiFi network data file: {wifi_network_file} with {len(existing_data)} entries (removed {len(stale_hosts)} stale hosts)")
@@ -2337,6 +2364,68 @@ def get_verbose_debug_logs():
         
     except Exception as e:
         logger.error(f"Error in verbose debug logs: {e}")
+        return jsonify({'error': str(e), 'timestamp': datetime.now().isoformat()}), 500
+
+@app.route('/api/debug/connectivity-tracking')
+def get_connectivity_tracking():
+    """Get detailed connectivity tracking information for all devices"""
+    try:
+        wifi_network_data = read_wifi_network_data()
+        current_time = datetime.now()
+        arp_hosts = network_scan_cache.get('arp_hosts', {})
+        
+        connectivity_info = {
+            'timestamp': current_time.isoformat(),
+            'summary': {
+                'total_devices': len(wifi_network_data),
+                'devices_in_arp': len(arp_hosts),
+                'max_failed_pings': shared_data.config.get('network_max_failed_pings', 5)
+            },
+            'devices': []
+        }
+        
+        for entry in wifi_network_data:
+            ip = entry.get('IPs', '').strip()
+            if not ip:
+                continue
+                
+            device_info = {
+                'ip': ip,
+                'hostname': entry.get('Hostnames', ''),
+                'mac': entry.get('MAC Address', ''),
+                'alive': entry.get('Alive', 0),
+                'failed_ping_count': entry.get('failed_ping_count', 0),
+                'last_seen': entry.get('LastSeen', ''),
+                'last_successful_ping': entry.get('last_successful_ping', ''),
+                'last_ping_attempt': entry.get('last_ping_attempt', ''),
+                'in_current_arp': ip in arp_hosts,
+                'connectivity_status': 'stable' if entry.get('failed_ping_count', 0) == 0 else f"failing ({entry.get('failed_ping_count', 0)}/{shared_data.config.get('network_max_failed_pings', 5)})"
+            }
+            
+            # Calculate time since last successful ping
+            if device_info['last_successful_ping']:
+                try:
+                    last_success = datetime.fromisoformat(device_info['last_successful_ping'])
+                    time_diff = current_time - last_success
+                    device_info['minutes_since_last_success'] = int(time_diff.total_seconds() / 60)
+                except Exception:
+                    device_info['minutes_since_last_success'] = 'unknown'
+            else:
+                device_info['minutes_since_last_success'] = 'never'
+                
+            connectivity_info['devices'].append(device_info)
+        
+        # Sort by IP address
+        connectivity_info['devices'].sort(key=lambda x: tuple(map(int, x['ip'].split('.'))))
+        
+        response = jsonify(connectivity_info)
+        response.headers['Cache-Control'] = 'no-cache, no-store, must-revalidate'
+        response.headers['Pragma'] = 'no-cache'
+        response.headers['Expires'] = '0'
+        return response
+        
+    except Exception as e:
+        logger.error(f"Error getting connectivity tracking info: {e}")
         return jsonify({'error': str(e), 'timestamp': datetime.now().isoformat()}), 500
 
 @app.route('/api/debug/force-arp-scan', methods=['POST'])
