@@ -311,7 +311,20 @@ class NmapVulnScanner:
                 service = port_services.get(port_str, "unknown")
 
                 for vulnerability in vulnerabilities:
+                    # FILTER: Only add real vulnerabilities with identifiers
+                    # Skip generic/empty vulnerability entries
+                    if not any(keyword in vulnerability for keyword in ["CVE-", "EXPLOIT", "VULNERABLE", 
+                                                                         "PACKETSTORM:", "1337DAY", "SSV:", 
+                                                                         "CNVD-", "SNYK:"]):
+                        logger.debug(f"Skipping non-specific vulnerability entry: {vulnerability[:50]}...")
+                        continue
+                    
                     severity, normalized_text = self.determine_severity(vulnerability)
+                    
+                    # Additional filter: normalized_text must not be empty and should have substance
+                    if not normalized_text or len(normalized_text.strip()) < 5:
+                        logger.debug(f"Skipping empty or too short vulnerability: {normalized_text}")
+                        continue
 
                     try:
                         self.shared_data.network_intelligence.add_vulnerability(
@@ -326,7 +339,7 @@ class NmapVulnScanner:
                                 'port': int(port_str),
                             }
                         )
-                        logger.debug(f"Added vulnerability to network intelligence: {ip}:{port_str} - {normalized_text}")
+                        logger.info(f"Added VERIFIED vulnerability: {ip}:{port_str} - {normalized_text}")
                     except Exception as e:
                         logger.warning(f"Failed to add vulnerability to network intelligence: {e}")
 

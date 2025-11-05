@@ -1594,6 +1594,9 @@ async function loadConfigData() {
         // Load Wi-Fi interfaces
         await loadWifiInterfaces();
         
+        // Update vulnerability count in data management card
+        updateVulnerabilityCount();
+        
         // Also check for updates when loading config tab
         checkForUpdates();
     } catch (error) {
@@ -2031,6 +2034,84 @@ async function rebootSystem() {
     } catch (error) {
         console.error('Error rebooting system:', error);
         addConsoleMessage('Failed to initiate system reboot', 'error');
+    }
+}
+
+// ============================================================================
+// DATA MANAGEMENT FUNCTIONS
+// ============================================================================
+
+async function resetVulnerabilities() {
+    if (!confirm('⚠️ Reset All Vulnerabilities?\n\nThis will permanently delete:\n• All discovered vulnerabilities\n• Vulnerability scan results\n• Network intelligence vulnerability data\n\nThis action cannot be undone. Continue?')) {
+        return;
+    }
+    
+    try {
+        addConsoleMessage('Resetting vulnerabilities...', 'warning');
+        
+        const data = await postAPI('/api/data/reset-vulnerabilities', {});
+        
+        if (data.success) {
+            addConsoleMessage(`Vulnerabilities reset: ${data.deleted_count || 0} entries removed`, 'success');
+            
+            // Update vulnerability count display
+            updateElement('vuln-count', '0');
+            updateElement('vulnerability-count', '0');
+            
+            // Refresh current tab if we're on network or discovered tabs
+            if (currentTab === 'network' || currentTab === 'discovered' || currentTab === 'threat-intel') {
+                setTimeout(() => {
+                    refreshCurrentTab();
+                }, 500);
+            }
+        } else {
+            addConsoleMessage(`Reset failed: ${data.error || 'Unknown error'}`, 'error');
+        }
+        
+    } catch (error) {
+        console.error('Error resetting vulnerabilities:', error);
+        addConsoleMessage('Failed to reset vulnerabilities', 'error');
+    }
+}
+
+async function resetThreatIntelligence() {
+    if (!confirm('⚠️ Reset Threat Intelligence?\n\nThis will permanently delete:\n• All threat intelligence findings\n• Enriched threat data\n• Threat cache\n\nThis action cannot be undone. Continue?')) {
+        return;
+    }
+    
+    try {
+        addConsoleMessage('Resetting threat intelligence...', 'warning');
+        
+        const data = await postAPI('/api/data/reset-threat-intel', {});
+        
+        if (data.success) {
+            addConsoleMessage('Threat intelligence data reset successfully', 'success');
+            
+            // Refresh threat intel tab if active
+            if (currentTab === 'threat-intel') {
+                setTimeout(() => {
+                    refreshCurrentTab();
+                }, 500);
+            }
+        } else {
+            addConsoleMessage(`Reset failed: ${data.error || 'Unknown error'}`, 'error');
+        }
+        
+    } catch (error) {
+        console.error('Error resetting threat intelligence:', error);
+        addConsoleMessage('Failed to reset threat intelligence', 'error');
+    }
+}
+
+// Update vulnerability count in config tab
+async function updateVulnerabilityCount() {
+    try {
+        const stats = await fetchAPI('/api/stats');
+        const count = stats.vulnerability_count || 0;
+        updateElement('vuln-count', count.toString());
+    } catch (error) {
+        console.error('Error updating vulnerability count:', error);
+        updateElement('vuln-count', '?');
     }
 }
 

@@ -613,42 +613,11 @@ class ThreatIntelligenceFusion:
     async def query_alienvault_otx(self, source: ThreatIntelligenceSource, identifiers: Dict[str, Any]) -> Optional[ThreatContext]:
         """Query AlienVault OTX for threat intelligence"""
         try:
-            # This would require an API key for full functionality
-            # Implementing basic IP reputation check as an example
-            ip = identifiers.get('ip')
-            if not ip:
-                return None
-            
-            # Check cache first
-            cache_key = f"otx_ip_{ip}"
-            if cache_key in self.threat_cache:
-                cached_data = self.threat_cache[cache_key]
-                if datetime.now() - datetime.fromisoformat(cached_data['cached_at']) < timedelta(hours=6):
-                    return ThreatContext(**cached_data['context'])
-            
-            # Note: This is a simplified implementation
-            # Full implementation would require proper OTX API integration
-            context = ThreatContext(
-                source="AlienVault_OTX",
-                threat_type="ip_reputation",
-                severity="MEDIUM",
-                confidence=0.6,
-                first_seen=datetime.now().isoformat(),
-                last_seen=datetime.now().isoformat(),
-                description=f"IP reputation check for {ip}",
-                references=[f"https://otx.alienvault.com/indicator/ip/{ip}"],
-                tags=["ip_reputation", "otx"],
-                iocs={"ip": ip}
-            )
-            
-            # Cache the result
-            self.threat_cache[cache_key] = {
-                'context': asdict(context),
-                'cached_at': datetime.now().isoformat()
-            }
-            self.save_threat_cache()
-            
-            return context
+            # DISABLED: This would require an API key for full functionality
+            # This was creating fake/placeholder data that adds noise
+            # TODO: Implement proper OTX API integration with real API key
+            self.logger.debug("AlienVault OTX integration disabled - requires API key for real functionality")
+            return None
             
         except Exception as e:
             self.logger.error(f"Error querying AlienVault OTX: {e}")
