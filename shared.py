@@ -428,6 +428,11 @@ class SharedData:
         self.new_target_ips = []
         self.lost_target_ips = []
         self.last_sync_timestamp = 0.0
+        self.imagegen = None  # Initialize imagegen variable
+        self.x_center = 0  # Initialize x_center for image positioning
+        self.y_bottom = 0  # Initialize y_bottom for image positioning
+        self.x_center1 = 0  # Alternative positioning
+        self.y_bottom1 = 0  # Alternative positioning
 
     def delete_webconsolelog(self):
             """Delete the web console log file."""
@@ -731,7 +736,7 @@ class SharedData:
                     self.imagegen = None
         except Exception as e:
             logger.error(f"Error updating image randomizer: {e}")
-            raise
+            self.imagegen = None
 
     def wrap_text(self, text, font, max_width):
         """Wrap text to fit within a specified width when rendered."""

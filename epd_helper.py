@@ -66,3 +66,21 @@ class EPDHelper:
         except Exception as e:
             logger.error(f"Error clearing EPD: {e}")
             raise
+
+    def display_full(self, image):
+        """Display image on EPD using full update."""
+        try:
+            self.epd.display(self.epd.getbuffer(image))
+            logger.info("Full display update complete.")
+        except Exception as e:
+            logger.error(f"Error during full display update: {e}")
+            raise
+
+    def sleep(self):
+        """Put EPD to sleep mode."""
+        try:
+            self.epd.sleep()
+            logger.info("EPD sleep mode activated.")
+        except Exception as e:
+            logger.error(f"Error putting EPD to sleep: {e}")
+            raise
