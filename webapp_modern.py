@@ -243,8 +243,7 @@ def update_netkb_entry(ip, hostname, mac, is_alive):
             if ip in existing_ips:
                 if mac_to_store:
                     row['MAC Address'] = mac_to_store
-                elif is_alive and not MAC_REGEX.match(row.get('MAC Address', '') or ''):
-                    row['MAC Address'] = build_pseudo_mac_from_ip(ip)
+                # Don't generate pseudo MAC - let ARP cache provide real MAC addresses
 
                 if hostname:
                     existing_hostnames = [h.strip() for h in row.get('Hostnames', '').split(';') if h.strip()]
@@ -261,9 +260,8 @@ def update_netkb_entry(ip, hostname, mac, is_alive):
             new_row['Hostnames'] = hostname or ''
             if mac_to_store:
                 new_row['MAC Address'] = mac_to_store
-            elif is_alive:
-                new_row['MAC Address'] = build_pseudo_mac_from_ip(ip)
             else:
+                # Don't generate pseudo MAC - let ARP cache provide real MAC addresses
                 new_row['MAC Address'] = ''
             new_row['Alive'] = alive_value
             new_row['Ports'] = ''
@@ -923,6 +921,53 @@ def update_wifi_network_data():
 
         for ip in stale_hosts:
             existing_data.pop(ip, None)
+
+        # Update alive status based on current ARP cache data
+        current_time = datetime.now().isoformat()
+        arp_hosts = network_scan_cache.get('arp_hosts', {})
+        
+        for ip, data in existing_data.items():
+            # Update alive status based on ARP cache
+            if ip in arp_hosts:
+                data['alive'] = True
+                data['last_seen'] = current_time
+                # Update MAC if we have a better one from ARP
+                arp_mac = arp_hosts[ip].get('mac', '')
+                if arp_mac and (not data.get('mac') or data['mac'] in ['', 'Unknown', '00:00:00:00:00:00'] or 
+                               data['mac'].startswith('00:00:c0:a8:01:')):  # Replace pseudo MACs
+                    data['mac'] = arp_mac
+                    # Also update NetKB database with real MAC
+                    try:
+                        arp_hostname = arp_hosts[ip].get('hostname', data.get('hostname', ''))
+                        update_netkb_entry(ip, arp_hostname, arp_mac, True)
+                    except Exception as e:
+                        logger.debug(f"Could not update NetKB with real MAC for {ip}: {e}")
+            # If device was seen recently but not in ARP, keep it as alive for a grace period
+            elif data.get('alive', False):
+                try:
+                    last_seen_dt = datetime.fromisoformat(data.get('last_seen', current_time))
+                    # Grace period of 30 minutes for devices not in ARP
+                    grace_cutoff = datetime.now() - timedelta(minutes=30)
+                    if last_seen_dt < grace_cutoff:
+                        data['alive'] = False
+                except Exception:
+                    pass
+
+        # Add new devices discovered via ARP that aren't in our data yet
+        for ip, arp_data in arp_hosts.items():
+            if ip not in existing_data:
+                existing_data[ip] = {
+                    'hostname': arp_data.get('hostname', ''),
+                    'alive': True,
+                    'mac': arp_data.get('mac', ''),
+                    'ports': set(),
+                    'last_seen': current_time
+                }
+                # Add to NetKB database as well
+                try:
+                    update_netkb_entry(ip, arp_data.get('hostname', ''), arp_data.get('mac', ''), True)
+                except Exception as e:
+                    logger.debug(f"Could not add new ARP discovery to NetKB for {ip}: {e}")
 
         # Prepare aggregated counts from persisted data
         aggregated_host_count = 0
@@ -5239,6 +5284,12 @@ def background_arp_scan_loop():
                         update_netkb_entry(ip, data.get('hostname', ''), data.get('mac', ''), True)
                     except Exception as e:
                         logger.error(f"Error updating netkb for {ip}: {e}")
+                
+                # Update WiFi network data to sync ARP discoveries
+                try:
+                    update_wifi_network_data()
+                except Exception as e:
+                    logger.error(f"Error updating WiFi network data from ARP scan: {e}")
                 
                 # Emit real-time update to connected clients
                 if clients_connected > 0:
