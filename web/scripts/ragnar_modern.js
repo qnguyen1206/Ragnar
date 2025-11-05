@@ -4719,6 +4719,11 @@ window.closeVulnerabilityModal = closeVulnerabilityModal;
 
 // Load threat intelligence data when tab is shown
 async function loadThreatIntelData() {
+    // Only load threat intel data if we're on the threat-intel tab
+    if (currentTab !== 'threat-intel') {
+        return;
+    }
+    
     try {
         // Load grouped vulnerabilities
         const response = await fetch('/api/vulnerabilities/grouped');
