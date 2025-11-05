@@ -249,7 +249,12 @@ class Display:
                     self.manual_mode_txt = "M"
                 else:
                     self.manual_mode_txt = "A"
-                self.shared_data.wifi_connected = self.is_wifi_connected()
+                
+                # Check WiFi connectivity with detailed logging
+                wifi_connected = self.is_wifi_connected()
+                self.shared_data.wifi_connected = wifi_connected
+                logger.info(f"[DISPLAY] WiFi status check: connected={wifi_connected}")
+                
                 self.shared_data.ap_mode_active = self.is_ap_mode_active()
                 self.shared_data.ap_client_count = self.get_ap_client_count() if self.shared_data.ap_mode_active else 0
                 self.shared_data.usb_active = self.is_usb_connected()
@@ -257,6 +262,7 @@ class Display:
                 # Update Wi-Fi/AP status text for display
                 wifi_status_text = self.get_wifi_status_text()
                 self.shared_data.ragnarstatustext2 = wifi_status_text
+                logger.info(f"[DISPLAY] WiFi status text: '{wifi_status_text}'")
                 
                 self.get_open_files()
 
@@ -290,14 +296,35 @@ class Display:
     # # #         return False
 
     def is_wifi_connected(self):
-        """Check if WiFi is connected by checking the current SSID."""
+        """Check if WiFi is connected by checking the current SSID and network connectivity."""
         try:
+            # Method 1: Try iwgetid first
             result = subprocess.Popen(['iwgetid', '-r'], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
             ssid, error = result.communicate()
-            if result.returncode != 0:
-                logger.error(f"Error executing 'iwgetid -r': {error}")
-                return False
-            return bool(ssid.strip())
+            if result.returncode == 0 and ssid.strip():
+                logger.debug(f"WiFi connected via iwgetid: SSID={ssid.strip()}")
+                return True
+            
+            # Method 2: Check if we have an active network interface with IP
+            result = subprocess.Popen(['ip', 'route', 'get', '8.8.8.8'], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+            route_output, error = result.communicate()
+            if result.returncode == 0 and 'via' in route_output:
+                logger.debug(f"WiFi connected via ip route check")
+                return True
+            
+            # Method 3: Check for wlan interface with IP
+            result = subprocess.Popen(['ip', 'addr', 'show'], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+            addr_output, error = result.communicate()
+            if result.returncode == 0:
+                # Look for wlan interfaces with inet addresses
+                for line in addr_output.split('\n'):
+                    if ('wlan' in line and 'state UP' in line) or ('inet ' in line and 'scope global' in line and ('wlan' in addr_output)):
+                        logger.debug(f"WiFi connected via interface check")
+                        return True
+            
+            logger.debug(f"WiFi not detected by any method")
+            return False
+            
         except Exception as e:
             logger.error(f"Error checking WiFi status: {e}")
             return False
