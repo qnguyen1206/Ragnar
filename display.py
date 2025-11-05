@@ -21,6 +21,7 @@ import glob
 import logging
 import random
 import sys
+import csv
 from PIL import Image, ImageDraw
 from init_shared import shared_data  
 from comment import Commentaireia
@@ -171,6 +172,11 @@ class Display:
         """Update the shared data with the latest system information."""
         with self.semaphore:
             try:
+                # Create livestatus file if it doesn't exist
+                if not os.path.exists(self.shared_data.livestatusfile):
+                    logger.info(f"Creating missing livestatus file: {self.shared_data.livestatusfile}")
+                    self.shared_data.create_livestatusfile()
+                
                 with open(self.shared_data.livestatusfile, 'r') as file:
                     livestatus_df = pd.read_csv(file)
                     
