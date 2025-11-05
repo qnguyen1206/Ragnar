@@ -3514,6 +3514,55 @@ def reboot_system():
 # WI-FI MANAGEMENT ENDPOINTS
 # ============================================================================
 
+@app.route('/api/wifi/interfaces')
+def get_wifi_interfaces():
+    """Get available Wi-Fi interfaces"""
+    try:
+        interfaces = []
+        
+        # Try to get interfaces from system
+        try:
+            result = subprocess.run(['ip', 'link', 'show'], capture_output=True, text=True, timeout=5)
+            if result.returncode == 0:
+                for line in result.stdout.split('\n'):
+                    # Look for wireless interfaces (wlan, wlp, etc.)
+                    if re.search(r'^\d+:\s+(wlan\d+|wlp\w+|wlx\w+)', line):
+                        match = re.search(r'^\d+:\s+(\S+):', line)
+                        if match:
+                            interface_name = match.group(1)
+                            # Check if interface is up
+                            state_match = re.search(r'state\s+(\w+)', line)
+                            state = state_match.group(1) if state_match else 'UNKNOWN'
+                            
+                            interfaces.append({
+                                'name': interface_name,
+                                'state': state,
+                                'is_default': interface_name == 'wlan0'
+                            })
+        except Exception as e:
+            logger.warning(f"Failed to get interfaces via ip command: {e}")
+            
+        # If no interfaces found, add default
+        if not interfaces:
+            interfaces.append({
+                'name': 'wlan0',
+                'state': 'UNKNOWN',
+                'is_default': True
+            })
+        
+        return jsonify({
+            'success': True,
+            'interfaces': interfaces
+        })
+        
+    except Exception as e:
+        logger.error(f"Error getting Wi-Fi interfaces: {e}")
+        return jsonify({
+            'success': False,
+            'error': str(e),
+            'interfaces': [{'name': 'wlan0', 'state': 'UNKNOWN', 'is_default': True}]
+        })
+
 @app.route('/api/wifi/status')
 def get_wifi_status():
     """Get Wi-Fi manager status"""

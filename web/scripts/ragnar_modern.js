@@ -1587,6 +1587,9 @@ async function loadConfigData() {
         // Display current profile if set
         displayCurrentProfile(config);
         
+        // Load Wi-Fi interfaces
+        await loadWifiInterfaces();
+        
         // Also check for updates when loading config tab
         checkForUpdates();
     } catch (error) {
@@ -2125,6 +2128,398 @@ function updateWifiStatus(message, type = '') {
     // This function can be enhanced to show status messages in a notification area
     // For now, we'll use console messages and update the UI elements
     addConsoleMessage(message, type === 'error' ? 'error' : type === 'ap-mode' ? 'warning' : 'info');
+}
+
+// ============================================================================
+// WI-FI MANAGEMENT FUNCTIONS
+// ============================================================================
+
+let currentWifiNetworks = [];
+let selectedWifiNetwork = null;
+
+async function loadWifiInterfaces() {
+    try {
+        const data = await fetchAPI('/api/wifi/interfaces');
+        const interfaceSelect = document.getElementById('wifi-interface-select');
+        
+        if (!interfaceSelect) return;
+        
+        if (data.success && data.interfaces && data.interfaces.length > 0) {
+            interfaceSelect.innerHTML = '';
+            data.interfaces.forEach(iface => {
+                const option = document.createElement('option');
+                option.value = iface.name;
+                option.textContent = `${iface.name}${iface.is_default ? ' (default)' : ''} - ${iface.state}`;
+                if (iface.is_default) {
+                    option.selected = true;
+                }
+                interfaceSelect.appendChild(option);
+            });
+            console.log('Loaded Wi-Fi interfaces:', data.interfaces);
+        } else {
+            interfaceSelect.innerHTML = '<option value="wlan0">wlan0 (default)</option>';
+        }
+    } catch (error) {
+        console.error('Error loading Wi-Fi interfaces:', error);
+        const interfaceSelect = document.getElementById('wifi-interface-select');
+        if (interfaceSelect) {
+            interfaceSelect.innerHTML = '<option value="wlan0">wlan0 (default)</option>';
+        }
+    }
+}
+
+async function scanWifiNetworks() {
+    const scanBtn = document.getElementById('scan-wifi-btn');
+    const networksList = document.getElementById('wifi-networks-list');
+    
+    if (!networksList) return;
+    
+    try {
+        // Disable button and show scanning message
+        if (scanBtn) {
+            scanBtn.disabled = true;
+            scanBtn.innerHTML = `
+                <svg class="w-4 h-4 inline mr-1 animate-spin" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"></path>
+                </svg>
+                Scanning...
+            `;
+        }
+        
+        networksList.innerHTML = `
+            <div class="text-center text-gray-400 py-8">
+                <svg class="w-8 h-8 inline animate-spin mb-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"></path>
+                </svg>
+                <p>Scanning for Wi-Fi networks...</p>
+            </div>
+        `;
+        
+        // Trigger scan
+        await postAPI('/api/wifi/scan', {});
+        
+        // Wait a bit for scan to complete
+        await new Promise(resolve => setTimeout(resolve, 3000));
+        
+        // Get networks
+        const data = await fetchAPI('/api/wifi/networks');
+        
+        console.log('Wi-Fi networks data:', data);
+        
+        // Display networks
+        displayWifiNetworks(data);
+        
+    } catch (error) {
+        console.error('Error scanning Wi-Fi networks:', error);
+        networksList.innerHTML = `
+            <div class="text-center text-red-400 py-8">
+                <p>Error scanning for networks</p>
+                <p class="text-sm mt-2">${error.message}</p>
+            </div>
+        `;
+    } finally {
+        // Re-enable button
+        if (scanBtn) {
+            scanBtn.disabled = false;
+            scanBtn.innerHTML = `
+                <svg class="w-4 h-4 inline mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"></path>
+                </svg>
+                Scan Networks
+            `;
+        }
+    }
+}
+
+function displayWifiNetworks(data) {
+    const networksList = document.getElementById('wifi-networks-list');
+    if (!networksList) return;
+    
+    let networks = [];
+    let knownNetworks = [];
+    
+    // Extract networks from response
+    if (data.available) {
+        networks = data.available;
+    } else if (data.networks) {
+        networks = data.networks;
+    }
+    
+    // Extract known networks
+    if (data.known) {
+        knownNetworks = data.known.map(n => n.ssid || n);
+    }
+    
+    console.log('Displaying networks:', networks);
+    console.log('Known networks:', knownNetworks);
+    
+    if (!networks || networks.length === 0) {
+        networksList.innerHTML = `
+            <div class="text-center text-gray-400 py-8">
+                <p>No Wi-Fi networks found</p>
+                <p class="text-sm mt-2">Try scanning again or check your Wi-Fi interface</p>
+            </div>
+        `;
+        return;
+    }
+    
+    // Sort networks by signal strength
+    networks.sort((a, b) => (b.signal || 0) - (a.signal || 0));
+    
+    // Store for later use
+    currentWifiNetworks = networks;
+    
+    // Build network list HTML
+    networksList.innerHTML = networks.map(network => {
+        const ssid = network.ssid || network.SSID || 'Unknown Network';
+        const signal = network.signal || 0;
+        const isSecure = network.security !== 'open' && network.security !== 'Open';
+        const isKnown = knownNetworks.includes(ssid);
+        const isCurrent = network.in_use || false;
+        
+        // Determine signal icon
+        let signalIcon = '';
+        if (signal >= 70) {
+            signalIcon = `<svg class="w-5 h-5 text-green-400" fill="currentColor" viewBox="0 0 20 20">
+                <path d="M2 11a1 1 0 011-1h2a1 1 0 011 1v5a1 1 0 01-1 1H3a1 1 0 01-1-1v-5zM8 7a1 1 0 011-1h2a1 1 0 011 1v9a1 1 0 01-1 1H9a1 1 0 01-1-1V7zM14 4a1 1 0 011-1h2a1 1 0 011 1v12a1 1 0 01-1 1h-2a1 1 0 01-1-1V4z"></path>
+            </svg>`;
+        } else if (signal >= 50) {
+            signalIcon = `<svg class="w-5 h-5 text-yellow-400" fill="currentColor" viewBox="0 0 20 20">
+                <path d="M2 11a1 1 0 011-1h2a1 1 0 011 1v5a1 1 0 01-1 1H3a1 1 0 01-1-1v-5zM8 7a1 1 0 011-1h2a1 1 0 011 1v9a1 1 0 01-1 1H9a1 1 0 01-1-1V7z"></path>
+            </svg>`;
+        } else {
+            signalIcon = `<svg class="w-5 h-5 text-red-400" fill="currentColor" viewBox="0 0 20 20">
+                <path d="M2 11a1 1 0 011-1h2a1 1 0 011 1v5a1 1 0 01-1 1H3a1 1 0 01-1-1v-5z"></path>
+            </svg>`;
+        }
+        
+        // Security icon
+        const securityIcon = isSecure ? `
+            <svg class="w-4 h-4 text-gray-400" fill="currentColor" viewBox="0 0 20 20">
+                <path fill-rule="evenodd" d="M5 9V7a5 5 0 0110 0v2a2 2 0 012 2v5a2 2 0 01-2 2H5a2 2 0 01-2-2v-5a2 2 0 012-2zm8-2v2H7V7a3 3 0 016 0z" clip-rule="evenodd"></path>
+            </svg>
+        ` : '';
+        
+        // Badge for known/current network
+        let badge = '';
+        if (isCurrent) {
+            badge = '<span class="text-xs px-2 py-1 rounded bg-green-600 text-white ml-2">Connected</span>';
+        } else if (isKnown) {
+            badge = '<span class="text-xs px-2 py-1 rounded bg-blue-600 text-white ml-2">Saved</span>';
+        }
+        
+        return `
+            <div class="bg-slate-800 rounded-lg p-3 hover:bg-slate-700 transition-colors cursor-pointer"
+                 onclick="openWifiConnectModal('${ssid.replace(/'/g, "\\'")}', ${isKnown})">
+                <div class="flex items-center justify-between">
+                    <div class="flex items-center space-x-3 flex-1">
+                        ${signalIcon}
+                        <div class="flex-1">
+                            <div class="flex items-center">
+                                <span class="font-medium">${ssid}</span>
+                                ${badge}
+                            </div>
+                            <div class="text-xs text-gray-400 mt-1">
+                                ${isSecure ? 'Secured' : 'Open'} • Signal: ${signal}%
+                            </div>
+                        </div>
+                    </div>
+                    <div class="flex items-center space-x-2">
+                        ${securityIcon}
+                        <svg class="w-5 h-5 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"></path>
+                        </svg>
+                    </div>
+                </div>
+            </div>
+        `;
+    }).join('');
+}
+
+function openWifiConnectModal(ssid, isKnown) {
+    const modal = document.getElementById('wifi-connect-modal');
+    const ssidInput = document.getElementById('wifi-connect-ssid');
+    const passwordSection = document.getElementById('wifi-password-section');
+    const passwordInput = document.getElementById('wifi-connect-password');
+    const statusDiv = document.getElementById('wifi-connect-status');
+    
+    if (!modal || !ssidInput) return;
+    
+    // Store selected network
+    selectedWifiNetwork = { ssid, isKnown };
+    
+    // Set SSID
+    ssidInput.value = ssid;
+    
+    // Clear password
+    if (passwordInput) {
+        passwordInput.value = '';
+    }
+    
+    // Hide/show password section based on whether network is known
+    if (passwordSection) {
+        if (isKnown) {
+            passwordSection.style.display = 'none';
+        } else {
+            passwordSection.style.display = 'block';
+        }
+    }
+    
+    // Hide status
+    if (statusDiv) {
+        statusDiv.classList.add('hidden');
+    }
+    
+    // Show modal
+    modal.classList.remove('hidden');
+    modal.classList.add('flex');
+}
+
+function closeWifiConnectModal() {
+    const modal = document.getElementById('wifi-connect-modal');
+    if (modal) {
+        modal.classList.add('hidden');
+        modal.classList.remove('flex');
+    }
+    selectedWifiNetwork = null;
+}
+
+function togglePasswordVisibility() {
+    const passwordInput = document.getElementById('wifi-connect-password');
+    const eyeIcon = document.getElementById('password-eye-icon');
+    
+    if (!passwordInput) return;
+    
+    if (passwordInput.type === 'password') {
+        passwordInput.type = 'text';
+        if (eyeIcon) {
+            eyeIcon.innerHTML = `
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13.875 18.825A10.05 10.05 0 0112 19c-4.478 0-8.268-2.943-9.543-7a9.97 9.97 0 011.563-3.029m5.858.908a3 3 0 114.243 4.243M9.878 9.878l4.242 4.242M9.88 9.88l-3.29-3.29m7.532 7.532l3.29 3.29M3 3l3.59 3.59m0 0A9.953 9.953 0 0112 5c4.478 0 8.268 2.943 9.543 7a10.025 10.025 0 01-4.132 5.411m0 0L21 21"></path>
+            `;
+        }
+    } else {
+        passwordInput.type = 'password';
+        if (eyeIcon) {
+            eyeIcon.innerHTML = `
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"></path>
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z"></path>
+            `;
+        }
+    }
+}
+
+async function connectToWifiNetwork() {
+    if (!selectedWifiNetwork) return;
+    
+    const passwordInput = document.getElementById('wifi-connect-password');
+    const saveCheckbox = document.getElementById('wifi-save-network');
+    const statusDiv = document.getElementById('wifi-connect-status');
+    const submitBtn = document.getElementById('wifi-connect-submit-btn');
+    
+    const ssid = selectedWifiNetwork.ssid;
+    const isKnown = selectedWifiNetwork.isKnown;
+    const password = isKnown ? null : (passwordInput ? passwordInput.value : '');
+    const saveNetwork = saveCheckbox ? saveCheckbox.checked : true;
+    
+    // Validate password for new networks
+    if (!isKnown && !password) {
+        if (statusDiv) {
+            statusDiv.classList.remove('hidden');
+            statusDiv.innerHTML = '<div class="bg-red-600 rounded p-3 text-sm">Please enter a password</div>';
+        }
+        return;
+    }
+    
+    try {
+        // Disable submit button
+        if (submitBtn) {
+            submitBtn.disabled = true;
+            submitBtn.innerHTML = `
+                <svg class="w-4 h-4 inline mr-2 animate-spin" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"></path>
+                </svg>
+                Connecting...
+            `;
+        }
+        
+        // Show connecting status
+        if (statusDiv) {
+            statusDiv.classList.remove('hidden');
+            statusDiv.innerHTML = `
+                <div class="bg-blue-600 rounded p-3 text-sm">
+                    <svg class="w-4 h-4 inline mr-2 animate-spin" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"></path>
+                    </svg>
+                    Connecting to ${ssid}...
+                </div>
+            `;
+        }
+        
+        // Connect to network
+        const data = await postAPI('/api/wifi/connect', {
+            ssid: ssid,
+            password: password,
+            save: saveNetwork
+        });
+        
+        if (data.success) {
+            // Success
+            if (statusDiv) {
+                statusDiv.innerHTML = `
+                    <div class="bg-green-600 rounded p-3 text-sm">
+                        <svg class="w-4 h-4 inline mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"></path>
+                        </svg>
+                        ${data.message || 'Connected successfully!'}
+                    </div>
+                `;
+            }
+            
+            addConsoleMessage(`Connected to Wi-Fi: ${ssid}`, 'success');
+            
+            // Close modal after 2 seconds
+            setTimeout(() => {
+                closeWifiConnectModal();
+                refreshWifiStatus();
+            }, 2000);
+            
+        } else {
+            // Failed
+            if (statusDiv) {
+                statusDiv.innerHTML = `
+                    <div class="bg-red-600 rounded p-3 text-sm">
+                        <svg class="w-4 h-4 inline mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"></path>
+                        </svg>
+                        ${data.message || 'Connection failed'}
+                    </div>
+                `;
+            }
+            
+            addConsoleMessage(`Failed to connect to Wi-Fi: ${ssid}`, 'error');
+        }
+        
+    } catch (error) {
+        console.error('Error connecting to Wi-Fi:', error);
+        
+        if (statusDiv) {
+            statusDiv.classList.remove('hidden');
+            statusDiv.innerHTML = `
+                <div class="bg-red-600 rounded p-3 text-sm">
+                    Error: ${error.message}
+                </div>
+            `;
+        }
+        
+        addConsoleMessage(`Error connecting to Wi-Fi: ${error.message}`, 'error');
+        
+    } finally {
+        // Re-enable submit button
+        if (submitBtn) {
+            submitBtn.disabled = false;
+            submitBtn.innerHTML = 'Connect';
+        }
+    }
 }
 
 async function loadConsoleLogs() {
@@ -4165,6 +4560,14 @@ window.stopOrchestrator = stopOrchestrator;
 window.triggerNetworkScan = triggerNetworkScan;
 window.triggerVulnScan = triggerVulnScan;
 window.refreshDashboard = refreshDashboard;
+
+// Wi-Fi Management Functions
+window.loadWifiInterfaces = loadWifiInterfaces;
+window.scanWifiNetworks = scanWifiNetworks;
+window.openWifiConnectModal = openWifiConnectModal;
+window.closeWifiConnectModal = closeWifiConnectModal;
+window.togglePasswordVisibility = togglePasswordVisibility;
+window.connectToWifiNetwork = connectToWifiNetwork;
 
 // File Management Functions
 window.loadFiles = loadFiles;

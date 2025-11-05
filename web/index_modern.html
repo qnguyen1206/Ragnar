@@ -1413,6 +1413,102 @@
                     </div>
                 </div>
                 
+                <!-- Wi-Fi Connection Section -->
+                <div class="mb-8">
+                    <h3 class="text-xl font-semibold mb-4 text-Ragnar-400">Wi-Fi Connection</h3>
+                    
+                    <!-- Wi-Fi Interface Selection -->
+                    <div class="glass rounded-lg p-4 mb-4">
+                        <label class="block text-sm font-medium mb-2">Wi-Fi Interface</label>
+                        <select id="wifi-interface-select" 
+                                class="w-full bg-slate-800 border border-slate-600 rounded px-3 py-2 text-white focus:outline-none focus:border-Ragnar-500">
+                            <option value="">Loading interfaces...</option>
+                        </select>
+                    </div>
+                    
+                    <!-- Available Networks -->
+                    <div class="glass rounded-lg p-4">
+                        <div class="flex items-center justify-between mb-4">
+                            <h4 class="font-medium">Available Networks</h4>
+                            <button onclick="scanWifiNetworks()" 
+                                    id="scan-wifi-btn"
+                                    class="bg-Ragnar-600 hover:bg-Ragnar-700 text-white px-4 py-2 rounded transition-colors text-sm">
+                                <svg class="w-4 h-4 inline mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"></path>
+                                </svg>
+                                Scan Networks
+                            </button>
+                        </div>
+                        
+                        <!-- Networks List -->
+                        <div id="wifi-networks-list" class="space-y-2 max-h-96 overflow-y-auto scrollbar-thin">
+                            <div class="text-center text-gray-400 py-8">
+                                Click "Scan Networks" to find available Wi-Fi networks
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                
+                <!-- Wi-Fi Connection Modal -->
+                <div id="wifi-connect-modal" class="fixed inset-0 bg-black bg-opacity-80 hidden items-center justify-center z-50">
+                    <div class="glass rounded-xl p-6 max-w-md w-full mx-4">
+                        <div class="flex items-center justify-between mb-4">
+                            <h3 class="text-xl font-bold">Connect to Wi-Fi</h3>
+                            <button onclick="closeWifiConnectModal()" class="text-gray-400 hover:text-white">
+                                <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"></path>
+                                </svg>
+                            </button>
+                        </div>
+                        
+                        <div class="mb-4">
+                            <label class="block text-sm font-medium mb-2">Network Name (SSID)</label>
+                            <input type="text" id="wifi-connect-ssid" readonly
+                                   class="w-full bg-slate-700 border border-slate-600 rounded px-3 py-2 text-white">
+                        </div>
+                        
+                        <div class="mb-4" id="wifi-password-section">
+                            <label class="block text-sm font-medium mb-2">Password</label>
+                            <div class="relative">
+                                <input type="password" id="wifi-connect-password"
+                                       class="w-full bg-slate-700 border border-slate-600 rounded px-3 py-2 text-white pr-10"
+                                       placeholder="Enter Wi-Fi password">
+                                <button onclick="togglePasswordVisibility()" 
+                                        class="absolute right-2 top-1/2 transform -translate-y-1/2 text-gray-400 hover:text-white">
+                                    <svg id="password-eye-icon" class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"></path>
+                                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z"></path>
+                                    </svg>
+                                </button>
+                            </div>
+                        </div>
+                        
+                        <div class="mb-4">
+                            <label class="flex items-center space-x-2">
+                                <input type="checkbox" id="wifi-save-network" checked
+                                       class="form-checkbox h-4 w-4 text-Ragnar-600 bg-slate-700 border-slate-600 rounded">
+                                <span class="text-sm">Save network for auto-connect</span>
+                            </label>
+                        </div>
+                        
+                        <div id="wifi-connect-status" class="mb-4 hidden">
+                            <div class="bg-slate-700 rounded p-3 text-sm"></div>
+                        </div>
+                        
+                        <div class="flex space-x-3">
+                            <button onclick="closeWifiConnectModal()" 
+                                    class="flex-1 bg-gray-600 hover:bg-gray-700 text-white py-2 px-4 rounded transition-colors">
+                                Cancel
+                            </button>
+                            <button onclick="connectToWifiNetwork()" 
+                                    id="wifi-connect-submit-btn"
+                                    class="flex-1 bg-Ragnar-600 hover:bg-Ragnar-700 text-white py-2 px-4 rounded transition-colors">
+                                Connect
+                            </button>
+                        </div>
+                    </div>
+                </div>
+                
                 <!-- Hardware Profile Configuration Section -->
                 <div class="mb-8">
                     <h3 class="text-xl font-semibold mb-4 text-Ragnar-400">Hardware Resource Configuration</h3>
