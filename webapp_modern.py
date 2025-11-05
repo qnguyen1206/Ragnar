@@ -1403,10 +1403,13 @@ def update_config():
         if not data:
             return jsonify({'error': 'No data provided'}), 400
         
-        # Update configuration
+        # Update configuration (allow new keys to be added)
         for key, value in data.items():
-            if key in shared_data.config:
+            # Skip private/internal keys that start with __
+            if not key.startswith('__'):
                 shared_data.config[key] = value
+                # Also set as attribute on shared_data for immediate access
+                setattr(shared_data, key, value)
         
         # Save configuration
         shared_data.save_config()
