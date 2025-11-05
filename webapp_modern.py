@@ -1160,20 +1160,30 @@ def read_wifi_network_data():
                                 except (ValueError, TypeError):
                                     continue
                         
-                        # Apply cleanup logic for enhanced format
+                        # Apply robust 5-ping failure cleanup logic
                         should_keep = True
-                        if most_recent_activity and most_recent_activity < cutoff_time:
-                            # Entry is older than retention period
-                            if failed_ping_count >= max_failed_pings:
-                                # Device has been failing pings and is old - remove it
-                                logger.debug(f"Removing legacy entry {ip} (failed pings: {failed_ping_count}, last activity: {most_recent_activity})")
-                                should_keep = False
-                                cleanup_needed = True
-                            elif not last_successful_ping:
-                                # No successful ping recorded and old - likely legacy data
-                                logger.debug(f"Removing legacy entry {ip} (no successful pings, last activity: {most_recent_activity})")
-                                should_keep = False
-                                cleanup_needed = True
+                        cleanup_reason = None
+                        
+                        # RULE 1: Remove devices that have failed 5+ consecutive pings (regardless of age)
+                        if failed_ping_count >= max_failed_pings:
+                            should_keep = False
+                            cleanup_reason = f"exceeded max failed pings ({failed_ping_count}>={max_failed_pings})"
+                            cleanup_needed = True
+                        
+                        # RULE 2: Remove very old devices that haven't been seen for 8+ hours (regardless of ping status)
+                        elif most_recent_activity and most_recent_activity < cutoff_time:
+                            should_keep = False
+                            cleanup_reason = f"too old (last activity: {most_recent_activity}, cutoff: {cutoff_time})"
+                            cleanup_needed = True
+                        
+                        # RULE 3: Remove devices with no successful ping record and no recent activity
+                        elif not last_successful_ping and most_recent_activity and most_recent_activity < cutoff_time:
+                            should_keep = False
+                            cleanup_reason = f"no successful pings and old (last activity: {most_recent_activity})"
+                            cleanup_needed = True
+                        
+                        if not should_keep:
+                            logger.info(f"[ROBUST CLEANUP] Removing {ip}: {cleanup_reason}")
                         
                         if should_keep:
                             network_entry = {
@@ -6783,7 +6793,7 @@ def get_dashboard_stats():
         active_hosts_count = 0
         total_hosts_count = 0
         
-        # Count from network data using failure counter logic
+        # Count from network data using robust failure tracking (PROPER 5-ping rule)
         for entry in network_data:
             ip = entry.get('IPs', '').strip()
             if ip and ip not in processed_ips:
@@ -6797,21 +6807,32 @@ def get_dashboard_stats():
                 elif not isinstance(failed_ping_count, int):
                     failed_ping_count = 0
                 
-                # Check if host is in ARP cache (recent discovery)
-                is_alive_in_arp = ip in recent_arp_data
+                # Get alive status
+                alive_status = entry.get('Alive', 0)
+                if isinstance(alive_status, str) and alive_status.isdigit():
+                    alive_status = int(alive_status)
+                elif not isinstance(alive_status, int):
+                    alive_status = 0
                 
-                # Target is considered "active" if:
-                # 1. It has fewer than max_failed_pings consecutive failures, OR
-                # 2. It's currently visible in ARP cache (recent discovery)
-                if failed_ping_count < max_failed_pings or is_alive_in_arp:
+                # TARGET IS ACTIVE IF:
+                # 1. It has fewer than max_failed_pings consecutive failures (regardless of current ping result)
+                # 2. OR it's currently responding (Alive=1) even if it had some failures
+                is_currently_alive = alive_status == 1
+                has_not_exceeded_failure_limit = failed_ping_count < max_failed_pings
+                
+                if has_not_exceeded_failure_limit or is_currently_alive:
                     active_hosts_count += 1
+                    logger.debug(f"[ROBUST COUNT] {ip}: ACTIVE (failures={failed_ping_count}, alive={is_currently_alive})")
+                else:
+                    logger.debug(f"[ROBUST COUNT] {ip}: INACTIVE (failures={failed_ping_count}, alive={is_currently_alive})")
         
-        # Count from recent ARP discoveries that aren't in the file yet
+        # Count from recent ARP discoveries that aren't in the file yet (these are always active)
         for ip in recent_arp_data.keys():
             if ip not in processed_ips:
                 processed_ips.add(ip)
                 total_hosts_count += 1
-                active_hosts_count += 1  # New discoveries are always active
+                active_hosts_count += 1
+                logger.debug(f"[ROBUST COUNT] {ip}: NEW ARP DISCOVERY (always active)")
 
         total_hosts_count = len(processed_ips)
         
