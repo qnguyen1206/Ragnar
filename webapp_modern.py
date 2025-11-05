@@ -2159,6 +2159,26 @@ def get_verbose_debug_logs():
             'time_since_last_sync': time.time() - getattr(shared_data, 'last_sync_timestamp', 0) if hasattr(shared_data, 'last_sync_timestamp') else 'UNKNOWN'
         }
         
+        # === BACKGROUND THREAD HEALTH ===
+        debug_info['background_thread_health'] = {
+            'sync_thread': {
+                'last_run': background_thread_health.get('sync_last_run', 0),
+                'last_run_ago_seconds': time.time() - background_thread_health.get('sync_last_run', 0) if background_thread_health.get('sync_last_run', 0) > 0 else 'NEVER',
+                'alive': background_thread_health.get('sync_alive', False),
+                'status': '✅ HEALTHY' if background_thread_health.get('sync_alive', False) else '⚠️ POSSIBLY STUCK'
+            },
+            'arp_thread': {
+                'last_run': background_thread_health.get('arp_last_run', 0),
+                'last_run_ago_seconds': time.time() - background_thread_health.get('arp_last_run', 0) if background_thread_health.get('arp_last_run', 0) > 0 else 'NEVER',
+                'alive': background_thread_health.get('arp_alive', False),
+                'status': '✅ HEALTHY' if background_thread_health.get('arp_alive', False) else '⚠️ POSSIBLY STUCK'
+            },
+            'health_monitor': {
+                'enabled': True,
+                'check_interval_seconds': 15
+            }
+        }
+        
         # === FILE OPERATIONS DEBUGGING ===
         try:
             # Check key files
