@@ -243,8 +243,7 @@ def update_netkb_entry(ip, hostname, mac, is_alive):
             if ip in existing_ips:
                 if mac_to_store:
                     row['MAC Address'] = mac_to_store
-                elif is_alive and not MAC_REGEX.match(row.get('MAC Address', '') or ''):
-                    row['MAC Address'] = build_pseudo_mac_from_ip(ip)
+                # Don't generate pseudo MAC - let ARP cache provide real MAC addresses
 
                 if hostname:
                     existing_hostnames = [h.strip() for h in row.get('Hostnames', '').split(';') if h.strip()]
@@ -261,9 +260,8 @@ def update_netkb_entry(ip, hostname, mac, is_alive):
             new_row['Hostnames'] = hostname or ''
             if mac_to_store:
                 new_row['MAC Address'] = mac_to_store
-            elif is_alive:
-                new_row['MAC Address'] = build_pseudo_mac_from_ip(ip)
             else:
+                # Don't generate pseudo MAC - let ARP cache provide real MAC addresses
                 new_row['MAC Address'] = ''
             new_row['Alive'] = alive_value
             new_row['Ports'] = ''
@@ -394,19 +392,14 @@ def sync_all_counts():
             # Update WiFi-specific network data from scan results
             aggregated_network_stats = update_wifi_network_data()
             
-            # IMPORTANT: Merge ARP scan results to get LIVE host count
+            # IMPORTANT: Use ARP scan results to supplement but not override robust failure tracking
             arp_hosts = network_scan_cache.get('arp_hosts', {})
             if arp_hosts:
-                logger.debug(f"Merging {len(arp_hosts)} hosts from ARP cache into sync")
-                # Override aggregated stats with ARP data if available
-                if aggregated_network_stats:
-                    # Keep the total count, but update active count from ARP
-                    aggregated_network_stats['host_count'] = len(arp_hosts)
-                    aggregated_network_stats['inactive_host_count'] = max(
-                        aggregated_network_stats.get('total_host_count', 0) - len(arp_hosts), 0
-                    )
-                else:
-                    # Create stats from ARP data
+                logger.debug(f"Found {len(arp_hosts)} hosts in ARP cache for supplementation")
+                # Don't override aggregated_network_stats if it exists (it has robust failure tracking)
+                # Instead, use ARP data to supplement the count only if aggregated_network_stats is missing
+                if not aggregated_network_stats:
+                    # Create minimal stats from ARP data only if no other data is available
                     aggregated_network_stats = {
                         'host_count': len(arp_hosts),
                         'total_host_count': len(arp_hosts),
@@ -414,6 +407,12 @@ def sync_all_counts():
                         'port_count': 0,
                         'hosts': {}
                     }
+                    logger.debug(f"Created stats from ARP data only (no network stats available): {len(arp_hosts)} hosts")
+                else:
+                    # Keep the robust failure tracking data intact, don't override with ARP count
+                    logger.debug(f"Keeping existing network stats with robust failure tracking instead of overriding with ARP count")
+            else:
+                logger.debug("No ARP hosts available for supplementation")
 
             # Sync target and port counts from scan results
             scan_results_dir = getattr(shared_data, 'scan_results_dir', os.path.join('data', 'output', 'scan_results'))
@@ -515,12 +514,15 @@ def sync_all_counts():
 
             old_targets = shared_data.targetnbr
             old_ports = shared_data.portnbr
+            
+            # Initialize with defaults from CSV scan files
             aggregated_targets = len(unique_hosts)
             aggregated_ports = aggregated_ports_from_csv
             total_target_count = aggregated_targets
             inactive_target_count = 0
             current_snapshot = {ip: {'alive': True, 'ports': csv_host_ports.get(ip, set())} for ip in unique_hosts}
 
+            # PRIORITIZE aggregated_network_stats (robust failure tracking) over CSV data
             if aggregated_network_stats:
                 agg_host_count = aggregated_network_stats.get('host_count')
                 agg_total_host_count = aggregated_network_stats.get('total_host_count')
@@ -531,14 +533,18 @@ def sync_all_counts():
                 if hosts_snapshot:
                     current_snapshot = hosts_snapshot
 
+                # Use robust failure tracking counts if available
                 if agg_host_count is not None:
                     aggregated_targets = safe_int(agg_host_count)
+                    logger.info(f"[ROBUST TRACKING] Using active host count from WiFi network data: {aggregated_targets}")
                 if agg_total_host_count is not None:
                     total_target_count = safe_int(agg_total_host_count)
+                    logger.info(f"[ROBUST TRACKING] Using total host count from WiFi network data: {total_target_count}")
                 else:
                     total_target_count = aggregated_targets
                 if agg_inactive_count is not None:
                     inactive_target_count = safe_int(agg_inactive_count)
+                    logger.info(f"[ROBUST TRACKING] Using inactive host count from WiFi network data: {inactive_target_count}")
                 else:
                     inactive_target_count = max(total_target_count - aggregated_targets, 0)
                 if agg_port_count is not None:
@@ -685,7 +691,13 @@ def sync_all_counts():
             except Exception as e:
                 logger.warning(f"Could not update gamification stats: {e}")
 
-            logger.debug(f"Completed sync_all_counts() - Targets: {shared_data.targetnbr}, Ports: {shared_data.portnbr}, Vulns: {shared_data.vulnnbr}, Creds: {shared_data.crednbr}, Level: {shared_data.levelnbr}, Coins: {shared_data.coinnbr}")
+            logger.debug(f"Completed sync_all_counts() - Active Targets: {shared_data.targetnbr}, Total Targets: {shared_data.total_targetnbr}, Inactive Targets: {shared_data.inactive_targetnbr}, Ports: {shared_data.portnbr}, Vulns: {shared_data.vulnnbr}, Creds: {shared_data.crednbr}, Level: {shared_data.levelnbr}, Coins: {shared_data.coinnbr}")
+            
+            # Consistency check to prevent flickering
+            if shared_data.targetnbr > shared_data.total_targetnbr:
+                logger.warning(f"CONSISTENCY WARNING: Active targets ({shared_data.targetnbr}) > Total targets ({shared_data.total_targetnbr}). Adjusting total.")
+                shared_data.total_targetnbr = shared_data.targetnbr
+                shared_data.inactive_targetnbr = 0
 
         except Exception as e:
             logger.error(f"Error synchronizing all counts: {e}")
@@ -764,6 +776,49 @@ def get_wifi_specific_network_file():
     data_dir = os.path.join('data', 'network_data')
     os.makedirs(data_dir, exist_ok=True)
     return os.path.join(data_dir, f'network_{current_ssid}.csv')
+
+
+def check_and_handle_network_switch():
+    """Check if we've switched networks and clear old data if so"""
+    try:
+        current_ssid = get_current_wifi_ssid()
+        last_ssid_file = os.path.join('data', 'network_data', '.last_ssid')
+        
+        # Check if we have a record of the last SSID
+        last_ssid = None
+        if os.path.exists(last_ssid_file):
+            try:
+                with open(last_ssid_file, 'r', encoding='utf-8') as f:
+                    last_ssid = f.read().strip()
+            except Exception as e:
+                logger.debug(f"Error reading last SSID file: {e}")
+        
+        # If SSID has changed, clear old network data files
+        if last_ssid and last_ssid != current_ssid:
+            logger.info(f"Network switch detected: {last_ssid} -> {current_ssid}")
+            
+            # Clear old network data files
+            data_dir = os.path.join('data', 'network_data')
+            if os.path.exists(data_dir):
+                for filename in os.listdir(data_dir):
+                    if filename.startswith('network_') and filename.endswith('.csv'):
+                        old_file = os.path.join(data_dir, filename)
+                        try:
+                            os.remove(old_file)
+                            logger.info(f"Removed old network data file: {filename}")
+                        except Exception as e:
+                            logger.error(f"Error removing old network data file {filename}: {e}")
+        
+        # Update the last SSID record
+        try:
+            os.makedirs(os.path.dirname(last_ssid_file), exist_ok=True)
+            with open(last_ssid_file, 'w', encoding='utf-8') as f:
+                f.write(current_ssid)
+        except Exception as e:
+            logger.error(f"Error updating last SSID file: {e}")
+    
+    except Exception as e:
+        logger.error(f"Error checking network switch: {e}")
 
 
 def _is_ip_address(value):
@@ -847,7 +902,11 @@ def update_wifi_network_data():
                                     'alive': _normalize_alive_value(row[2] if len(row) > 2 else '1'),
                                     'mac': row[3] if len(row) > 3 else '',
                                     'ports': ports,
-                                    'last_seen': row[5] if len(row) > 5 else datetime.now().isoformat()
+                                    'last_seen': row[5] if len(row) > 5 else datetime.now().isoformat(),
+                                    # New fields for robust connectivity tracking (with backward compatibility)
+                                    'failed_ping_count': int(row[6]) if len(row) > 6 and row[6].isdigit() else 0,
+                                    'last_successful_ping': row[7] if len(row) > 7 else '',
+                                    'last_ping_attempt': row[8] if len(row) > 8 else ''
                                 }
             except Exception as e:
                 logger.debug(f"Could not read existing WiFi network file: {e}")
@@ -888,6 +947,9 @@ def update_wifi_network_data():
                                             existing_data[ip]['alive'] = alive
                                             existing_data[ip]['ports'].update(ports)
                                             existing_data[ip]['last_seen'] = current_time
+                                            # Reset failure counter on successful scan
+                                            existing_data[ip]['failed_ping_count'] = 0
+                                            existing_data[ip]['last_successful_ping'] = current_time
                                         else:
                                             # New entry
                                             existing_data[ip] = {
@@ -895,7 +957,10 @@ def update_wifi_network_data():
                                                 'alive': alive,
                                                 'mac': mac,
                                                 'ports': ports,
-                                                'last_seen': current_time
+                                                'last_seen': current_time,
+                                                'failed_ping_count': 0,
+                                                'last_successful_ping': current_time,
+                                                'last_ping_attempt': current_time
                                             }
                     except Exception as e:
                         logger.debug(f"Could not read scan result file {filepath}: {e}")
@@ -924,7 +989,69 @@ def update_wifi_network_data():
         for ip in stale_hosts:
             existing_data.pop(ip, None)
 
-        # Prepare aggregated counts from persisted data
+        # Update alive status based on current ARP cache data with robust connectivity tracking
+        current_time = datetime.now().isoformat()
+        arp_hosts = network_scan_cache.get('arp_hosts', {})
+        MAX_FAILED_PINGS = shared_data.config.get('network_max_failed_pings', 15)  # Changed to 15 for more stability
+        
+        for ip, data in existing_data.items():
+            # Initialize failure counter if not present
+            if 'failed_ping_count' not in data:
+                data['failed_ping_count'] = 0
+            
+            # Update alive status based on ARP cache
+            if ip in arp_hosts:
+                # Device responded - reset failure counter and mark as alive
+                data['failed_ping_count'] = 0
+                data['alive'] = True
+                data['last_seen'] = current_time
+                data['last_successful_ping'] = current_time
+                
+                # Update MAC if we have a better one from ARP
+                arp_mac = arp_hosts[ip].get('mac', '')
+                if arp_mac and (not data.get('mac') or data['mac'] in ['', 'Unknown', '00:00:00:00:00:00'] or 
+                               data['mac'].startswith('00:00:c0:a8:01:')):  # Replace pseudo MACs
+                    data['mac'] = arp_mac
+                    # Also update NetKB database with real MAC
+                    try:
+                        arp_hostname = arp_hosts[ip].get('hostname', data.get('hostname', ''))
+                        update_netkb_entry(ip, arp_hostname, arp_mac, True)
+                    except Exception as e:
+                        logger.debug(f"Could not update NetKB with real MAC for {ip}: {e}")
+            else:
+                # Device didn't respond - increment failure counter
+                data['failed_ping_count'] = data.get('failed_ping_count', 0) + 1
+                data['last_ping_attempt'] = current_time
+                
+                # Only mark as offline after MAX_FAILED_PINGS consecutive failures
+                if data['failed_ping_count'] >= MAX_FAILED_PINGS:
+                    data['alive'] = False
+                    logger.debug(f"Device {ip} marked offline after {data['failed_ping_count']} consecutive failed pings")
+                else:
+                    # IMPORTANT: Keep device as "alive" until it exceeds the failure limit
+                    # This implements the proper 15-ping rule you requested
+                    data['alive'] = True  # Don't change to False until 15 failures
+                    logger.debug(f"Device {ip} failed ping {data['failed_ping_count']}/{MAX_FAILED_PINGS} - keeping alive per 15-ping rule")
+
+        # Add new devices discovered via ARP that aren't in our data yet
+        for ip, arp_data in arp_hosts.items():
+            if ip not in existing_data:
+                existing_data[ip] = {
+                    'hostname': arp_data.get('hostname', ''),
+                    'alive': True,
+                    'mac': arp_data.get('mac', ''),
+                    'ports': set(),
+                    'last_seen': current_time,
+                    'last_successful_ping': current_time,
+                    'failed_ping_count': 0  # New devices start with 0 failures
+                }
+                # Add to NetKB database as well
+                try:
+                    update_netkb_entry(ip, arp_data.get('hostname', ''), arp_data.get('mac', ''), True)
+                except Exception as e:
+                    logger.debug(f"Could not add new ARP discovery to NetKB for {ip}: {e}")
+
+        # Prepare aggregated counts from persisted data using PROPER 5-ping rule
         aggregated_host_count = 0
         aggregated_active_count = 0
         aggregated_inactive_count = 0
@@ -932,17 +1059,32 @@ def update_wifi_network_data():
 
         for ip, data in existing_data.items():
             aggregated_host_count += 1
-            if data.get('alive', True):
+            
+            # Apply the PROPER 5-ping rule for counting active targets
+            failed_ping_count = data.get('failed_ping_count', 0)
+            
+            # TARGET IS ACTIVE IF:
+            # 1. It has fewer than MAX_FAILED_PINGS consecutive failures, OR
+            # 2. It's marked as explicitly alive (from ARP response)
+            is_explicitly_alive = data.get('alive', True)
+            has_not_exceeded_failure_limit = failed_ping_count < MAX_FAILED_PINGS
+            
+            # A target is active if it hasn't exceeded the failure limit OR if it's currently responding
+            is_target_active = has_not_exceeded_failure_limit or is_explicitly_alive
+            
+            if is_target_active:
                 aggregated_active_count += 1
                 aggregated_port_count += sum(1 for port in data['ports'] if port)
+                logger.debug(f"[15-PING RULE] {ip}: ACTIVE (failures={failed_ping_count}/{MAX_FAILED_PINGS}, alive={is_explicitly_alive})")
             else:
                 aggregated_inactive_count += 1
+                logger.debug(f"[15-PING RULE] {ip}: INACTIVE (failures={failed_ping_count}/{MAX_FAILED_PINGS}, alive={is_explicitly_alive})")
 
         # Write updated data to WiFi-specific file
         try:
             with open(wifi_network_file, 'w', newline='', encoding='utf-8') as f:
                 writer = csv.writer(f)
-                writer.writerow(['IP', 'Hostname', 'Alive', 'MAC', 'Ports', 'LastSeen'])
+                writer.writerow(['IP', 'Hostname', 'Alive', 'MAC', 'Ports', 'LastSeen', 'FailedPingCount', 'LastSuccessfulPing', 'LastPingAttempt'])
 
                 for ip, data in existing_data.items():
                     def port_sort_key(value):
@@ -963,7 +1105,10 @@ def update_wifi_network_data():
                         '1' if data.get('alive', True) else '0',
                         data['mac'],
                         ports_str,
-                        data['last_seen']
+                        data['last_seen'],
+                        data.get('failed_ping_count', 0),
+                        data.get('last_successful_ping', ''),
+                        data.get('last_ping_attempt', '')
                     ])
 
             logger.info(f"Updated WiFi network data file: {wifi_network_file} with {len(existing_data)} entries (removed {len(stale_hosts)} stale hosts)")
@@ -985,29 +1130,146 @@ def update_wifi_network_data():
 
 
 def read_wifi_network_data():
-    """Read network data from WiFi-specific file"""
+    """Read network data from WiFi-specific file with automatic cleanup of legacy entries"""
     try:
         wifi_network_file = get_wifi_specific_network_file()
         network_data = []
+        cleaned_data = []
+        cleanup_needed = False
+        
+        # Get configuration values for cleanup
+        retention_hours = shared_data.config.get('network_device_retention_hours', 8)  # 8 hours by default
+        max_failed_pings = shared_data.config.get('network_max_failed_pings', 15)  # Changed to 15 for more stability
+        current_time = datetime.now()
+        cutoff_time = current_time - timedelta(hours=retention_hours)
         
         if os.path.exists(wifi_network_file):
             with open(wifi_network_file, 'r', encoding='utf-8', errors='ignore') as f:
                 reader = csv.reader(f)
-                headers = next(reader, None)  # Skip header
+                headers = next(reader, None)  # Read header
+                
+                # Determine if we have the enhanced format with connectivity tracking
+                has_enhanced_format = (headers and len(headers) >= 9 and 
+                                     'FailedPingCount' in headers and 
+                                     'LastSuccessfulPing' in headers and 
+                                     'LastPingAttempt' in headers)
                 
                 for row in reader:
-                    if len(row) >= 6 and row[0].strip():
-                        ip = row[0].strip()
-                        if re.match(r'^(?:[0-9]{1,3}\.){3}[0-9]{1,3}$', ip):
+                    if not row or not row[0].strip():
+                        continue
+                        
+                    ip = row[0].strip()
+                    if not re.match(r'^(?:[0-9]{1,3}\.){3}[0-9]{1,3}$', ip):
+                        continue
+                    
+                    # Handle both old and new CSV formats
+                    if has_enhanced_format and len(row) >= 9:
+                        # Enhanced format: IP, Hostname, Alive, MAC, Ports, LastSeen, FailedPingCount, LastSuccessfulPing, LastPingAttempt
+                        failed_ping_count = int(row[6]) if row[6].isdigit() else 0
+                        last_successful_ping = row[7] if len(row) > 7 else ''
+                        last_ping_attempt = row[8] if len(row) > 8 else ''
+                        last_seen = row[5] if len(row) > 5 else ''
+                        
+                        # Determine the most recent activity timestamp
+                        most_recent_activity = None
+                        for timestamp_str in [last_successful_ping, last_ping_attempt, last_seen]:
+                            if timestamp_str and timestamp_str.strip():
+                                try:
+                                    timestamp = datetime.fromisoformat(timestamp_str.replace('Z', '+00:00'))
+                                    if timestamp.tzinfo:
+                                        timestamp = timestamp.replace(tzinfo=None)
+                                    if most_recent_activity is None or timestamp > most_recent_activity:
+                                        most_recent_activity = timestamp
+                                except (ValueError, TypeError):
+                                    continue
+                        
+                        # Apply robust 5-ping failure cleanup logic
+                        should_keep = True
+                        cleanup_reason = None
+                        
+                        # RULE 1: Remove devices that have failed 5+ consecutive pings (regardless of age)
+                        if failed_ping_count >= max_failed_pings:
+                            should_keep = False
+                            cleanup_reason = f"exceeded max failed pings ({failed_ping_count}>={max_failed_pings})"
+                            cleanup_needed = True
+                        
+                        # RULE 2: Remove very old devices that haven't been seen for 8+ hours (regardless of ping status)
+                        elif most_recent_activity and most_recent_activity < cutoff_time:
+                            should_keep = False
+                            cleanup_reason = f"too old (last activity: {most_recent_activity}, cutoff: {cutoff_time})"
+                            cleanup_needed = True
+                        
+                        # RULE 3: Remove devices with no successful ping record and no recent activity
+                        elif not last_successful_ping and most_recent_activity and most_recent_activity < cutoff_time:
+                            should_keep = False
+                            cleanup_reason = f"no successful pings and old (last activity: {most_recent_activity})"
+                            cleanup_needed = True
+                        
+                        if not should_keep:
+                            logger.info(f"[ROBUST CLEANUP] Removing {ip}: {cleanup_reason}")
+                        
+                        if should_keep:
                             network_entry = {
                                 'IPs': ip,
                                 'Hostnames': row[1] if row[1] else '',
-                                'Alive': int(row[2]) if row[2].isdigit() else 1,
+                                'Alive': int(row[2]) if row[2].isdigit() else 0,
                                 'MAC Address': row[3] if row[3] else '',
                                 'Ports': row[4] if row[4] else '',
-                                'LastSeen': row[5] if len(row) > 5 else ''
+                                'LastSeen': last_seen,
+                                'FailedPingCount': failed_ping_count,
+                                'LastSuccessfulPing': last_successful_ping,
+                                'LastPingAttempt': last_ping_attempt
                             }
                             network_data.append(network_entry)
+                            cleaned_data.append(row)
+                    
+                    elif len(row) >= 6:
+                        # Legacy format: IP, Hostname, Alive, MAC, Ports, LastSeen
+                        last_seen = row[5] if len(row) > 5 else ''
+                        alive_status = int(row[2]) if row[2].isdigit() else 0
+                        
+                        # For legacy format, remove entries that are old and not alive
+                        should_keep = True
+                        if last_seen:
+                            try:
+                                last_seen_time = datetime.fromisoformat(last_seen.replace('Z', '+00:00'))
+                                if last_seen_time.tzinfo:
+                                    last_seen_time = last_seen_time.replace(tzinfo=None)
+                                
+                                if last_seen_time < cutoff_time and alive_status == 0:
+                                    logger.debug(f"Removing legacy entry {ip} (old format, not alive, last seen: {last_seen_time})")
+                                    should_keep = False
+                                    cleanup_needed = True
+                            except (ValueError, TypeError):
+                                # If we can't parse the timestamp and device is not alive, remove it
+                                if alive_status == 0:
+                                    logger.debug(f"Removing legacy entry {ip} (unparseable timestamp, not alive)")
+                                    should_keep = False
+                                    cleanup_needed = True
+                        
+                        if should_keep:
+                            network_entry = {
+                                'IPs': ip,
+                                'Hostnames': row[1] if row[1] else '',
+                                'Alive': alive_status,
+                                'MAC Address': row[3] if row[3] else '',
+                                'Ports': row[4] if row[4] else '',
+                                'LastSeen': last_seen
+                            }
+                            network_data.append(network_entry)
+                            cleaned_data.append(row)
+            
+            # If we removed any entries, rewrite the file
+            if cleanup_needed:
+                try:
+                    with open(wifi_network_file, 'w', newline='', encoding='utf-8') as f:
+                        writer = csv.writer(f)
+                        if headers:
+                            writer.writerow(headers)
+                        writer.writerows(cleaned_data)
+                    logger.info(f"Cleaned up legacy network data - removed {len(cleaned_data) - len(network_data)} old entries")
+                except Exception as e:
+                    logger.error(f"Error rewriting cleaned network file: {e}")
             
             logger.debug(f"Read {len(network_data)} entries from WiFi network file: {wifi_network_file}")
         else:
@@ -1450,6 +1712,9 @@ def apply_hardware_profile():
 
 def load_persistent_network_data():
     """Load the WiFi-specific network data with fallbacks."""
+    # Check for network switches and clear old data if needed
+    check_and_handle_network_switch()
+    
     update_wifi_network_data()
 
     network_data = read_wifi_network_data()
@@ -1565,6 +1830,9 @@ def load_persistent_network_data():
 def get_stable_network_data():
     """Get stable, aggregated network data for the Network tab"""
     try:
+        # Check for network switches and clear old data if needed
+        check_and_handle_network_switch()
+        
         # Read from the WiFi-specific network file for most stable data
         network_data = read_wifi_network_data()
         
@@ -2292,6 +2560,115 @@ def get_verbose_debug_logs():
         
     except Exception as e:
         logger.error(f"Error in verbose debug logs: {e}")
+        return jsonify({'error': str(e), 'timestamp': datetime.now().isoformat()}), 500
+
+@app.route('/api/debug/test-robust-tracking')
+def test_robust_tracking():
+    """Test endpoint to verify robust tracking logic is working"""
+    try:
+        logger.info("[TEST] Robust tracking test endpoint called")
+        
+        # Test the network data reading with new logic
+        network_data = read_wifi_network_data()
+        
+        # Count devices by failure status
+        max_failed_pings = shared_data.config.get('network_max_failed_pings', 15)  # Changed to 15 for more stability
+        results = {
+            'total_devices': len(network_data),
+            'devices_with_failure_data': 0,
+            'devices_exceeding_failure_limit': 0,
+            'devices_active_by_robust_rule': 0,
+            'max_failed_pings_threshold': max_failed_pings,
+            'sample_devices': [],
+            'test_timestamp': datetime.now().isoformat()
+        }
+        
+        for entry in network_data[:5]:  # Sample first 5
+            ip = entry.get('IPs', '')
+            failed_ping_count = entry.get('FailedPingCount', 'N/A')
+            alive_status = entry.get('Alive', 'N/A')
+            
+            if isinstance(failed_ping_count, int):
+                results['devices_with_failure_data'] += 1
+                if failed_ping_count >= max_failed_pings:
+                    results['devices_exceeding_failure_limit'] += 1
+                else:
+                    results['devices_active_by_robust_rule'] += 1
+            
+            results['sample_devices'].append({
+                'ip': ip,
+                'failed_ping_count': failed_ping_count,
+                'alive': alive_status,
+                'would_be_removed': failed_ping_count >= max_failed_pings if isinstance(failed_ping_count, int) else False
+            })
+        
+        return jsonify(results)
+        
+    except Exception as e:
+        logger.error(f"Error in robust tracking test: {e}")
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/debug/connectivity-tracking')
+def get_connectivity_tracking():
+    """Get detailed connectivity tracking information for all devices"""
+    try:
+        wifi_network_data = read_wifi_network_data()
+        current_time = datetime.now()
+        arp_hosts = network_scan_cache.get('arp_hosts', {})
+        
+        connectivity_info = {
+            'timestamp': current_time.isoformat(),
+            'summary': {
+                'total_devices': len(wifi_network_data),
+                'devices_in_arp': len(arp_hosts),
+                'max_failed_pings': shared_data.config.get('network_max_failed_pings', 15)  # Changed to 15 for more stability
+            },
+            'devices': []
+        }
+        
+        for entry in wifi_network_data:
+            ip = entry.get('IPs', '').strip()
+            if not ip:
+                continue
+                
+            device_info = {
+                'ip': ip,
+                'hostname': entry.get('Hostnames', ''),
+                'mac': entry.get('MAC Address', ''),
+                'alive': entry.get('Alive', 0),
+                'failed_ping_count': entry.get('failed_ping_count', 0),
+                'last_seen': entry.get('LastSeen', ''),
+                'last_successful_ping': entry.get('last_successful_ping', ''),
+                'last_ping_attempt': entry.get('last_ping_attempt', ''),
+                'in_current_arp': ip in arp_hosts,
+                'connectivity_status': 'stable' if entry.get('failed_ping_count', 0) == 0 else f"failing ({entry.get('failed_ping_count', 0)}/{shared_data.config.get('network_max_failed_pings', 15)})"  # Changed to 15
+            }
+            
+            # Calculate time since last successful ping
+            if device_info['last_successful_ping']:
+                try:
+                    last_success = datetime.fromisoformat(device_info['last_successful_ping'])
+                    time_diff = current_time - last_success
+                    device_info['minutes_since_last_success'] = int(time_diff.total_seconds() / 60)
+                except Exception:
+                    device_info['minutes_since_last_success'] = 'unknown'
+            else:
+                device_info['minutes_since_last_success'] = 'never'
+                
+            connectivity_info['devices'].append(device_info)
+        
+        # Sort by IP address
+        connectivity_info['devices'].sort(key=lambda x: tuple(map(int, x['ip'].split('.'))))
+        
+        response = jsonify(connectivity_info)
+        response.headers['Cache-Control'] = 'no-cache, no-store, must-revalidate'
+        response.headers['Pragma'] = 'no-cache'
+        response.headers['Expires'] = '0'
+        return response
+        
+    except Exception as e:
+        logger.error(f"Error getting connectivity tracking info: {e}")
         return jsonify({'error': str(e), 'timestamp': datetime.now().isoformat()}), 500
 
 @app.route('/api/debug/force-arp-scan', methods=['POST'])
@@ -5240,6 +5617,12 @@ def background_arp_scan_loop():
                     except Exception as e:
                         logger.error(f"Error updating netkb for {ip}: {e}")
                 
+                # Update WiFi network data to sync ARP discoveries
+                try:
+                    update_wifi_network_data()
+                except Exception as e:
+                    logger.error(f"Error updating WiFi network data from ARP scan: {e}")
+                
                 # Emit real-time update to connected clients
                 if clients_connected > 0:
                     try:
@@ -6462,39 +6845,16 @@ def format_uptime(seconds):
 
 @app.route('/api/dashboard/stats')
 def get_dashboard_stats():
-    """Get dashboard statistics including counts from various sources"""
+    """Get dashboard statistics using synchronized data from shared_data to ensure consistency"""
     try:
+        # Check for network switches and clear old data if needed
+        check_and_handle_network_switch()
+        
         # Ensure recent synchronization without blocking the request unnecessarily
         ensure_recent_sync()
-
-        # Get current live network data (same logic as stable endpoint)
-        network_data = read_wifi_network_data()
-        recent_arp_data = network_scan_cache.get('arp_hosts', {})
         
-        # Count unique active hosts (same logic as stable network endpoint)
-        processed_ips = set()
-        active_hosts_count = 0
-        
-        # Count from network data (hosts with Alive status)
-        for entry in network_data:
-            ip = entry.get('IPs', '').strip()  # Note: field is 'IPs' not 'IP'
-            if ip and ip not in processed_ips:
-                processed_ips.add(ip)
-                # Check if host is alive - prioritize ARP cache over file data
-                is_alive_in_file = entry.get('Alive') in [True, 'True', '1', 1]
-                is_alive_in_arp = ip in recent_arp_data
-                is_alive = is_alive_in_file or is_alive_in_arp  # ARP data overrides file data
-                if is_alive:
-                    active_hosts_count += 1
-        
-        # Count from recent ARP discoveries (these are definitely active)
-        for ip in recent_arp_data.keys():
-            if ip not in processed_ips:
-                processed_ips.add(ip)
-                active_hosts_count += 1
-        
-        total_hosts_count = len(processed_ips)
-        
+        # Use the synchronized data from shared_data instead of re-calculating
+        # This prevents inconsistencies between different counting methods
         current_time = time.time()
         last_sync_ts = getattr(shared_data, 'last_sync_timestamp', last_sync_time)
         last_sync_iso = None
@@ -6507,14 +6867,26 @@ def get_dashboard_stats():
             except Exception:
                 last_sync_iso = None
 
-        # Use calculated live network data for targets
-        inactive_targets = max(total_hosts_count - active_hosts_count, 0)
+        # Use the already-synchronized counts from shared_data to ensure consistency
+        # across all endpoints (prevents the flickering between different counts)
+        active_target_count = safe_int(shared_data.targetnbr)
+        total_target_count = safe_int(shared_data.total_targetnbr)
+        inactive_target_count = safe_int(shared_data.inactive_targetnbr)
+        
+        # If we don't have proper total/inactive counts, calculate them from active count
+        if total_target_count == 0 and active_target_count > 0:
+            total_target_count = active_target_count
+            inactive_target_count = 0
+        elif inactive_target_count == 0 and total_target_count > active_target_count:
+            inactive_target_count = total_target_count - active_target_count
+
+        logger.debug(f"[DASHBOARD STATS] Using synchronized counts: active={active_target_count}, total={total_target_count}, inactive={inactive_target_count}")
 
         stats = {
-            'target_count': active_hosts_count,
-            'active_target_count': active_hosts_count,
-            'inactive_target_count': inactive_targets,
-            'total_target_count': total_hosts_count,
+            'target_count': active_target_count,
+            'active_target_count': active_target_count,
+            'inactive_target_count': inactive_target_count,
+            'total_target_count': total_target_count,
             'new_target_count': safe_int(getattr(shared_data, 'new_targets', 0)),
             'lost_target_count': safe_int(getattr(shared_data, 'lost_targets', 0)),
             'new_target_ips': getattr(shared_data, 'new_target_ips', []),

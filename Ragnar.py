@@ -48,6 +48,9 @@ class Ragnar:
         
         # Set reference to this instance in shared_data for other modules
         self.shared_data.ragnar_instance = self
+        
+        # Reference to display instance (will be set when display is started)
+        self.display = None
 
     def run(self):
         """Main loop for Ragnar. Waits for Wi-Fi connection and starts Orchestrator."""
@@ -144,6 +147,10 @@ class Ragnar:
         display = Display(shared_data)
         display_thread = threading.Thread(target=display.run)
         display_thread.start()
+        
+        # Store display instance in shared_data for access by other modules
+        shared_data.display_instance = display
+        
         return display_thread
 
 def handle_exit(sig, frame, display_thread, ragnar_thread, web_thread):
@@ -189,6 +196,11 @@ if __name__ == "__main__":
         logger.info("Starting Ragnar thread...")
         ragnar = Ragnar(shared_data)
         shared_data.ragnar_instance = ragnar  # Assigner l'instance de Ragnar à shared_data
+        
+        # Link display instance to ragnar instance
+        if hasattr(shared_data, 'display_instance'):
+            ragnar.display = shared_data.display_instance
+        
         ragnar_thread = threading.Thread(target=ragnar.run)
         ragnar_thread.start()
 
