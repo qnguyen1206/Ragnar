@@ -398,58 +398,7 @@ class Display:
     def get_wifi_status_text(self):
         """Get descriptive text for current Wi-Fi status."""
         try:
-            # Try to get status from WiFi manager first (more accurate)
-            if (hasattr(self.shared_data, 'ragnar_instance') and 
-                self.shared_data.ragnar_instance and 
-                hasattr(self.shared_data.ragnar_instance, 'wifi_manager')):
-                
-                wifi_mgr = self.shared_data.ragnar_instance.wifi_manager
-                
-                # Check AP mode status first
-                if hasattr(wifi_mgr, 'ap_mode_active') and wifi_mgr.ap_mode_active:
-                    # Try to get client count
-                    client_count = 0
-                    if hasattr(wifi_mgr, 'ap_clients_count'):
-                        client_count = wifi_mgr.ap_clients_count
-                    
-                    if client_count > 0:
-                        return f"AP: {client_count} client{'s' if client_count != 1 else ''}"
-                    else:
-                        return "AP: No clients"
-                
-                # Check Wi-Fi connection status
-                if hasattr(wifi_mgr, 'wifi_connected') and wifi_mgr.wifi_connected:
-                    if hasattr(wifi_mgr, 'current_ssid') and wifi_mgr.current_ssid:
-                        return f"WiFi: {wifi_mgr.current_ssid}"
-                    else:
-                        return "WiFi: Connected"
-                
-                # Check if cycling mode is active
-                if hasattr(wifi_mgr, 'cycling_mode') and wifi_mgr.cycling_mode:
-                    return "WiFi: Cycling"
-                
-                return "WiFi: Disconnected"
-            
-            # Fallback to system commands if WiFi manager not available
-            # Check if we're in AP mode first
-            if self.is_ap_mode_active():
-                # Try to get AP client count
-                try:
-                    result = subprocess.run(['hostapd_cli', '-i', 'wlan0', 'list_sta'], 
-                                          capture_output=True, text=True, timeout=2)
-                    if result.returncode == 0:
-                        clients = [line.strip() for line in result.stdout.strip().split('\n') if line.strip()]
-                        client_count = len(clients)
-                        if client_count > 0:
-                            return f"AP: {client_count} client{'s' if client_count != 1 else ''}"
-                        else:
-                            return "AP: No clients"
-                    else:
-                        return "AP: Active"
-                except:
-                    return "AP: Active"
-            
-            # Check if Wi-Fi is connected using robust detection methods
+            # FIRST: Try system-level WiFi detection (most reliable)
             # Method 1: Try iwgetid first (get SSID if available)
             try:
                 result = subprocess.run(['iwgetid', '-r'], capture_output=True, text=True, timeout=2)
@@ -482,6 +431,54 @@ class Display:
                             return "WiFi: Connected"
             except:
                 pass
+            
+            # SECONDARY: Try to get status from WiFi manager (if available in same process)
+            if (hasattr(self.shared_data, 'ragnar_instance') and 
+                self.shared_data.ragnar_instance and 
+                hasattr(self.shared_data.ragnar_instance, 'wifi_manager')):
+                
+                wifi_mgr = self.shared_data.ragnar_instance.wifi_manager
+                
+                # Check AP mode status first
+                if hasattr(wifi_mgr, 'ap_mode_active') and wifi_mgr.ap_mode_active:
+                    # Try to get client count
+                    client_count = 0
+                    if hasattr(wifi_mgr, 'ap_clients_count'):
+                        client_count = wifi_mgr.ap_clients_count
+                    
+                    if client_count > 0:
+                        return f"AP: {client_count} client{'s' if client_count != 1 else ''}"
+                    else:
+                        return "AP: No clients"
+                
+                # Check Wi-Fi connection status
+                if hasattr(wifi_mgr, 'wifi_connected') and wifi_mgr.wifi_connected:
+                    if hasattr(wifi_mgr, 'current_ssid') and wifi_mgr.current_ssid:
+                        return f"WiFi: {wifi_mgr.current_ssid}"
+                    else:
+                        return "WiFi: Connected"
+                
+                # Check if cycling mode is active
+                if hasattr(wifi_mgr, 'cycling_mode') and wifi_mgr.cycling_mode:
+                    return "WiFi: Cycling"
+            
+            # TERTIARY: Check if we're in AP mode at system level
+            if self.is_ap_mode_active():
+                # Try to get AP client count
+                try:
+                    result = subprocess.run(['hostapd_cli', '-i', 'wlan0', 'list_sta'], 
+                                          capture_output=True, text=True, timeout=2)
+                    if result.returncode == 0:
+                        clients = [line.strip() for line in result.stdout.strip().split('\n') if line.strip()]
+                        client_count = len(clients)
+                        if client_count > 0:
+                            return f"AP: {client_count} client{'s' if client_count != 1 else ''}"
+                        else:
+                            return "AP: No clients"
+                    else:
+                        return "AP: Active"
+                except:
+                    return "AP: Active"
             
             logger.debug(f"[STATUS] WiFi not detected by any method")
             return "WiFi: Disconnected"
