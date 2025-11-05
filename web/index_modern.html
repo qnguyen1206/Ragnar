@@ -180,17 +180,17 @@
                     <button onclick="showTab('threat-intel')" class="nav-btn px-4 py-2 rounded-lg hover:bg-slate-700 transition-colors" data-tab="threat-intel">
                         Threat Intel
                     </button>
-                    <button onclick="showTab('files')" class="nav-btn px-4 py-2 rounded-lg hover:bg-slate-700 transition-colors" data-tab="files">
-                        Files
-                    </button>
-                    <button onclick="showTab('system')" class="nav-btn px-4 py-2 rounded-lg hover:bg-slate-700 transition-colors" data-tab="system">
-                        System
-                    </button>
                     <button onclick="showTab('netkb')" class="nav-btn px-4 py-2 rounded-lg hover:bg-slate-700 transition-colors" data-tab="netkb">
                         NetKB
                     </button>
                     <button onclick="showTab('epaper')" class="nav-btn px-4 py-2 rounded-lg hover:bg-slate-700 transition-colors" data-tab="epaper">
                         E-Paper
+                    </button>
+                    <button onclick="showTab('files')" class="nav-btn px-4 py-2 rounded-lg hover:bg-slate-700 transition-colors" data-tab="files">
+                        Files
+                    </button>
+                    <button onclick="showTab('system')" class="nav-btn px-4 py-2 rounded-lg hover:bg-slate-700 transition-colors" data-tab="system">
+                        System
                     </button>
                     <button onclick="showTab('config')" class="nav-btn px-4 py-2 rounded-lg hover:bg-slate-700 transition-colors" data-tab="config">
                         Config
@@ -625,36 +625,30 @@
 
         <!-- Threat Intelligence Tab -->
         <div id="threat-intel-tab" class="tab-content hidden">
-            <div class="mb-6">
-                <h1 class="text-3xl font-bold text-white mb-2">🛡️ Threat Intelligence</h1>
-                <p class="text-slate-400">Global threat intelligence fusion and real-time threat analysis</p>
+            <div class="mb-6 flex items-center justify-between">
+                <div>
+                    <h1 class="text-3xl font-bold text-white mb-2">🛡️ Vulnerabilities by Host</h1>
+                    <p class="text-slate-400">Grouped vulnerability analysis showing threats organized by IP address</p>
+                </div>
+                <button onclick="refreshThreatIntel()" class="bg-Ragnar-600 hover:bg-Ragnar-700 text-white px-4 py-2 rounded-lg transition-colors">
+                    <svg class="w-4 h-4 inline mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"></path>
+                    </svg>
+                    Refresh
+                </button>
             </div>
 
-            <!-- Summary Cards -->
+            <!-- Summary Overview Cards -->
             <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 mb-8">
                 <div class="glass rounded-lg p-6">
                     <div class="flex items-center justify-between">
                         <div>
-                            <p class="text-slate-400 text-sm">Threat Sources</p>
-                            <p class="text-2xl font-bold text-green-400" id="threat-sources-count">0</p>
-                        </div>
-                        <div class="bg-green-500/20 p-3 rounded-lg">
-                            <svg class="w-6 h-6 text-green-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"></path>
-                            </svg>
-                        </div>
-                    </div>
-                </div>
-
-                <div class="glass rounded-lg p-6">
-                    <div class="flex items-center justify-between">
-                        <div>
-                            <p class="text-slate-400 text-sm">Enriched Findings</p>
-                            <p class="text-2xl font-bold text-blue-400" id="enriched-findings-count">0</p>
+                            <p class="text-slate-400 text-sm">Vulnerable Hosts</p>
+                            <p class="text-2xl font-bold text-blue-400" id="vulnerable-hosts-count">0</p>
                         </div>
                         <div class="bg-blue-500/20 p-3 rounded-lg">
                             <svg class="w-6 h-6 text-blue-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"></path>
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 12h14M5 12a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v4a2 2 0 01-2 2M5 12a2 2 0 00-2 2v4a2 2 0 002 2h14a2 2 0 002-2v-4a2 2 0 00-2-2m-2-4h.01M17 16h.01"></path>
                             </svg>
                         </div>
                     </div>
@@ -663,11 +657,11 @@
                 <div class="glass rounded-lg p-6">
                     <div class="flex items-center justify-between">
                         <div>
-                            <p class="text-slate-400 text-sm">High Risk</p>
-                            <p class="text-2xl font-bold text-red-400" id="high-risk-count">0</p>
+                            <p class="text-slate-400 text-sm">Total Vulnerabilities</p>
+                            <p class="text-2xl font-bold text-yellow-400" id="total-vulnerabilities-count">0</p>
                         </div>
-                        <div class="bg-red-500/20 p-3 rounded-lg">
-                            <svg class="w-6 h-6 text-red-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <div class="bg-yellow-500/20 p-3 rounded-lg">
+                            <svg class="w-6 h-6 text-yellow-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                                 <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-2.5L13.732 4c-.77-.833-1.964-.833-2.732 0L3.072 16.5c-.77.833.192 2.5 1.732 2.5z"></path>
                             </svg>
                         </div>
@@ -677,17 +671,60 @@
                 <div class="glass rounded-lg p-6">
                     <div class="flex items-center justify-between">
                         <div>
-                            <p class="text-slate-400 text-sm">Active Campaigns</p>
-                            <p class="text-2xl font-bold text-yellow-400" id="active-campaigns-count">0</p>
+                            <p class="text-slate-400 text-sm">Critical Vulnerabilities</p>
+                            <p class="text-2xl font-bold text-red-400" id="critical-vuln-count">0</p>
                         </div>
-                        <div class="bg-yellow-500/20 p-3 rounded-lg">
-                            <svg class="w-6 h-6 text-yellow-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10"></path>
+                        <div class="bg-red-500/20 p-3 rounded-lg">
+                            <svg class="w-6 h-6 text-red-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path>
+                            </svg>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="glass rounded-lg p-6">
+                    <div class="flex items-center justify-between">
+                        <div>
+                            <p class="text-slate-400 text-sm">High Vulnerabilities</p>
+                            <p class="text-2xl font-bold text-orange-400" id="high-vuln-count">0</p>
+                        </div>
+                        <div class="bg-orange-500/20 p-3 rounded-lg">
+                            <svg class="w-6 h-6 text-orange-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"></path>
                             </svg>
                         </div>
                     </div>
                 </div>
             </div>
+
+            </div>
+
+            <!-- Grouped Vulnerabilities by Host -->
+            <div id="grouped-vulnerabilities-container" class="space-y-6">
+                <div class="glass rounded-lg p-6 text-center">
+                    <p class="text-slate-400">Loading vulnerabilities...</p>
+                </div>
+            </div>
+
+            <!-- Vulnerability Detail Modal -->
+            <div id="vulnerability-detail-modal" class="fixed inset-0 bg-black bg-opacity-80 hidden items-center justify-center z-50">
+                <div class="glass rounded-xl p-6 max-w-4xl w-full mx-4 max-h-[90vh] overflow-y-auto">
+                    <div class="flex items-center justify-between mb-4">
+                        <h3 class="text-xl font-semibold text-white" id="vuln-detail-title">Vulnerability Details</h3>
+                        <button onclick="closeVulnerabilityModal()" class="text-gray-400 hover:text-white">
+                            <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"></path>
+                            </svg>
+                        </button>
+                    </div>
+                    <div id="vuln-detail-content" class="space-y-4">
+                        <!-- Content populated by JavaScript -->
+                    </div>
+                </div>
+            </div>
+
+            <!-- Old Threat Intel Section (kept for backward compatibility) -->
+            <div id="legacy-threat-intel" class="hidden">
 
             <!-- Top Threats -->
             <div class="glass rounded-lg p-6 mb-8">
@@ -794,6 +831,7 @@
                     </div>
                 </div>
             </div>
+            </div><!-- End legacy threat intel section -->
         </div>
         
         <!-- Files Tab -->
@@ -1331,7 +1369,7 @@
                 <!-- System Management Section -->
                 <div class="mb-8">
                     <h3 class="text-xl font-semibold mb-4 text-Ragnar-400">System Management</h3>
-                    <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
+                    <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
                         
                         <!-- Update Status Card -->
                         <div class="glass rounded-lg p-4">
@@ -1410,6 +1448,127 @@
                             </button>
                         </div>
                         
+                        <!-- Data Management Card -->
+                        <div class="glass rounded-lg p-4">
+                            <div class="flex items-center justify-between mb-3">
+                                <h4 class="font-medium">Data Management</h4>
+                                <span id="vuln-count" class="text-sm px-2 py-1 rounded bg-gray-700 text-gray-300">Loading...</span>
+                            </div>
+                            <div class="text-sm text-gray-400 mb-3">
+                                Reset vulnerability and intelligence data
+                            </div>
+                            <button onclick="resetVulnerabilities()" 
+                                    class="w-full bg-red-600 hover:bg-red-700 text-white py-2 px-4 rounded transition-colors mb-2">
+                                <svg class="w-4 h-4 inline mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"></path>
+                                </svg>
+                                Reset Vulnerabilities
+                            </button>
+                            <button onclick="resetThreatIntelligence()" 
+                                    class="w-full bg-orange-600 hover:bg-orange-700 text-white py-2 px-4 rounded transition-colors">
+                                <svg class="w-4 h-4 inline mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"></path>
+                                </svg>
+                                Reset Threat Intel
+                            </button>
+                        </div>
+                        
+                    </div>
+                </div>
+                
+                <!-- Wi-Fi Connection Section -->
+                <div class="mb-8">
+                    <h3 class="text-xl font-semibold mb-4 text-Ragnar-400">Wi-Fi Connection</h3>
+                    
+                    <!-- Wi-Fi Interface Selection -->
+                    <div class="glass rounded-lg p-4 mb-4">
+                        <label class="block text-sm font-medium mb-2">Wi-Fi Interface</label>
+                        <select id="wifi-interface-select" 
+                                class="w-full bg-slate-800 border border-slate-600 rounded px-3 py-2 text-white focus:outline-none focus:border-Ragnar-500">
+                            <option value="">Loading interfaces...</option>
+                        </select>
+                    </div>
+                    
+                    <!-- Available Networks -->
+                    <div class="glass rounded-lg p-4">
+                        <div class="flex items-center justify-between mb-4">
+                            <h4 class="font-medium">Available Networks</h4>
+                            <button onclick="scanWifiNetworks()" 
+                                    id="scan-wifi-btn"
+                                    class="bg-Ragnar-600 hover:bg-Ragnar-700 text-white px-4 py-2 rounded transition-colors text-sm">
+                                <svg class="w-4 h-4 inline mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"></path>
+                                </svg>
+                                Scan Networks
+                            </button>
+                        </div>
+                        
+                        <!-- Networks List -->
+                        <div id="wifi-networks-list" class="space-y-2 max-h-96 overflow-y-auto scrollbar-thin">
+                            <div class="text-center text-gray-400 py-8">
+                                Click "Scan Networks" to find available Wi-Fi networks
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                
+                <!-- Wi-Fi Connection Modal -->
+                <div id="wifi-connect-modal" class="fixed inset-0 bg-black bg-opacity-80 hidden items-center justify-center z-50">
+                    <div class="glass rounded-xl p-6 max-w-md w-full mx-4">
+                        <div class="flex items-center justify-between mb-4">
+                            <h3 class="text-xl font-bold">Connect to Wi-Fi</h3>
+                            <button onclick="closeWifiConnectModal()" class="text-gray-400 hover:text-white">
+                                <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"></path>
+                                </svg>
+                            </button>
+                        </div>
+                        
+                        <div class="mb-4">
+                            <label class="block text-sm font-medium mb-2">Network Name (SSID)</label>
+                            <input type="text" id="wifi-connect-ssid" readonly
+                                   class="w-full bg-slate-700 border border-slate-600 rounded px-3 py-2 text-white">
+                        </div>
+                        
+                        <div class="mb-4" id="wifi-password-section">
+                            <label class="block text-sm font-medium mb-2">Password</label>
+                            <div class="relative">
+                                <input type="password" id="wifi-connect-password"
+                                       class="w-full bg-slate-700 border border-slate-600 rounded px-3 py-2 text-white pr-10"
+                                       placeholder="Enter Wi-Fi password">
+                                <button onclick="togglePasswordVisibility()" 
+                                        class="absolute right-2 top-1/2 transform -translate-y-1/2 text-gray-400 hover:text-white">
+                                    <svg id="password-eye-icon" class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"></path>
+                                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z"></path>
+                                    </svg>
+                                </button>
+                            </div>
+                        </div>
+                        
+                        <div class="mb-4">
+                            <label class="flex items-center space-x-2">
+                                <input type="checkbox" id="wifi-save-network" checked
+                                       class="form-checkbox h-4 w-4 text-Ragnar-600 bg-slate-700 border-slate-600 rounded">
+                                <span class="text-sm">Save network for auto-connect</span>
+                            </label>
+                        </div>
+                        
+                        <div id="wifi-connect-status" class="mb-4 hidden">
+                            <div class="bg-slate-700 rounded p-3 text-sm"></div>
+                        </div>
+                        
+                        <div class="flex space-x-3">
+                            <button onclick="closeWifiConnectModal()" 
+                                    class="flex-1 bg-gray-600 hover:bg-gray-700 text-white py-2 px-4 rounded transition-colors">
+                                Cancel
+                            </button>
+                            <button onclick="connectToWifiNetwork()" 
+                                    id="wifi-connect-submit-btn"
+                                    class="flex-1 bg-Ragnar-600 hover:bg-Ragnar-700 text-white py-2 px-4 rounded transition-colors">
+                                Connect
+                            </button>
+                        </div>
                     </div>
                 </div>
                 

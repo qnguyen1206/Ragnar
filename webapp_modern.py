@@ -1403,10 +1403,13 @@ def update_config():
         if not data:
             return jsonify({'error': 'No data provided'}), 400
         
-        # Update configuration
+        # Update configuration (allow new keys to be added)
         for key, value in data.items():
-            if key in shared_data.config:
+            # Skip private/internal keys that start with __
+            if not key.startswith('__'):
                 shared_data.config[key] = value
+                # Also set as attribute on shared_data for immediate access
+                setattr(shared_data, key, value)
         
         # Save configuration
         shared_data.save_config()
@@ -2609,6 +2612,131 @@ def test_robust_tracking():
         return jsonify({'error': str(e)}), 500
 
 
+@app.route('/api/debug/orchestrator-status')
+def get_orchestrator_diagnostic():
+    """Comprehensive orchestrator diagnostic endpoint"""
+    try:
+        diagnostic = {
+            'timestamp': datetime.now().isoformat(),
+            'orchestrator_status': safe_str(shared_data.ragnarorch_status),
+            'orchestrator_status2': safe_str(shared_data.ragnarstatustext2),
+            'manual_mode': shared_data.config.get('manual_mode', False),
+            'manual_mode_reason': 'Manual mode is ENABLED - orchestrator will not run automatic attacks' if shared_data.config.get('manual_mode', False) else 'Manual mode is DISABLED - orchestrator should run attacks',
+            'wifi_connected': getattr(shared_data, 'wifi_connected', False),
+            'orchestrator_should_exit': getattr(shared_data, 'orchestrator_should_exit', True),
+            
+            # Configuration checks
+            'config': {
+                'scan_vuln_running': shared_data.config.get('scan_vuln_running', True),
+                'enable_attacks': shared_data.config.get('enable_attacks', True),
+                'retry_success_actions': shared_data.config.get('retry_success_actions', True),
+                'retry_failed_actions': shared_data.config.get('retry_failed_actions', True),
+                'success_retry_delay': shared_data.config.get('success_retry_delay', 300),
+                'failed_retry_delay': shared_data.config.get('failed_retry_delay', 180),
+                'scan_interval': shared_data.config.get('scan_interval', 180),
+                'scan_vuln_interval': shared_data.config.get('scan_vuln_interval', 300),
+            },
+            
+            # Target information
+            'targets': {
+                'total_count': 0,
+                'alive_count': 0,
+                'alive_hosts': []
+            },
+            
+            # Actions status
+            'actions_available': False,
+            'actions_pending': False,
+            
+            # Diagnosis
+            'diagnosis': [],
+            'recommendations': []
+        }
+        
+        # Check netkb for targets
+        try:
+            if os.path.exists(shared_data.netkbfile):
+                with open(shared_data.netkbfile, 'r') as f:
+                    reader = csv.DictReader(f)
+                    rows = list(reader)
+                    diagnostic['targets']['total_count'] = len(rows)
+                    
+                    for row in rows:
+                        if row.get('Alive') == '1':
+                            diagnostic['targets']['alive_count'] += 1
+                            ip = row.get('IPs', '')
+                            hostname = row.get('Hostnames', '')
+                            ports = row.get('Ports', '')
+                            diagnostic['targets']['alive_hosts'].append({
+                                'ip': ip,
+                                'hostname': hostname,
+                                'ports': ports,
+                                'mac': row.get('MAC Address', '')
+                            })
+        except Exception as e:
+            diagnostic['targets']['error'] = str(e)
+        
+        # Diagnose issues
+        if diagnostic['manual_mode']:
+            diagnostic['diagnosis'].append('🔴 MANUAL MODE IS ENABLED - This is why Ragnar is not performing attacks!')
+            diagnostic['recommendations'].append('Disable manual mode in the Config tab to allow automatic attacks')
+        
+        if not diagnostic['wifi_connected']:
+            diagnostic['diagnosis'].append('🔴 Wi-Fi is not connected')
+            diagnostic['recommendations'].append('Connect to Wi-Fi to enable network scanning and attacks')
+        
+        if diagnostic['orchestrator_should_exit']:
+            diagnostic['diagnosis'].append('🔴 Orchestrator exit flag is set')
+            diagnostic['recommendations'].append('Restart the Ragnar service to clear the exit flag')
+        
+        if diagnostic['targets']['alive_count'] == 0:
+            diagnostic['diagnosis'].append('⚠️ No alive targets found on the network')
+            diagnostic['recommendations'].append('Wait for network scan to complete or manually trigger a scan')
+            diagnostic['recommendations'].append('Check if you are connected to the correct network')
+        else:
+            diagnostic['diagnosis'].append(f'✅ Found {diagnostic["targets"]["alive_count"]} alive targets')
+        
+        if not diagnostic['config']['scan_vuln_running']:
+            diagnostic['diagnosis'].append('⚠️ Vulnerability scanning is disabled')
+            diagnostic['recommendations'].append('Enable vulnerability scanning in Config tab')
+        
+        if not diagnostic['config']['enable_attacks']:
+            diagnostic['diagnosis'].append('⚠️ Attacks are disabled - Ragnar will only scan, not attack')
+            diagnostic['recommendations'].append('Enable attacks in Config tab to allow SSH/FTP/SMB/SQL attacks')
+        
+        # Check if actions are available
+        try:
+            if os.path.exists(shared_data.actions_file):
+                with open(shared_data.actions_file, 'r') as f:
+                    actions_config = json.load(f)
+                    diagnostic['actions_available'] = len(actions_config) > 0
+                    diagnostic['actions_count'] = len(actions_config)
+                    if not diagnostic['actions_available']:
+                        diagnostic['diagnosis'].append('🔴 No actions configured in actions.json')
+                        diagnostic['recommendations'].append('Check actions.json file for valid action configurations')
+            else:
+                diagnostic['diagnosis'].append('🔴 actions.json file not found')
+                diagnostic['recommendations'].append('Restore actions.json file to enable attacks')
+        except Exception as e:
+            diagnostic['diagnosis'].append(f'🔴 Error loading actions: {str(e)}')
+        
+        # Summary
+        if not diagnostic['diagnosis']:
+            diagnostic['diagnosis'].append('✅ All systems appear normal')
+            if diagnostic['targets']['alive_count'] > 0:
+                diagnostic['diagnosis'].append(f'⚙️ Orchestrator should be running attacks on {diagnostic["targets"]["alive_count"]} targets')
+            else:
+                diagnostic['diagnosis'].append('⚙️ Waiting for network scan to discover targets')
+        
+        return jsonify(diagnostic)
+        
+    except Exception as e:
+        logger.error(f"Error in orchestrator diagnostic: {e}")
+        return jsonify({
+            'error': str(e),
+            'timestamp': datetime.now().isoformat()
+        }), 500
+
 @app.route('/api/debug/connectivity-tracking')
 def get_connectivity_tracking():
     """Get detailed connectivity tracking information for all devices"""
@@ -3511,8 +3639,157 @@ def reboot_system():
         return jsonify({'success': False, 'error': str(e)}), 500
 
 # ============================================================================
+# DATA MANAGEMENT ENDPOINTS
+# ============================================================================
+
+@app.route('/api/data/reset-vulnerabilities', methods=['POST'])
+def reset_vulnerabilities():
+    """Reset all vulnerability data - removes all discovered vulnerabilities"""
+    try:
+        deleted_count = 0
+        
+        # Clear network intelligence vulnerabilities
+        if hasattr(shared_data, 'network_intelligence') and shared_data.network_intelligence:
+            try:
+                # Count all vulnerabilities across all networks
+                if hasattr(shared_data.network_intelligence, 'active_vulnerabilities'):
+                    deleted_count = sum(len(vulns) for vulns in shared_data.network_intelligence.active_vulnerabilities.values())
+                    shared_data.network_intelligence.active_vulnerabilities.clear()
+                    
+                    # Also clear resolved vulnerabilities
+                    if hasattr(shared_data.network_intelligence, 'resolved_vulnerabilities'):
+                        shared_data.network_intelligence.resolved_vulnerabilities.clear()
+                    
+                    shared_data.network_intelligence.save_intelligence_data()
+                    logger.info(f"Cleared {deleted_count} vulnerabilities from network intelligence")
+            except Exception as e:
+                logger.error(f"Error clearing network intelligence vulnerabilities: {e}")
+        
+        # Clear vulnerability summary file
+        vuln_summary = os.path.join('data', 'output', 'vulnerabilities', 'vulnerability_summary.csv')
+        if os.path.exists(vuln_summary):
+            try:
+                import pandas as pd
+                df = pd.DataFrame(columns=["IP", "Hostname", "MAC Address", "Port", "Vulnerabilities"])
+                df.to_csv(vuln_summary, index=False)
+                logger.info("Reset vulnerability summary file")
+            except Exception as e:
+                logger.error(f"Error resetting vulnerability summary: {e}")
+        
+        # Clear individual vulnerability scan files
+        vuln_dir = os.path.join('data', 'output', 'vulnerabilities')
+        if os.path.exists(vuln_dir):
+            try:
+                for filename in os.listdir(vuln_dir):
+                    if filename.startswith('scan_') and filename.endswith('.txt'):
+                        file_path = os.path.join(vuln_dir, filename)
+                        os.remove(file_path)
+                logger.info("Cleared individual vulnerability scan files")
+            except Exception as e:
+                logger.error(f"Error clearing vulnerability scan files: {e}")
+        
+        # Reset vulnerability counter
+        shared_data.vulnnbr = 0
+        
+        # Trigger sync
+        sync_vulnerability_count()
+        
+        logger.info(f"Vulnerability reset complete: {deleted_count} entries removed")
+        
+        return jsonify({
+            'success': True,
+            'message': 'Vulnerabilities reset successfully',
+            'deleted_count': deleted_count
+        })
+        
+    except Exception as e:
+        logger.error(f"Error resetting vulnerabilities: {e}")
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+@app.route('/api/data/reset-threat-intel', methods=['POST'])
+def reset_threat_intelligence():
+    """Reset all threat intelligence data"""
+    try:
+        if not threat_intelligence:
+            return jsonify({'success': False, 'error': 'Threat intelligence system not available'}), 400
+        
+        # Clear enriched findings
+        findings_cleared = len(threat_intelligence.enriched_findings)
+        threat_intelligence.enriched_findings.clear()
+        
+        # Clear threat cache
+        cache_cleared = len(threat_intelligence.threat_cache)
+        threat_intelligence.threat_cache.clear()
+        
+        # Save cleared state
+        threat_intelligence.save_enriched_findings()
+        threat_intelligence.save_threat_cache()
+        
+        logger.info(f"Threat intelligence reset: {findings_cleared} findings, {cache_cleared} cache entries cleared")
+        
+        return jsonify({
+            'success': True,
+            'message': 'Threat intelligence reset successfully',
+            'findings_cleared': findings_cleared,
+            'cache_cleared': cache_cleared
+        })
+        
+    except Exception as e:
+        logger.error(f"Error resetting threat intelligence: {e}")
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+# ============================================================================
 # WI-FI MANAGEMENT ENDPOINTS
 # ============================================================================
+
+@app.route('/api/wifi/interfaces')
+def get_wifi_interfaces():
+    """Get available Wi-Fi interfaces"""
+    try:
+        interfaces = []
+        
+        # Try to get interfaces from system
+        try:
+            result = subprocess.run(['ip', 'link', 'show'], capture_output=True, text=True, timeout=5)
+            if result.returncode == 0:
+                for line in result.stdout.split('\n'):
+                    # Look for wireless interfaces (wlan, wlp, etc.)
+                    if re.search(r'^\d+:\s+(wlan\d+|wlp\w+|wlx\w+)', line):
+                        match = re.search(r'^\d+:\s+(\S+):', line)
+                        if match:
+                            interface_name = match.group(1)
+                            # Check if interface is up
+                            state_match = re.search(r'state\s+(\w+)', line)
+                            state = state_match.group(1) if state_match else 'UNKNOWN'
+                            
+                            interfaces.append({
+                                'name': interface_name,
+                                'state': state,
+                                'is_default': interface_name == 'wlan0'
+                            })
+        except Exception as e:
+            logger.warning(f"Failed to get interfaces via ip command: {e}")
+            
+        # If no interfaces found, add default
+        if not interfaces:
+            interfaces.append({
+                'name': 'wlan0',
+                'state': 'UNKNOWN',
+                'is_default': True
+            })
+        
+        return jsonify({
+            'success': True,
+            'interfaces': interfaces
+        })
+        
+    except Exception as e:
+        logger.error(f"Error getting Wi-Fi interfaces: {e}")
+        return jsonify({
+            'success': False,
+            'error': str(e),
+            'interfaces': [{'name': 'wlan0', 'state': 'UNKNOWN', 'is_default': True}]
+        })
 
 @app.route('/api/wifi/status')
 def get_wifi_status():
@@ -3521,17 +3798,30 @@ def get_wifi_status():
         wifi_manager = getattr(shared_data, 'ragnar_instance', None)
         if wifi_manager and hasattr(wifi_manager, 'wifi_manager'):
             status = wifi_manager.wifi_manager.get_status()
+            logger.debug(f"Wi-Fi status from manager: {status}")
             return jsonify(status)
         else:
-            return jsonify({
-                'wifi_connected': shared_data.wifi_connected,
+            # Fallback: try to get Wi-Fi status from system
+            wifi_connected = getattr(shared_data, 'wifi_connected', False)
+            current_ssid = get_current_wifi_ssid() if wifi_connected else None
+            
+            fallback_status = {
+                'wifi_connected': wifi_connected,
                 'ap_mode_active': False,
-                'current_ssid': None,
-                'error': 'Wi-Fi manager not available'
-            })
+                'current_ssid': current_ssid,
+                'ap_ssid': None,
+                'error': 'Wi-Fi manager not available, using fallback'
+            }
+            logger.debug(f"Wi-Fi status fallback: {fallback_status}")
+            return jsonify(fallback_status)
     except Exception as e:
         logger.error(f"Error getting Wi-Fi status: {e}")
-        return jsonify({'error': str(e)}), 500
+        return jsonify({
+            'error': str(e),
+            'wifi_connected': False,
+            'ap_mode_active': False,
+            'current_ssid': None
+        }), 500
 
 @app.route('/api/wifi/scan', methods=['POST'])
 def scan_wifi_networks():
@@ -4147,6 +4437,92 @@ def get_network_intelligence():
             
     except Exception as e:
         logger.error(f"Error getting network intelligence: {e}")
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/vulnerabilities/grouped')
+def get_vulnerabilities_grouped():
+    """Get vulnerabilities grouped by IP address with summary statistics"""
+    try:
+        if (hasattr(shared_data, 'network_intelligence') and 
+            shared_data.network_intelligence and 
+            shared_data.config.get('network_intelligence_enabled', True)):
+            
+            # Get network-aware findings for dashboard
+            dashboard_findings = shared_data.network_intelligence.get_active_findings_for_dashboard()
+            
+            # Group vulnerabilities by host IP
+            grouped = {}
+            for vuln_id, vuln_info in dashboard_findings['vulnerabilities'].items():
+                host = vuln_info['host']
+                
+                if host not in grouped:
+                    grouped[host] = {
+                        'ip': host,
+                        'total_vulnerabilities': 0,
+                        'severity_counts': {
+                            'critical': 0,
+                            'high': 0,
+                            'medium': 0,
+                            'low': 0
+                        },
+                        'affected_ports': set(),
+                        'affected_services': set(),
+                        'vulnerabilities': []
+                    }
+                
+                # Increment counts
+                grouped[host]['total_vulnerabilities'] += 1
+                severity = vuln_info.get('severity', 'medium')
+                if severity in grouped[host]['severity_counts']:
+                    grouped[host]['severity_counts'][severity] += 1
+                
+                # Track ports and services
+                grouped[host]['affected_ports'].add(vuln_info['port'])
+                grouped[host]['affected_services'].add(vuln_info['service'])
+                
+                # Add vulnerability detail
+                grouped[host]['vulnerabilities'].append({
+                    'id': vuln_id,
+                    'port': vuln_info['port'],
+                    'service': vuln_info['service'],
+                    'vulnerability': vuln_info['vulnerability'],
+                    'severity': severity,
+                    'discovered': vuln_info['discovered'],
+                    'status': vuln_info['status']
+                })
+            
+            # Convert sets to lists for JSON serialization
+            for host_data in grouped.values():
+                host_data['affected_ports'] = sorted(list(host_data['affected_ports']))
+                host_data['affected_services'] = sorted(list(host_data['affected_services']))
+                # Sort vulnerabilities by severity
+                severity_order = {'critical': 0, 'high': 1, 'medium': 2, 'low': 3}
+                host_data['vulnerabilities'].sort(
+                    key=lambda v: severity_order.get(v['severity'], 4)
+                )
+            
+            # Convert to list and sort by total vulnerability count
+            grouped_list = sorted(
+                grouped.values(),
+                key=lambda x: x['total_vulnerabilities'],
+                reverse=True
+            )
+            
+            return jsonify({
+                'grouped_vulnerabilities': grouped_list,
+                'total_hosts': len(grouped_list),
+                'total_vulnerabilities': dashboard_findings['counts']['vulnerabilities'],
+                'network_context': {
+                    'current_network': dashboard_findings['network_id'],
+                    'network_name': dashboard_findings.get('network_name', 'Unknown')
+                }
+            })
+        else:
+            return jsonify({'error': 'Network intelligence not available'}), 503
+            
+    except Exception as e:
+        logger.error(f"Error getting grouped vulnerabilities: {e}")
         return jsonify({'error': str(e)}), 500
 
 
