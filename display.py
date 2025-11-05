@@ -90,7 +90,7 @@ class Display:
         """Periodically update the shared data with the latest system information."""
         while not self.shared_data.display_should_exit:
             self.update_shared_data()
-            time.sleep(25)
+            time.sleep(5)  # Check every 5 seconds for faster WiFi/SSH status updates
 
     def schedule_update_vuln_count(self):
         """Periodically update the vulnerability count on the display."""
@@ -249,7 +249,12 @@ class Display:
                     self.manual_mode_txt = "M"
                 else:
                     self.manual_mode_txt = "A"
-                self.shared_data.wifi_connected = self.is_wifi_connected()
+                
+                # Check WiFi connectivity with detailed logging
+                wifi_connected = self.is_wifi_connected()
+                self.shared_data.wifi_connected = wifi_connected
+                logger.info(f"[DISPLAY] WiFi status check: connected={wifi_connected}")
+                
                 self.shared_data.ap_mode_active = self.is_ap_mode_active()
                 self.shared_data.ap_client_count = self.get_ap_client_count() if self.shared_data.ap_mode_active else 0
                 self.shared_data.usb_active = self.is_usb_connected()
@@ -257,6 +262,7 @@ class Display:
                 # Update Wi-Fi/AP status text for display
                 wifi_status_text = self.get_wifi_status_text()
                 self.shared_data.ragnarstatustext2 = wifi_status_text
+                logger.info(f"[DISPLAY] WiFi status text: '{wifi_status_text}'")
                 
                 self.get_open_files()
 
@@ -290,14 +296,35 @@ class Display:
     # # #         return False
 
     def is_wifi_connected(self):
-        """Check if WiFi is connected by checking the current SSID."""
+        """Check if WiFi is connected by checking the current SSID and network connectivity."""
         try:
+            # Method 1: Try iwgetid first
             result = subprocess.Popen(['iwgetid', '-r'], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
             ssid, error = result.communicate()
-            if result.returncode != 0:
-                logger.error(f"Error executing 'iwgetid -r': {error}")
-                return False
-            return bool(ssid.strip())
+            if result.returncode == 0 and ssid.strip():
+                logger.debug(f"WiFi connected via iwgetid: SSID={ssid.strip()}")
+                return True
+            
+            # Method 2: Check if we have an active network interface with IP
+            result = subprocess.Popen(['ip', 'route', 'get', '8.8.8.8'], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+            route_output, error = result.communicate()
+            if result.returncode == 0 and 'via' in route_output:
+                logger.debug(f"WiFi connected via ip route check")
+                return True
+            
+            # Method 3: Check for wlan interface with IP
+            result = subprocess.Popen(['ip', 'addr', 'show'], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+            addr_output, error = result.communicate()
+            if result.returncode == 0:
+                # Look for wlan interfaces with inet addresses
+                for line in addr_output.split('\n'):
+                    if ('wlan' in line and 'state UP' in line) or ('inet ' in line and 'scope global' in line and ('wlan' in addr_output)):
+                        logger.debug(f"WiFi connected via interface check")
+                        return True
+            
+            logger.debug(f"WiFi not detected by any method")
+            return False
+            
         except Exception as e:
             logger.error(f"Error checking WiFi status: {e}")
             return False
@@ -371,7 +398,41 @@ class Display:
     def get_wifi_status_text(self):
         """Get descriptive text for current Wi-Fi status."""
         try:
-            # Try to get status from WiFi manager first (more accurate)
+            # FIRST: Try system-level WiFi detection (most reliable)
+            # Method 1: Try iwgetid first (get SSID if available)
+            try:
+                result = subprocess.run(['iwgetid', '-r'], capture_output=True, text=True, timeout=2)
+                if result.returncode == 0 and result.stdout.strip():
+                    ssid = result.stdout.strip()
+                    logger.debug(f"[STATUS] WiFi connected via iwgetid: SSID={ssid}")
+                    return f"WiFi: {ssid}"
+            except:
+                pass
+            
+            # Method 2: Check if we have network connectivity (WiFi without SSID)
+            try:
+                result = subprocess.run(['ip', 'route', 'get', '8.8.8.8'], 
+                                      capture_output=True, text=True, timeout=2)
+                if result.returncode == 0 and 'via' in result.stdout:
+                    logger.debug(f"[STATUS] WiFi connected via ip route check")
+                    return "WiFi: Connected"
+            except:
+                pass
+            
+            # Method 3: Check for wlan interface with IP
+            try:
+                result = subprocess.run(['ip', 'addr', 'show'], 
+                                      capture_output=True, text=True, timeout=2)
+                if result.returncode == 0:
+                    # Look for wlan interfaces with inet addresses
+                    for line in result.stdout.split('\n'):
+                        if ('wlan' in line and 'state UP' in line) or ('inet ' in line and 'scope global' in line and ('wlan' in result.stdout)):
+                            logger.debug(f"[STATUS] WiFi connected via interface check")
+                            return "WiFi: Connected"
+            except:
+                pass
+            
+            # SECONDARY: Try to get status from WiFi manager (if available in same process)
             if (hasattr(self.shared_data, 'ragnar_instance') and 
                 self.shared_data.ragnar_instance and 
                 hasattr(self.shared_data.ragnar_instance, 'wifi_manager')):
@@ -400,11 +461,8 @@ class Display:
                 # Check if cycling mode is active
                 if hasattr(wifi_mgr, 'cycling_mode') and wifi_mgr.cycling_mode:
                     return "WiFi: Cycling"
-                
-                return "WiFi: Disconnected"
             
-            # Fallback to system commands if WiFi manager not available
-            # Check if we're in AP mode first
+            # TERTIARY: Check if we're in AP mode at system level
             if self.is_ap_mode_active():
                 # Try to get AP client count
                 try:
@@ -422,12 +480,7 @@ class Display:
                 except:
                     return "AP: Active"
             
-            # Check if Wi-Fi is connected
-            result = subprocess.run(['iwgetid', '-r'], capture_output=True, text=True)
-            if result.returncode == 0 and result.stdout.strip():
-                ssid = result.stdout.strip()
-                return f"WiFi: {ssid}"
-            
+            logger.debug(f"[STATUS] WiFi not detected by any method")
             return "WiFi: Disconnected"
             
         except Exception as e:
