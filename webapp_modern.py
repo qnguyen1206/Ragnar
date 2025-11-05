@@ -381,7 +381,7 @@ def sync_vulnerability_count():
 
 def sync_all_counts():
     """Synchronize all counts (targets, ports, vulnerabilities, credentials) across data sources"""
-    global last_sync_time
+    global last_sync_time, network_scan_cache
 
     with sync_lock:
         start_time = time.time()
@@ -393,6 +393,27 @@ def sync_all_counts():
 
             # Update WiFi-specific network data from scan results
             aggregated_network_stats = update_wifi_network_data()
+            
+            # IMPORTANT: Merge ARP scan results to get LIVE host count
+            arp_hosts = network_scan_cache.get('arp_hosts', {})
+            if arp_hosts:
+                logger.debug(f"Merging {len(arp_hosts)} hosts from ARP cache into sync")
+                # Override aggregated stats with ARP data if available
+                if aggregated_network_stats:
+                    # Keep the total count, but update active count from ARP
+                    aggregated_network_stats['host_count'] = len(arp_hosts)
+                    aggregated_network_stats['inactive_host_count'] = max(
+                        aggregated_network_stats.get('total_host_count', 0) - len(arp_hosts), 0
+                    )
+                else:
+                    # Create stats from ARP data
+                    aggregated_network_stats = {
+                        'host_count': len(arp_hosts),
+                        'total_host_count': len(arp_hosts),
+                        'inactive_host_count': 0,
+                        'port_count': 0,
+                        'hosts': {}
+                    }
 
             # Sync target and port counts from scan results
             scan_results_dir = getattr(shared_data, 'scan_results_dir', os.path.join('data', 'output', 'scan_results'))
@@ -443,6 +464,26 @@ def sync_all_counts():
             logger.debug(f"Unique hosts found: {list(unique_hosts)}")
             aggregated_ports_from_csv = sum(len(ports) for ports in csv_host_ports.values())
             logger.debug(f"Total port count from CSV: {aggregated_ports_from_csv}")
+            
+            # ALSO read ports from netkb file which has the most complete port data
+            netkb_port_count = 0
+            if os.path.exists(shared_data.netkbfile):
+                try:
+                    with open(shared_data.netkbfile, 'r', encoding='utf-8', errors='ignore') as f:
+                        reader = csv.DictReader(f)
+                        for row in reader:
+                            if row.get('Alive') == '1' and row.get('Ports'):
+                                ports_str = row['Ports'].strip()
+                                if ports_str:
+                                    port_list = [p.strip() for p in ports_str.split(';') if p.strip()]
+                                    netkb_port_count += len(port_list)
+                    logger.debug(f"Total port count from netkb: {netkb_port_count}")
+                    # Use netkb port count if it's higher (more complete)
+                    if netkb_port_count > aggregated_ports_from_csv:
+                        aggregated_ports_from_csv = netkb_port_count
+                        logger.debug(f"Using netkb port count as it's more complete")
+                except Exception as e:
+                    logger.debug(f"Could not read netkb file for port count: {e}")
 
             old_targets = shared_data.targetnbr
             old_ports = shared_data.portnbr
