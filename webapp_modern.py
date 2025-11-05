@@ -2609,6 +2609,126 @@ def test_robust_tracking():
         return jsonify({'error': str(e)}), 500
 
 
+@app.route('/api/debug/orchestrator-status')
+def get_orchestrator_diagnostic():
+    """Comprehensive orchestrator diagnostic endpoint"""
+    try:
+        diagnostic = {
+            'timestamp': datetime.now().isoformat(),
+            'orchestrator_status': safe_str(shared_data.ragnarorch_status),
+            'orchestrator_status2': safe_str(shared_data.ragnarstatustext2),
+            'manual_mode': shared_data.config.get('manual_mode', False),
+            'manual_mode_reason': 'Manual mode is ENABLED - orchestrator will not run automatic attacks' if shared_data.config.get('manual_mode', False) else 'Manual mode is DISABLED - orchestrator should run attacks',
+            'wifi_connected': getattr(shared_data, 'wifi_connected', False),
+            'orchestrator_should_exit': getattr(shared_data, 'orchestrator_should_exit', True),
+            
+            # Configuration checks
+            'config': {
+                'scan_vuln_running': shared_data.config.get('scan_vuln_running', True),
+                'retry_success_actions': shared_data.config.get('retry_success_actions', True),
+                'retry_failed_actions': shared_data.config.get('retry_failed_actions', True),
+                'success_retry_delay': shared_data.config.get('success_retry_delay', 300),
+                'failed_retry_delay': shared_data.config.get('failed_retry_delay', 180),
+                'scan_interval': shared_data.config.get('scan_interval', 180),
+                'scan_vuln_interval': shared_data.config.get('scan_vuln_interval', 300),
+            },
+            
+            # Target information
+            'targets': {
+                'total_count': 0,
+                'alive_count': 0,
+                'alive_hosts': []
+            },
+            
+            # Actions status
+            'actions_available': False,
+            'actions_pending': False,
+            
+            # Diagnosis
+            'diagnosis': [],
+            'recommendations': []
+        }
+        
+        # Check netkb for targets
+        try:
+            if os.path.exists(shared_data.netkbfile):
+                with open(shared_data.netkbfile, 'r') as f:
+                    reader = csv.DictReader(f)
+                    rows = list(reader)
+                    diagnostic['targets']['total_count'] = len(rows)
+                    
+                    for row in rows:
+                        if row.get('Alive') == '1':
+                            diagnostic['targets']['alive_count'] += 1
+                            ip = row.get('IPs', '')
+                            hostname = row.get('Hostnames', '')
+                            ports = row.get('Ports', '')
+                            diagnostic['targets']['alive_hosts'].append({
+                                'ip': ip,
+                                'hostname': hostname,
+                                'ports': ports,
+                                'mac': row.get('MAC Address', '')
+                            })
+        except Exception as e:
+            diagnostic['targets']['error'] = str(e)
+        
+        # Diagnose issues
+        if diagnostic['manual_mode']:
+            diagnostic['diagnosis'].append('🔴 MANUAL MODE IS ENABLED - This is why Ragnar is not performing attacks!')
+            diagnostic['recommendations'].append('Disable manual mode in the Config tab to allow automatic attacks')
+        
+        if not diagnostic['wifi_connected']:
+            diagnostic['diagnosis'].append('🔴 Wi-Fi is not connected')
+            diagnostic['recommendations'].append('Connect to Wi-Fi to enable network scanning and attacks')
+        
+        if diagnostic['orchestrator_should_exit']:
+            diagnostic['diagnosis'].append('🔴 Orchestrator exit flag is set')
+            diagnostic['recommendations'].append('Restart the Ragnar service to clear the exit flag')
+        
+        if diagnostic['targets']['alive_count'] == 0:
+            diagnostic['diagnosis'].append('⚠️ No alive targets found on the network')
+            diagnostic['recommendations'].append('Wait for network scan to complete or manually trigger a scan')
+            diagnostic['recommendations'].append('Check if you are connected to the correct network')
+        else:
+            diagnostic['diagnosis'].append(f'✅ Found {diagnostic["targets"]["alive_count"]} alive targets')
+        
+        if not diagnostic['config']['scan_vuln_running']:
+            diagnostic['diagnosis'].append('⚠️ Vulnerability scanning is disabled')
+            diagnostic['recommendations'].append('Enable vulnerability scanning in Config tab')
+        
+        # Check if actions are available
+        try:
+            if os.path.exists(shared_data.actions_file):
+                with open(shared_data.actions_file, 'r') as f:
+                    actions_config = json.load(f)
+                    diagnostic['actions_available'] = len(actions_config) > 0
+                    diagnostic['actions_count'] = len(actions_config)
+                    if not diagnostic['actions_available']:
+                        diagnostic['diagnosis'].append('🔴 No actions configured in actions.json')
+                        diagnostic['recommendations'].append('Check actions.json file for valid action configurations')
+            else:
+                diagnostic['diagnosis'].append('🔴 actions.json file not found')
+                diagnostic['recommendations'].append('Restore actions.json file to enable attacks')
+        except Exception as e:
+            diagnostic['diagnosis'].append(f'🔴 Error loading actions: {str(e)}')
+        
+        # Summary
+        if not diagnostic['diagnosis']:
+            diagnostic['diagnosis'].append('✅ All systems appear normal')
+            if diagnostic['targets']['alive_count'] > 0:
+                diagnostic['diagnosis'].append(f'⚙️ Orchestrator should be running attacks on {diagnostic["targets"]["alive_count"]} targets')
+            else:
+                diagnostic['diagnosis'].append('⚙️ Waiting for network scan to discover targets')
+        
+        return jsonify(diagnostic)
+        
+    except Exception as e:
+        logger.error(f"Error in orchestrator diagnostic: {e}")
+        return jsonify({
+            'error': str(e),
+            'timestamp': datetime.now().isoformat()
+        }), 500
+
 @app.route('/api/debug/connectivity-tracking')
 def get_connectivity_tracking():
     """Get detailed connectivity tracking information for all devices"""
