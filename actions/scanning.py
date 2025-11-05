@@ -5,8 +5,11 @@
 import os
 import threading
 import csv
+from concurrent.futures import ThreadPoolExecutor
 import pandas as pd
 import socket
+import subprocess
+import re
 try:
     import netifaces_plus as netifaces
 except ImportError:
@@ -68,9 +71,94 @@ class NetworkScanner:
         self.currentdir = shared_data.currentdir
         # CRITICAL: Pi Zero W2 has limited resources - use conservative thread count
         # 512MB RAM, 4 cores @ 1GHz can only handle a few concurrent operations
-        self.semaphore = threading.Semaphore(3)  # Max 3 concurrent port scans for Pi Zero W2
+        cpu_count = os.cpu_count() or 1
+        # Limit concurrent socket operations aggressively on the Pi Zero 2 W
+        self.port_scan_workers = max(2, min(6, cpu_count))
+        self.host_scan_workers = max(2, min(6, cpu_count))
+        self.semaphore = threading.Semaphore(min(4, max(1, cpu_count // 2 or 1)))
         self.nm = nmap.PortScanner()  # Initialize nmap.PortScanner()
         self.running = False
+        self.arp_scan_interface = "wlan0"
+
+    @staticmethod
+    def _is_valid_mac(value):
+        """Validate MAC address format."""
+        if not value:
+            return False
+        return bool(re.match(r"^([0-9a-f]{2}:){5}[0-9a-f]{2}$", value.lower()))
+
+    @staticmethod
+    def _is_valid_ip(value):
+        """Validate IPv4 address format."""
+        try:
+            ipaddress.ip_address(value)
+            return True
+        except ValueError:
+            return False
+
+    def resolve_hostname(self, ip):
+        """Resolve hostname for the given IP address."""
+        try:
+            if ip and self._is_valid_ip(ip):
+                hostname, _, _ = socket.gethostbyaddr(ip)
+                return hostname
+        except (socket.herror, socket.gaierror):
+            return ""
+        except Exception as e:
+            self.logger.debug(f"Error resolving hostname for {ip}: {e}")
+        return ""
+
+    def _parse_arp_scan_output(self, output):
+        """Parse arp-scan output into a mapping of IP to metadata."""
+        hosts = {}
+        if not output:
+            return hosts
+
+        for line in output.splitlines():
+            line = line.strip()
+            if not line or line.startswith("Interface:") or line.startswith("Starting") or line.startswith("Ending"):
+                continue
+
+            parts = re.split(r"\s+", line)
+            if len(parts) < 2:
+                continue
+
+            ip_candidate, mac_candidate = parts[0], parts[1]
+            if not (self._is_valid_ip(ip_candidate) and self._is_valid_mac(mac_candidate)):
+                continue
+
+            vendor = " ".join(parts[2:]).strip() if len(parts) > 2 else ""
+            hosts[ip_candidate] = {
+                "mac": mac_candidate.lower(),
+                "vendor": vendor
+            }
+
+        return hosts
+
+    def run_arp_scan(self):
+        """Execute arp-scan to quickly discover hosts on the local network."""
+        command = ['sudo', 'arp-scan', f'--interface={self.arp_scan_interface}', '--localnet']
+        self.logger.info(f"Running arp-scan for host discovery: {' '.join(command)}")
+
+        try:
+            result = subprocess.run(command, capture_output=True, text=True, check=True, timeout=120)
+            hosts = self._parse_arp_scan_output(result.stdout)
+            self.logger.info(f"arp-scan discovered {len(hosts)} hosts")
+            return hosts
+        except FileNotFoundError:
+            self.logger.error("arp-scan command not found. Install arp-scan or adjust configuration.")
+            return {}
+        except subprocess.TimeoutExpired as e:
+            self.logger.error(f"arp-scan timed out: {e}")
+            hosts = self._parse_arp_scan_output(e.stdout or "")
+            return hosts
+        except subprocess.CalledProcessError as e:
+            self.logger.warning(f"arp-scan exited with code {e.returncode}: {e.stderr.strip() if e.stderr else 'no stderr'}")
+            hosts = self._parse_arp_scan_output(e.stdout or "")
+            return hosts
+        except Exception as e:
+            self.logger.error(f"Unexpected error running arp-scan: {e}")
+            return {}
 
     def check_if_csv_scan_file_exists(self, csv_scan_file, csv_result_file, netkbfile):
         """
@@ -353,12 +441,22 @@ class NetworkScanner:
             Starts the port scanning process for the specified range and extra ports.
             """
             try:
-                for port in range(self.portstart, self.portend):
-                    t = threading.Thread(target=self.scan_with_semaphore, args=(port,))
-                    t.start()
-                for port in self.extra_ports:
-                    t = threading.Thread(target=self.scan_with_semaphore, args=(port,))
-                    t.start()
+                ports_to_scan = list(range(self.portstart, self.portend))
+                extra_ports = self.extra_ports or []
+                ports_to_scan.extend(extra_ports)
+                # Remove duplicates while preserving order
+                seen_ports = set()
+                ordered_ports = []
+                for port in ports_to_scan:
+                    if port in seen_ports:
+                        continue
+                    seen_ports.add(port)
+                    ordered_ports.append(port)
+
+                with ThreadPoolExecutor(max_workers=self.outer_instance.port_scan_workers) as executor:
+                    futures = [executor.submit(self.scan_with_semaphore, port) for port in ordered_ports]
+                    for future in futures:
+                        future.result()
             except Exception as e:
                 self.logger.info(f"Maximum threads defined in the semaphore reached: {e}")
 
@@ -391,6 +489,9 @@ class NetworkScanner:
             self.open_ports = {}
             self.all_ports = []
             self.ip_hostname_list = []
+            self.total_ips = 0
+            self.arp_hosts = {}
+            self.use_nmap_results = False
 
         def scan_network_and_write_to_csv(self):
             """
@@ -405,30 +506,62 @@ class NetworkScanner:
                 except Exception as e:
                     self.outer_instance.logger.error(f"Error in scan_network_and_write_to_csv (initial write): {e}")
 
-            # Use nmap to scan for live hosts
-            nmap_logger.log_scan_operation(f"Host discovery scan", f"Network: {self.network}, Arguments: -sn")
-            self.outer_instance.nm.scan(hosts=str(self.network), arguments='-sn')
-            
-            # Log the scan results
-            all_hosts = self.outer_instance.nm.all_hosts()
-            nmap_logger.log_scan_operation(f"Host discovery completed", f"Found {len(all_hosts)} hosts: {', '.join(all_hosts)}")
-            
-            for host in all_hosts:
-                t = threading.Thread(target=self.scan_host, args=(host,))
-                t.start()
+            # Prefer arp-scan for host discovery
+            self.arp_hosts = self.outer_instance.run_arp_scan()
 
-            time.sleep(5)
+            if self.arp_hosts:
+                all_hosts = sorted(self.arp_hosts.keys(), key=self.outer_instance.ip_key)
+                self.logger.info(f"Using arp-scan results for {len(all_hosts)} hosts")
+            else:
+                # Fallback to nmap host discovery if arp-scan failed
+                nmap_logger.log_scan_operation("Host discovery scan (fallback)", f"Network: {self.network}, Arguments: -sn")
+                self.outer_instance.nm.scan(hosts=str(self.network), arguments='-sn')
+                all_hosts = self.outer_instance.nm.all_hosts()
+                nmap_logger.log_scan_operation("Host discovery completed (nmap)", f"Found {len(all_hosts)} hosts: {', '.join(all_hosts)}")
+                self.use_nmap_results = True
+
+            with ThreadPoolExecutor(max_workers=self.outer_instance.host_scan_workers) as executor:
+                futures = [
+                    executor.submit(self.scan_host, host, self.arp_hosts.get(host))
+                    for host in all_hosts
+                ]
+                for future in futures:
+                    future.result()
+
             self.outer_instance.sort_and_write_csv(self.csv_scan_file)
 
-        def scan_host(self, ip):
+        def scan_host(self, ip, arp_entry=None):
             """
             Scans a specific host to check if it is alive and retrieves its hostname and MAC address.
             """
             if self.outer_instance.blacklistcheck and ip in self.outer_instance.ip_scan_blacklist:
                 return
             try:
-                hostname = self.outer_instance.nm[ip].hostname() if self.outer_instance.nm[ip].hostname() else ''
-                mac = self.outer_instance.get_mac_address(ip, hostname)
+                hostname = ""
+                mac = None
+
+                if arp_entry:
+                    mac = arp_entry.get("mac")
+
+                if self.use_nmap_results:
+                    try:
+                        hostname = self.outer_instance.nm[ip].hostname() or ''
+                        if not mac:
+                            mac = self.outer_instance.nm[ip]['addresses'].get('mac')
+                    except Exception as e:
+                        self.outer_instance.logger.debug(f"No nmap data for {ip}: {e}")
+
+                if not hostname:
+                    hostname = self.outer_instance.resolve_hostname(ip)
+
+                if not mac:
+                    mac = self.outer_instance.get_mac_address(ip, hostname)
+
+                if not mac:
+                    mac = "00:00:00:00:00:00"
+                else:
+                    mac = mac.lower()
+
                 if not self.outer_instance.blacklistcheck or mac not in self.outer_instance.mac_scan_blacklist:
                     with self.outer_instance.lock:
                         with open(self.csv_scan_file, 'a', newline='') as file:
@@ -444,15 +577,17 @@ class NetworkScanner:
             """
             Returns the progress of the scanning process.
             """
-            return (self.progress / self.total_ips) * 100
+            total = self.total_ips if self.total_ips else 1
+            return (self.progress / total) * 100
 
         def start(self):
             """
             Starts the network and port scanning process.
             """
             self.scan_network_and_write_to_csv()
-            time.sleep(7)
+            time.sleep(1)
             self.ip_data = self.outer_instance.GetIpFromCsv(self.outer_instance, self.csv_scan_file)
+            self.total_ips = len(self.ip_data.ip_list)
             self.open_ports = {ip: [] for ip in self.ip_data.ip_list}
             with Progress() as progress:
                 task = progress.add_task("[cyan]Scanning IPs...", total=len(self.ip_data.ip_list))

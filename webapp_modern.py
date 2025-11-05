@@ -25,6 +25,7 @@ import shutil
 import importlib
 import hashlib
 import ipaddress
+import socket
 from datetime import datetime, timedelta
 from flask import Flask, render_template, jsonify, request, send_from_directory, Response
 from flask_socketio import SocketIO, emit
@@ -85,6 +86,199 @@ sync_lock = threading.Lock()
 last_sync_time = 0.0
 SYNC_BACKGROUND_INTERVAL = 5  # seconds between automatic synchronizations
 
+
+DEFAULT_ARP_SCAN_INTERFACE = 'wlan0'
+SEP_SCAN_COMMAND = ['sudo', 'sep-scan']
+MAC_REGEX = re.compile(r'^([0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2}$')
+
+
+def _is_valid_ipv4(value):
+    try:
+        ipaddress.ip_address(value)
+        return True
+    except ValueError:
+        return False
+
+
+def _normalize_mac(mac):
+    return mac.lower() if mac else ''
+
+
+def _parse_arp_scan_output(output):
+    hosts = {}
+    if not output:
+        return hosts
+
+    for line in output.splitlines():
+        line = line.strip()
+        if not line or line.startswith('Interface:') or line.startswith('Starting') or line.startswith('Ending'):
+            continue
+
+        parts = re.split(r'\s+', line)
+        if len(parts) < 2:
+            continue
+
+        ip_candidate, mac_candidate = parts[0], parts[1]
+        if not (_is_valid_ipv4(ip_candidate) and MAC_REGEX.match(mac_candidate)):
+            continue
+
+        vendor = ' '.join(parts[2:]).strip() if len(parts) > 2 else ''
+        hosts[ip_candidate] = {
+            'mac': _normalize_mac(mac_candidate),
+            'vendor': vendor
+        }
+
+    return hosts
+
+
+def build_pseudo_mac_from_ip(ip):
+    try:
+        octets = [int(part) for part in ip.split('.')]
+        if len(octets) == 4:
+            return f"00:00:{octets[0]:02x}:{octets[1]:02x}:{octets[2]:02x}:{octets[3]:02x}"
+    except Exception:
+        pass
+    return "00:00:00:00:00:00"
+
+
+def run_targeted_arp_scan(ip, interface=DEFAULT_ARP_SCAN_INTERFACE):
+    command = ['sudo', 'arp-scan', f'--interface={interface}', ip]
+    logger.info(f"Running targeted arp-scan for {ip}: {' '.join(command)}")
+    try:
+        result = subprocess.run(command, capture_output=True, text=True, check=False, timeout=60)
+        hosts = _parse_arp_scan_output(result.stdout)
+        entry = hosts.get(ip)
+        return entry.get('mac', '') if entry else ''
+    except FileNotFoundError:
+        logger.warning("arp-scan command not found when resolving MAC for %s", ip)
+        return ''
+    except subprocess.TimeoutExpired as e:
+        logger.warning("arp-scan timed out for %s: %s", ip, e)
+        hosts = _parse_arp_scan_output(e.stdout or '')
+        entry = hosts.get(ip)
+        return entry.get('mac', '') if entry else ''
+    except Exception as e:
+        logger.error(f"Error running targeted arp-scan for {ip}: {e}")
+        return ''
+
+
+def resolve_ip_hostname(ip):
+    try:
+        if _is_valid_ipv4(ip):
+            hostname, _, _ = socket.gethostbyaddr(ip)
+            return hostname
+    except (socket.herror, socket.gaierror):
+        return ''
+    except Exception as e:
+        logger.debug(f"Hostname resolution failed for {ip}: {e}")
+    return ''
+
+
+def update_vulnerability_output(ip, hostname, mac, is_alive):
+    """Create or update vulnerability scan results file for discovered host"""
+    try:
+        # Ensure vulnerabilities output directory exists
+        vuln_output_dir = os.path.join('data', 'output', 'vulnerabilities')
+        os.makedirs(vuln_output_dir, exist_ok=True)
+        
+        # Create or update vulnerability scan results file for this IP
+        vuln_file = os.path.join(vuln_output_dir, f'scan_{ip.replace(".", "_")}.txt')
+        
+        with open(vuln_file, 'w') as f:
+            f.write(f"# Vulnerability scan results for {ip}\n")
+            f.write(f"# Hostname: {hostname}\n")
+            f.write(f"# MAC: {mac}\n")
+            f.write(f"# Status: {'alive' if is_alive else 'dead'}\n")
+            f.write(f"# Last updated: {datetime.now().isoformat()}\n")
+            f.write(f"# Discovered via: ARP/Nmap network scanning\n\n")
+            
+            if is_alive:
+                f.write(f"Host {ip} is alive and responding\n")
+                f.write(f"MAC Address: {mac}\n")
+                f.write(f"Hostname: {hostname}\n")
+                f.write(f"Status: ACTIVE\n\n")
+                f.write(f"=== NETWORK DISCOVERY RESULTS ===\n")
+                f.write(f"Host discovered through network scanning\n")
+                f.write(f"Further vulnerability scanning recommended\n")
+            else:
+                f.write(f"Host {ip} is not responding\n")
+                f.write(f"Status: INACTIVE\n")
+        
+        logger.debug(f"Updated vulnerability output for {ip}")
+        
+    except Exception as e:
+        logger.error(f"Error updating vulnerability output for {ip}: {e}")
+
+
+def update_netkb_entry(ip, hostname, mac, is_alive):
+    try:
+        # Update vulnerability output files
+        update_vulnerability_output(ip, hostname, mac, is_alive)
+        
+        netkb_path = shared_data.netkbfile
+        os.makedirs(os.path.dirname(netkb_path), exist_ok=True)
+
+        rows = []
+        headers = []
+        updated_row = None
+
+        if os.path.exists(netkb_path) and os.path.getsize(netkb_path) > 0:
+            with open(netkb_path, 'r', encoding='utf-8', errors='ignore') as f:
+                reader = csv.DictReader(f)
+                headers = reader.fieldnames or []
+                for row in reader:
+                    rows.append(row)
+        else:
+            headers = ['MAC Address', 'IPs', 'Hostnames', 'Alive', 'Ports']
+
+        for column in ['MAC Address', 'IPs', 'Hostnames', 'Alive', 'Ports']:
+            if column not in headers:
+                headers.append(column)
+
+        alive_value = '1' if is_alive else '0'
+        mac_to_store = _normalize_mac(mac) if mac else ''
+
+        for row in rows:
+            existing_ips = [entry.strip() for entry in row.get('IPs', '').split(';') if entry.strip()]
+            if ip in existing_ips:
+                if mac_to_store:
+                    row['MAC Address'] = mac_to_store
+                elif is_alive and not MAC_REGEX.match(row.get('MAC Address', '') or ''):
+                    row['MAC Address'] = build_pseudo_mac_from_ip(ip)
+
+                if hostname:
+                    existing_hostnames = [h.strip() for h in row.get('Hostnames', '').split(';') if h.strip()]
+                    existing_hostnames.append(hostname)
+                    row['Hostnames'] = ';'.join(sorted(set(existing_hostnames)))
+
+                row['Alive'] = alive_value
+                updated_row = row
+                break
+
+        if updated_row is None:
+            new_row = {header: '' for header in headers}
+            new_row['IPs'] = ip
+            new_row['Hostnames'] = hostname or ''
+            if mac_to_store:
+                new_row['MAC Address'] = mac_to_store
+            elif is_alive:
+                new_row['MAC Address'] = build_pseudo_mac_from_ip(ip)
+            else:
+                new_row['MAC Address'] = ''
+            new_row['Alive'] = alive_value
+            new_row['Ports'] = ''
+            rows.append(new_row)
+            updated_row = new_row
+
+        with open(netkb_path, 'w', newline='', encoding='utf-8') as f:
+            writer = csv.DictWriter(f, fieldnames=headers)
+            writer.writeheader()
+            writer.writerows(rows)
+
+        return updated_row
+    except Exception as e:
+        logger.error(f"Error updating netkb entry for {ip}: {e}")
+        return None
 
 def broadcast_status_update():
     """Immediately broadcast current status to all connected clients"""
@@ -1161,22 +1355,53 @@ def load_persistent_network_data():
 
     if network_data:
         ip_to_mac = {}
+        enrichment_map = {}
         for row in netkb_data:
             ip = _extract_value(row, ("IPs", "IP", "ip"))
             mac = _extract_value(row, ("MAC Address", "MAC", "mac"))
+            vuln_summary = _extract_value(row, ("Nmap Vulnerabilities", "nmap_vulnerabilities"))
+            vuln_status = _extract_value(row, ("NmapVulnScanner", "nmap_vuln_scanner"))
+
+            enrichment_payload = {
+                'Nmap Vulnerabilities': vuln_summary or '',
+                'NmapVulnScanner': vuln_status or ''
+            }
+
             if ip and mac and mac.upper() not in {"UNKNOWN", "STANDALONE"}:
                 ip_to_mac[ip] = mac
 
+            if mac:
+                enrichment_map[("mac", mac.lower())] = enrichment_payload
+            if ip:
+                enrichment_map[("ip", ip)] = enrichment_payload
+
         for entry in network_data:
             mac = _extract_value(entry, ("MAC Address", "MAC", "mac"))
+            ip = _extract_value(entry, ("IPs", "IP", "ip"))
             if not mac or mac.upper() in {"UNKNOWN", "STANDALONE", "00:00:00:00:00:00"}:
-                ip = _extract_value(entry, ("IPs", "IP", "ip"))
                 fallback_mac = ip_to_mac.get(ip)
                 if fallback_mac:
                     mac = fallback_mac
-            entry['MAC Address'] = mac or ''
-            entry['MAC'] = entry['MAC Address']
-            entry['mac'] = entry['MAC Address']
+
+            mac = mac or ''
+            entry['MAC Address'] = mac
+            entry['MAC'] = mac
+            entry['mac'] = mac
+
+            enrichment = enrichment_map.get(("mac", mac.lower())) if mac else None
+            if not enrichment and ip:
+                enrichment = enrichment_map.get(("ip", ip))
+
+            if enrichment:
+                entry['Nmap Vulnerabilities'] = enrichment.get('Nmap Vulnerabilities', '')
+                entry['nmap_vulnerabilities'] = entry['Nmap Vulnerabilities']
+                entry['NmapVulnScanner'] = enrichment.get('NmapVulnScanner', '')
+                entry['nmap_vuln_scanner'] = entry['NmapVulnScanner']
+            else:
+                entry.setdefault('Nmap Vulnerabilities', '')
+                entry.setdefault('nmap_vulnerabilities', '')
+                entry.setdefault('NmapVulnScanner', '')
+                entry.setdefault('nmap_vuln_scanner', '')
     else:
         logger.warning("WiFi-specific network data is empty. Falling back to netkb data.")
         if netkb_data:
@@ -1190,6 +1415,8 @@ def load_persistent_network_data():
                 alive = _extract_value(row, ("Alive", "Status", "alive", "status")) or '0'
                 ports = _extract_value(row, ("Ports", "Open Ports", "open_ports"))
                 last_seen = _extract_value(row, ("LastSeen", "Last Seen", "last_seen"))
+                vuln_summary = _extract_value(row, ("Nmap Vulnerabilities", "nmap_vulnerabilities"))
+                vuln_status = _extract_value(row, ("NmapVulnScanner", "nmap_vuln_scanner"))
 
                 normalized_entries.append({
                     'IPs': ip,
@@ -1199,7 +1426,11 @@ def load_persistent_network_data():
                     'MAC': mac,
                     'mac': mac,
                     'Ports': ports,
-                    'LastSeen': last_seen
+                    'LastSeen': last_seen,
+                    'Nmap Vulnerabilities': vuln_summary or '',
+                    'nmap_vulnerabilities': vuln_summary or '',
+                    'NmapVulnScanner': vuln_status or '',
+                    'nmap_vuln_scanner': vuln_status or ''
                 })
 
             network_data = normalized_entries
@@ -1212,6 +1443,126 @@ def load_persistent_network_data():
     logger.info(f"Returning {len(network_data)} network entries for WiFi: {current_ssid}")
     return network_data
 
+
+@app.route('/api/network/stable')
+def get_stable_network_data():
+    """Get stable, aggregated network data for the Network tab"""
+    try:
+        # Read from the WiFi-specific network file for most stable data
+        network_data = read_wifi_network_data()
+        
+        # Also get any recent ARP scan cache data
+        recent_arp_data = network_scan_cache.get('arp_hosts', {})
+        
+        # Read NetKB data for additional enrichment (ports, MACs, etc.)
+        netkb_data = []
+        try:
+            netkb_data = shared_data.read_data()
+        except Exception as e:
+            logger.warning(f"Could not read NetKB data for enrichment: {e}")
+        
+        # Create enrichment map from NetKB data
+        netkb_enrichment = {}
+        for entry in netkb_data:
+            ip = entry.get('IPs', '').strip()
+            if ip and ip not in ['STANDALONE']:
+                netkb_enrichment[ip] = {
+                    'mac': entry.get('MAC Address', '').strip(),
+                    'hostname': entry.get('Hostnames', '').strip(),
+                    'ports': entry.get('Ports', '').strip(),
+                    'alive': entry.get('Alive', '0')
+                }
+        
+        # Merge and enrich the data
+        enriched_hosts = []
+        processed_ips = set()
+        
+        # Process network data first (most stable)
+        for entry in network_data:
+            ip = entry.get('IPs', '').strip()  # Fixed: Use 'IPs' not 'IP'
+            if not ip or ip in processed_ips:
+                continue
+                
+            processed_ips.add(ip)
+            
+            host_data = {
+                'ip': ip,
+                'hostname': entry.get('Hostnames', '').strip() or 'Unknown',
+                'mac': entry.get('MAC Address', '').strip() or 'Unknown',
+                'status': 'up' if entry.get('Alive') in [True, 'True', '1', 1] else 'unknown',
+                'ports': entry.get('Ports', '').strip() or 'Unknown',
+                'vulnerabilities': str(entry.get('Vulnerabilities', '0')).strip() or '0',
+                'last_scan': entry.get('LastSeen', '').strip() or 'Never',
+                'first_seen': entry.get('First_Seen', '').strip() or 'Unknown',
+                'os': entry.get('OS', '').strip() or 'Unknown',
+                'services': entry.get('Services', '').strip() or 'Unknown',
+                'source': 'network_data'
+            }
+            
+            # Enhance with NetKB data if available
+            if ip in netkb_enrichment:
+                netkb_entry = netkb_enrichment[ip]
+                # Use NetKB data to fill in missing information
+                if netkb_entry.get('mac') and host_data['mac'] in ['Unknown', '00:00:00:00:00:00', '']:
+                    host_data['mac'] = netkb_entry['mac']
+                if netkb_entry.get('hostname') and host_data['hostname'] in ['Unknown', '']:
+                    host_data['hostname'] = netkb_entry['hostname']
+                if netkb_entry.get('ports') and host_data['ports'] in ['Unknown', '']:
+                    host_data['ports'] = netkb_entry['ports']
+                # Check if NetKB shows host as alive
+                if netkb_entry.get('alive') in ['1', 1]:
+                    host_data['status'] = 'up'
+                    host_data['source'] = 'network_data+netkb'
+            
+            # Enhance with recent ARP data if available
+            if ip in recent_arp_data:
+                arp_entry = recent_arp_data[ip]
+                if arp_entry.get('mac') and host_data['mac'] in ['Unknown', '00:00:00:00:00:00', '']:
+                    host_data['mac'] = arp_entry['mac']
+                if arp_entry.get('hostname') and host_data['hostname'] in ['Unknown', '']:
+                    host_data['hostname'] = arp_entry['hostname']
+                host_data['status'] = 'up'  # ARP means it's definitely up
+                host_data['source'] = 'network_data+arp+netkb' if 'netkb' in host_data['source'] else 'network_data+arp'
+            
+            enriched_hosts.append(host_data)
+        
+        # Add any new ARP discoveries not in network data
+        for ip, arp_entry in recent_arp_data.items():
+            if ip not in processed_ips:
+                host_data = {
+                    'ip': ip,
+                    'hostname': arp_entry.get('hostname', 'Unknown'),
+                    'mac': arp_entry.get('mac', 'Unknown'),
+                    'status': 'up',
+                    'ports': 'Scanning...',
+                    'vulnerabilities': '0',
+                    'last_scan': 'Recently discovered',
+                    'first_seen': 'Recent',
+                    'os': 'Unknown',
+                    'services': 'Unknown',
+                    'source': 'arp_discovery'
+                }
+                enriched_hosts.append(host_data)
+        
+        # Sort by IP address for consistent display
+        enriched_hosts.sort(key=lambda x: tuple(map(int, x['ip'].split('.'))))
+        
+        return jsonify({
+            'success': True,
+            'hosts': enriched_hosts,
+            'count': len(enriched_hosts),
+            'timestamp': datetime.now().isoformat(),
+            'source': 'stable_aggregated'
+        })
+        
+    except Exception as e:
+        logger.error(f"Error getting stable network data: {e}")
+        return jsonify({
+            'success': False,
+            'error': str(e),
+            'hosts': [],
+            'count': 0
+        }), 500
 
 @app.route('/api/network')
 def get_network():
@@ -1581,9 +1932,452 @@ def get_activity_logs():
         logger.error(f"Error getting activity logs: {e}")
         return jsonify({'error': str(e)}), 500
 
+@app.route('/api/debug/verbose-logs')
+def get_verbose_debug_logs():
+    """Get super verbose debugging logs for tracing data flow issues"""
+    try:
+        debug_info = {
+            'timestamp': datetime.now().isoformat(),
+            'system_state': {},
+            'data_sources': {},
+            'cache_state': {},
+            'sync_information': {},
+            'file_operations': {},
+            'api_traces': [],
+            'errors_and_warnings': []
+        }
+        
+        # === SYSTEM STATE DEBUGGING ===
+        debug_info['system_state'] = {
+            'shared_data_targetnbr': getattr(shared_data, 'targetnbr', 'NOT_SET'),
+            'shared_data_total_targetnbr': getattr(shared_data, 'total_targetnbr', 'NOT_SET'),
+            'shared_data_inactive_targetnbr': getattr(shared_data, 'inactive_targetnbr', 'NOT_SET'),
+            'shared_data_portnbr': getattr(shared_data, 'portnbr', 'NOT_SET'),
+            'shared_data_vulnnbr': getattr(shared_data, 'vulnnbr', 'NOT_SET'),
+            'shared_data_crednbr': getattr(shared_data, 'crednbr', 'NOT_SET'),
+            'shared_data_levelnbr': getattr(shared_data, 'levelnbr', 'NOT_SET'),
+            'shared_data_coinnbr': getattr(shared_data, 'coinnbr', 'NOT_SET'),
+        }
+        
+        # === DATA SOURCES DEBUGGING ===
+        try:
+            # WiFi network data
+            wifi_network_file = get_wifi_specific_network_file()
+            debug_info['data_sources']['wifi_network_file'] = {
+                'path': wifi_network_file,
+                'exists': os.path.exists(wifi_network_file),
+                'size_bytes': os.path.getsize(wifi_network_file) if os.path.exists(wifi_network_file) else 0,
+                'modified_time': datetime.fromtimestamp(os.path.getmtime(wifi_network_file)).isoformat() if os.path.exists(wifi_network_file) else 'N/A'
+            }
+            
+            # Read and analyze wifi network data
+            network_data = read_wifi_network_data()
+            debug_info['data_sources']['wifi_network_data'] = {
+                'total_entries': len(network_data),
+                'alive_entries': len([entry for entry in network_data if entry.get('Alive') in [True, 'True', '1', 1]]),
+                'sample_entries': network_data[:3] if network_data else [],
+                'all_alive_values': list(set([str(entry.get('Alive', 'MISSING')) for entry in network_data])),
+                'ip_list': [entry.get('IPs', 'NO_IP') for entry in network_data[:10]]
+            }
+            
+        except Exception as e:
+            debug_info['errors_and_warnings'].append(f"Error reading WiFi network data: {str(e)}")
+        
+        try:
+            # NetKB data
+            netkb_data = shared_data.read_data()
+            debug_info['data_sources']['netkb_data'] = {
+                'total_entries': len(netkb_data),
+                'alive_entries': len([entry for entry in netkb_data if entry.get('Alive') in ['1', 1]]),
+                'sample_entries': netkb_data[:3] if netkb_data else [],
+                'all_alive_values': list(set([str(entry.get('Alive', 'MISSING')) for entry in netkb_data])),
+                'file_path': getattr(shared_data, 'network_file', 'NOT_SET')
+            }
+        except Exception as e:
+            debug_info['errors_and_warnings'].append(f"Error reading NetKB data: {str(e)}")
+        
+        # === CACHE STATE DEBUGGING ===
+        debug_info['cache_state'] = {
+            'network_scan_cache_keys': list(network_scan_cache.keys()),
+            'arp_hosts_count': len(network_scan_cache.get('arp_hosts', {})),
+            'arp_hosts_sample': dict(list(network_scan_cache.get('arp_hosts', {}).items())[:5]),
+            'last_arp_scan_time': network_scan_cache.get('last_arp_scan', 'NEVER'),
+            'cache_size': len(str(network_scan_cache)),
+            'network_scan_last_update': network_scan_last_update,
+            'arp_scan_interval': ARP_SCAN_INTERVAL,
+            'current_time': time.time(),
+            'time_since_last_cache_update': time.time() - network_scan_last_update if network_scan_last_update else 'NEVER'
+        }
+        
+        # Test ARP scan directly
+        try:
+            debug_info['api_traces'].append("=== TESTING ARP SCAN DIRECTLY ===")
+            test_arp_result = run_arp_scan_localnet('wlan0')
+            debug_info['cache_state']['direct_arp_test'] = {
+                'success': bool(test_arp_result),
+                'host_count': len(test_arp_result) if test_arp_result else 0,
+                'sample_results': dict(list(test_arp_result.items())[:3]) if test_arp_result else {}
+            }
+            debug_info['api_traces'].append(f"Direct ARP test found {len(test_arp_result) if test_arp_result else 0} hosts")
+        except Exception as e:
+            debug_info['errors_and_warnings'].append(f"Error testing ARP scan directly: {str(e)}")
+            debug_info['cache_state']['direct_arp_test'] = {'error': str(e)}
+        
+        # === SYNC INFORMATION ===
+        debug_info['sync_information'] = {
+            'last_sync_time': getattr(shared_data, 'last_sync_timestamp', 'NOT_SET'),
+            'sync_lock_acquired': sync_lock.locked() if sync_lock else 'NO_LOCK',
+            'sync_background_interval': SYNC_BACKGROUND_INTERVAL,
+            'current_time': time.time(),
+            'time_since_last_sync': time.time() - getattr(shared_data, 'last_sync_timestamp', 0) if hasattr(shared_data, 'last_sync_timestamp') else 'UNKNOWN'
+        }
+        
+        # === FILE OPERATIONS DEBUGGING ===
+        try:
+            # Check key files
+            important_files = [
+                shared_data.network_file if hasattr(shared_data, 'network_file') else 'NOT_SET',
+                shared_data.webconsolelog if hasattr(shared_data, 'webconsolelog') else 'NOT_SET',
+                get_wifi_specific_network_file()
+            ]
+            
+            debug_info['file_operations'] = {}
+            for file_path in important_files:
+                if file_path != 'NOT_SET' and file_path:
+                    try:
+                        debug_info['file_operations'][file_path] = {
+                            'exists': os.path.exists(file_path),
+                            'size': os.path.getsize(file_path) if os.path.exists(file_path) else 0,
+                            'readable': os.access(file_path, os.R_OK) if os.path.exists(file_path) else False,
+                            'writable': os.access(file_path, os.W_OK) if os.path.exists(file_path) else False,
+                            'modified': datetime.fromtimestamp(os.path.getmtime(file_path)).isoformat() if os.path.exists(file_path) else 'N/A'
+                        }
+                    except Exception as e:
+                        debug_info['file_operations'][file_path] = {'error': str(e)}
+        except Exception as e:
+            debug_info['errors_and_warnings'].append(f"Error checking file operations: {str(e)}")
+        
+        # === API TRACES ===
+        # Simulate the dashboard stats calculation to trace the issue
+        try:
+            debug_info['api_traces'].append("=== DASHBOARD STATS CALCULATION TRACE ===")
+            
+            # Step 1: Read network data
+            network_data = read_wifi_network_data()
+            debug_info['api_traces'].append(f"Step 1: Read {len(network_data)} entries from WiFi network file")
+            
+            # Step 2: Get ARP cache
+            recent_arp_data = network_scan_cache.get('arp_hosts', {})
+            debug_info['api_traces'].append(f"Step 2: Found {len(recent_arp_data)} entries in ARP cache")
+            
+            # Step 3: Process network data
+            processed_ips = set()
+            active_hosts_count = 0
+            
+            for i, entry in enumerate(network_data[:5]):  # Trace first 5 entries
+                ip = entry.get('IPs', '').strip()
+                alive_status = entry.get('Alive')
+                is_in_arp = ip in recent_arp_data
+                debug_info['api_traces'].append(f"Entry {i}: IP={ip}, Alive={alive_status} (type: {type(alive_status)}), InARP={is_in_arp}")
+                
+                if ip and ip not in processed_ips:
+                    processed_ips.add(ip)
+                    is_alive_in_file = alive_status in [True, 'True', '1', 1]
+                    is_alive_in_arp = ip in recent_arp_data
+                    is_alive = is_alive_in_file or is_alive_in_arp
+                    debug_info['api_traces'].append(f"  -> IP {ip} processed, alive_file={is_alive_in_file}, alive_arp={is_alive_in_arp}, final_alive={is_alive}")
+                    if is_alive:
+                        active_hosts_count += 1
+                        debug_info['api_traces'].append(f"  -> Active count increased to {active_hosts_count}")
+            
+            # Step 4: Process ARP data
+            for ip in list(recent_arp_data.keys())[:5]:  # Trace first 5 ARP entries
+                if ip not in processed_ips:
+                    processed_ips.add(ip)
+                    active_hosts_count += 1
+                    debug_info['api_traces'].append(f"ARP: Added {ip} as active (count: {active_hosts_count})")
+            
+            debug_info['api_traces'].append(f"FINAL COUNTS: Active={active_hosts_count}, Total={len(processed_ips)}")
+            
+        except Exception as e:
+            debug_info['errors_and_warnings'].append(f"Error in API trace: {str(e)}")
+        
+        # === RECENT LOG ENTRIES ===
+        try:
+            log_file = shared_data.webconsolelog if hasattr(shared_data, 'webconsolelog') else None
+            if log_file and os.path.exists(log_file):
+                with open(log_file, 'r', encoding='utf-8', errors='ignore') as f:
+                    recent_lines = f.readlines()[-20:]  # Last 20 log lines
+                    debug_info['recent_logs'] = recent_lines
+        except Exception as e:
+            debug_info['errors_and_warnings'].append(f"Error reading recent logs: {str(e)}")
+        
+        return jsonify(debug_info)
+        
+    except Exception as e:
+        logger.error(f"Error in verbose debug logs: {e}")
+        return jsonify({'error': str(e), 'timestamp': datetime.now().isoformat()}), 500
+
+@app.route('/api/debug/force-arp-scan', methods=['POST'])
+def force_arp_scan():
+    """Force an ARP scan and update the cache manually for debugging"""
+    try:
+        global network_scan_cache, network_scan_last_update
+        
+        debug_info = {
+            'timestamp': datetime.now().isoformat(),
+            'operation': 'force_arp_scan',
+            'steps': []
+        }
+        
+        debug_info['steps'].append("Step 1: Running ARP scan...")
+        arp_hosts = run_arp_scan_localnet('wlan0')
+        debug_info['steps'].append(f"Step 2: Found {len(arp_hosts) if arp_hosts else 0} hosts")
+        
+        if arp_hosts:
+            debug_info['steps'].append("Step 3: Updating cache...")
+            current_time = time.time()
+            network_scan_cache['arp_hosts'] = arp_hosts
+            network_scan_cache['last_arp_scan'] = current_time
+            network_scan_last_update = current_time
+            debug_info['steps'].append("Step 4: Cache updated successfully")
+            
+            debug_info['steps'].append("Step 5: Updating NetKB entries...")
+            for ip, data in arp_hosts.items():
+                update_netkb_entry(ip, data.get('hostname', ''), data.get('mac', ''), True)
+            debug_info['steps'].append(f"Step 6: Updated {len(arp_hosts)} NetKB entries")
+            
+            debug_info['results'] = {
+                'cache_updated': True,
+                'hosts_found': arp_hosts,
+                'cache_state': {
+                    'arp_hosts_count': len(network_scan_cache.get('arp_hosts', {})),
+                    'last_arp_scan_time': network_scan_cache.get('last_arp_scan', 'NEVER')
+                }
+            }
+        else:
+            debug_info['steps'].append("Step 3: No hosts found, cache not updated")
+            debug_info['results'] = {
+                'cache_updated': False,
+                'hosts_found': {},
+                'error': 'No hosts discovered'
+            }
+        
+        return jsonify(debug_info)
+        
+    except Exception as e:
+        logger.error(f"Error in force ARP scan: {e}")
+        return jsonify({'error': str(e), 'timestamp': datetime.now().isoformat()}), 500
+
 # ============================================================================
 # REAL-TIME SCANNING ENDPOINTS
 # ============================================================================
+
+def run_arp_scan_localnet(interface='wlan0'):
+    """Run arp-scan on local network to discover active hosts"""
+    command = ['sudo', 'arp-scan', f'--interface={interface}', '--localnet']
+    logger.info(f"Running arp-scan localnet: {' '.join(command)}")
+    try:
+        result = subprocess.run(command, capture_output=True, text=True, timeout=30)
+        if result.returncode == 0:
+            return _parse_arp_scan_output(result.stdout)
+        else:
+            logger.warning(f"arp-scan failed with return code {result.returncode}: {result.stderr}")
+            return {}
+    except FileNotFoundError:
+        logger.warning("arp-scan command not found")
+        return {}
+    except subprocess.TimeoutExpired as e:
+        logger.warning(f"arp-scan timed out: {e}")
+        return {}
+    except Exception as e:
+        logger.error(f"Error running arp-scan: {e}")
+        return {}
+
+def run_nmap_ping_scan(network='192.168.1.0/24'):
+    """Run nmap ping scan to discover active hosts"""
+    command = ['sudo', 'nmap', '-sn', '-PR', network]
+    logger.info(f"Running nmap ping scan: {' '.join(command)}")
+    try:
+        result = subprocess.run(command, capture_output=True, text=True, timeout=60)
+        if result.returncode == 0:
+            return _parse_nmap_ping_output(result.stdout)
+        else:
+            logger.warning(f"nmap ping scan failed with return code {result.returncode}: {result.stderr}")
+            return {}
+    except FileNotFoundError:
+        logger.warning("nmap command not found")
+        return {}
+    except subprocess.TimeoutExpired as e:
+        logger.warning(f"nmap ping scan timed out: {e}")
+        return {}
+    except Exception as e:
+        logger.error(f"Error running nmap ping scan: {e}")
+        return {}
+
+def _parse_nmap_ping_output(output):
+    """Parse nmap ping scan output to extract IP addresses and MAC addresses"""
+    hosts = {}
+    current_ip = None
+    
+    for line in output.splitlines():
+        line = line.strip()
+        
+        # Look for "Nmap scan report for" lines to get IP addresses
+        if line.startswith('Nmap scan report for'):
+            # Extract IP from line like "Nmap scan report for 192.168.1.1"
+            parts = line.split()
+            if len(parts) >= 5:
+                ip_part = parts[-1]
+                if '(' in ip_part and ')' in ip_part:
+                    # Format: "hostname (192.168.1.1)"
+                    current_ip = ip_part.strip('()')
+                else:
+                    # Format: "192.168.1.1"
+                    current_ip = ip_part
+                
+                if _is_valid_ipv4(current_ip):
+                    hosts[current_ip] = {
+                        'ip': current_ip,
+                        'mac': '',
+                        'hostname': '',
+                        'status': 'up'
+                    }
+        
+        # Look for MAC address lines
+        elif line.startswith('MAC Address:') and current_ip:
+            # Extract MAC from line like "MAC Address: 00:11:22:33:44:55 (Vendor)"
+            parts = line.split()
+            if len(parts) >= 3:
+                mac = parts[2]
+                if MAC_REGEX.match(mac):
+                    hosts[current_ip]['mac'] = _normalize_mac(mac)
+                    # Extract vendor info if available
+                    if '(' in line and ')' in line:
+                        vendor_start = line.find('(')
+                        vendor_end = line.find(')')
+                        if vendor_start < vendor_end:
+                            vendor = line[vendor_start+1:vendor_end]
+                            hosts[current_ip]['vendor'] = vendor
+    
+    return hosts
+
+# Global variables for network scanning
+network_scan_cache = {}
+network_scan_last_update = 0
+ARP_SCAN_INTERVAL = 10  # seconds
+
+@app.route('/api/scan/arp-localnet')
+def get_arp_scan_localnet():
+    """Get ARP scan results for local network"""
+    try:
+        interface = request.args.get('interface', 'wlan0')
+        hosts = run_arp_scan_localnet(interface)
+        
+        return jsonify({
+            'success': True,
+            'hosts': hosts,
+            'count': len(hosts),
+            'interface': interface,
+            'timestamp': datetime.now().isoformat()
+        })
+    except Exception as e:
+        logger.error(f"Error in ARP scan endpoint: {e}")
+        return jsonify({
+            'success': False,
+            'error': str(e),
+            'hosts': {},
+            'count': 0
+        }), 500
+
+@app.route('/api/scan/nmap-ping')
+def get_nmap_ping_scan():
+    """Get nmap ping scan results"""
+    try:
+        network = request.args.get('network', '192.168.1.0/24')
+        hosts = run_nmap_ping_scan(network)
+        
+        return jsonify({
+            'success': True,
+            'hosts': hosts,
+            'count': len(hosts),
+            'network': network,
+            'timestamp': datetime.now().isoformat()
+        })
+    except Exception as e:
+        logger.error(f"Error in nmap ping scan endpoint: {e}")
+        return jsonify({
+            'success': False,
+            'error': str(e),
+            'hosts': {},
+            'count': 0
+        }), 500
+
+@app.route('/api/scan/combined-network')
+def get_combined_network_scan():
+    """Get combined results from both ARP and nmap scans"""
+    try:
+        interface = request.args.get('interface', 'wlan0')
+        network = request.args.get('network', '192.168.1.0/24')
+        
+        # Run both scans
+        arp_hosts = run_arp_scan_localnet(interface)
+        nmap_hosts = run_nmap_ping_scan(network)
+        
+        # Combine results, preferring ARP data when available
+        combined_hosts = {}
+        
+        # Start with nmap results
+        for ip, data in nmap_hosts.items():
+            combined_hosts[ip] = {
+                'ip': ip,
+                'mac': data.get('mac', ''),
+                'hostname': data.get('hostname', ''),
+                'status': data.get('status', 'up'),
+                'vendor': data.get('vendor', ''),
+                'source': 'nmap'
+            }
+        
+        # Overlay ARP results (more reliable for MAC addresses)
+        for ip, data in arp_hosts.items():
+            if ip in combined_hosts:
+                # Update existing entry with ARP data
+                combined_hosts[ip]['mac'] = data.get('mac', combined_hosts[ip]['mac'])
+                combined_hosts[ip]['hostname'] = data.get('hostname', combined_hosts[ip]['hostname'])
+                combined_hosts[ip]['source'] = 'arp+nmap'
+            else:
+                # Add new entry from ARP
+                combined_hosts[ip] = {
+                    'ip': ip,
+                    'mac': data.get('mac', ''),
+                    'hostname': data.get('hostname', ''),
+                    'status': 'up',
+                    'vendor': data.get('vendor', ''),
+                    'source': 'arp'
+                }
+        
+        # Update network knowledge base
+        for ip, data in combined_hosts.items():
+            update_netkb_entry(ip, data.get('hostname', ''), data.get('mac', ''), True)
+        
+        return jsonify({
+            'success': True,
+            'hosts': combined_hosts,
+            'count': len(combined_hosts),
+            'arp_count': len(arp_hosts),
+            'nmap_count': len(nmap_hosts),
+            'interface': interface,
+            'network': network,
+            'timestamp': datetime.now().isoformat()
+        })
+    except Exception as e:
+        logger.error(f"Error in combined network scan endpoint: {e}")
+        return jsonify({
+            'success': False,
+            'error': str(e),
+            'hosts': {},
+            'count': 0
+        }), 500
 
 @app.route('/api/scan/start-realtime', methods=['POST'])
 def start_realtime_scan():
@@ -1674,28 +2468,134 @@ def scan_single_host():
             return jsonify({'status': 'error', 'message': 'IP address is required'}), 400
         
         ip = data['ip']
-        
+
         # Validate IP address format
         import ipaddress
         try:
             ipaddress.ip_address(ip)
         except ValueError:
             return jsonify({'status': 'error', 'message': 'Invalid IP address format'}), 400
-        
+
         # Start single host scan in background thread
         def scan_host_background():
-            from actions.nmap_vuln_scanner import NmapVulnScanner
-            
-            scanner = NmapVulnScanner(shared_data)
-            
-            # Real-time callback for individual host scan
-            def single_host_callback(scan_data):
-                if scan_data.get('type') == 'host_update':
-                    socketio.emit('scan_host_update', scan_data)
-            
-            # Scan the host
-            scanner.scan_single_host_realtime(ip, callback=single_host_callback)
-        
+            def run_nmap_fallback():
+                try:
+                    from actions.nmap_vuln_scanner import NmapVulnScanner
+
+                    scanner = NmapVulnScanner(shared_data)
+
+                    def callback(event_type, event_data):
+                        payload = {'type': event_type}
+                        if isinstance(event_data, dict):
+                            payload.update(event_data)
+                        socketio.emit('scan_host_update', payload)
+
+                    scanner.scan_single_host_realtime(ip, callback=callback)
+                except Exception as fallback_error:
+                    logger.error(f"Fallback nmap scan failed for {ip}: {fallback_error}")
+                    socketio.emit('scan_host_update', {
+                        'type': 'sep_scan_error',
+                        'ip': ip,
+                        'message': f'Nmap fallback failed: {fallback_error}'
+                    })
+
+            try:
+                logger.info(f"Running sep-scan for {ip}")
+                command = SEP_SCAN_COMMAND + [ip]
+                result = subprocess.run(command, capture_output=True, text=True, check=False, timeout=300)
+
+                stdout_lines = result.stdout.splitlines() if result.stdout else []
+                stderr_lines = result.stderr.splitlines() if result.stderr else []
+
+                for line in stdout_lines:
+                    line = line.strip()
+                    if line:
+                        socketio.emit('scan_host_update', {
+                            'type': 'sep_scan_output',
+                            'ip': ip,
+                            'message': line
+                        })
+
+                for line in stderr_lines:
+                    line = line.strip()
+                    if line:
+                        socketio.emit('scan_host_update', {
+                            'type': 'sep_scan_output',
+                            'ip': ip,
+                            'message': line
+                        })
+
+                success = result.returncode == 0
+                if not success:
+                    error_message = result.stderr.strip() if result.stderr else f"sep-scan exited with code {result.returncode}"
+                    socketio.emit('scan_host_update', {
+                        'type': 'sep_scan_error',
+                        'ip': ip,
+                        'message': error_message
+                    })
+
+                mac = run_targeted_arp_scan(ip)
+                hostname = resolve_ip_hostname(ip)
+
+                updated_row = update_netkb_entry(ip, hostname, mac, success)
+                payload = {
+                    'type': 'host_updated',
+                    'ip': ip,
+                    'IPs': ip,
+                    'Hostnames': hostname or '',
+                    'MAC Address': mac or '',
+                    'Alive': '1' if success else '0',
+                    'Ports': '',
+                    'scan_status': 'sep-scan' if success else 'sep-scan-failed',
+                    'last_scan': datetime.now().isoformat(),
+                    'vulnerabilities': []
+                }
+
+                if updated_row:
+                    payload.update({
+                        'IPs': updated_row.get('IPs', ip),
+                        'Hostnames': updated_row.get('Hostnames', hostname or ''),
+                        'MAC Address': updated_row.get('MAC Address', mac or ''),
+                        'Ports': updated_row.get('Ports', ''),
+                        'Alive': updated_row.get('Alive', '1' if success else '0'),
+                        'Nmap Vulnerabilities': updated_row.get('Nmap Vulnerabilities', ''),
+                        'NmapVulnScanner': updated_row.get('NmapVulnScanner', '')
+                    })
+
+                payload['mac'] = payload.get('MAC Address', '')
+                payload['hostname'] = payload.get('Hostnames', '')
+
+                socketio.emit('scan_host_update', payload)
+                socketio.emit('scan_host_update', {
+                    'type': 'sep_scan_completed',
+                    'ip': ip,
+                    'status': 'success' if success else 'failed'
+                })
+
+            except FileNotFoundError:
+                logger.warning("sep-scan command not found. Falling back to nmap for %s", ip)
+                socketio.emit('scan_host_update', {
+                    'type': 'sep_scan_error',
+                    'ip': ip,
+                    'message': 'sep-scan command not found. Falling back to nmap.'
+                })
+                run_nmap_fallback()
+            except subprocess.TimeoutExpired:
+                logger.error(f"sep-scan timed out for {ip}")
+                socketio.emit('scan_host_update', {
+                    'type': 'sep_scan_error',
+                    'ip': ip,
+                    'message': 'sep-scan timed out'
+                })
+            except Exception as e:
+                logger.error(f"Error running sep-scan for {ip}: {e}")
+                socketio.emit('scan_host_update', {
+                    'type': 'sep_scan_error',
+                    'ip': ip,
+                    'message': str(e)
+                })
+                run_nmap_fallback()
+
         # Start the scan in a background thread
         import threading
         scan_thread = threading.Thread(target=scan_host_background)
@@ -3978,6 +4878,50 @@ def background_sync_loop(interval=SYNC_BACKGROUND_INTERVAL):
 
         time.sleep(max(1, interval))
 
+def background_arp_scan_loop():
+    """Continuously run ARP scans to keep network data fresh"""
+    global network_scan_cache, network_scan_last_update
+    
+    while not shared_data.webapp_should_exit:
+        try:
+            current_time = time.time()
+            
+            # Run ARP scan every ARP_SCAN_INTERVAL seconds
+            if current_time - network_scan_last_update >= ARP_SCAN_INTERVAL:
+                logger.debug("Running background ARP scan...")
+                
+                # Run ARP scan
+                arp_hosts = run_arp_scan_localnet('wlan0')
+                
+                # Update cache
+                network_scan_cache['arp_hosts'] = arp_hosts
+                network_scan_cache['last_arp_scan'] = current_time
+                network_scan_last_update = current_time
+                
+                # Update network knowledge base
+                for ip, data in arp_hosts.items():
+                    update_netkb_entry(ip, data.get('hostname', ''), data.get('mac', ''), True)
+                
+                # Emit real-time update to connected clients
+                if clients_connected > 0:
+                    try:
+                        socketio.emit('network_update', {
+                            'hosts': arp_hosts,
+                            'count': len(arp_hosts),
+                            'source': 'arp_background',
+                            'timestamp': datetime.now().isoformat()
+                        })
+                    except Exception as e:
+                        logger.error(f"Error emitting network update: {e}")
+                
+                logger.debug(f"Background ARP scan completed, found {len(arp_hosts)} hosts")
+            
+            time.sleep(2)  # Check every 2 seconds, but only scan based on interval
+            
+        except Exception as e:
+            logger.error(f"Error in background ARP scan loop: {e}")
+            time.sleep(ARP_SCAN_INTERVAL)
+
 
 # ============================================================================
 # MANUAL MODE ENDPOINTS
@@ -5135,6 +6079,34 @@ def get_dashboard_stats():
         # Ensure recent synchronization without blocking the request unnecessarily
         ensure_recent_sync()
 
+        # Get current live network data (same logic as stable endpoint)
+        network_data = read_wifi_network_data()
+        recent_arp_data = network_scan_cache.get('arp_hosts', {})
+        
+        # Count unique active hosts (same logic as stable network endpoint)
+        processed_ips = set()
+        active_hosts_count = 0
+        
+        # Count from network data (hosts with Alive status)
+        for entry in network_data:
+            ip = entry.get('IPs', '').strip()  # Note: field is 'IPs' not 'IP'
+            if ip and ip not in processed_ips:
+                processed_ips.add(ip)
+                # Check if host is alive - prioritize ARP cache over file data
+                is_alive_in_file = entry.get('Alive') in [True, 'True', '1', 1]
+                is_alive_in_arp = ip in recent_arp_data
+                is_alive = is_alive_in_file or is_alive_in_arp  # ARP data overrides file data
+                if is_alive:
+                    active_hosts_count += 1
+        
+        # Count from recent ARP discoveries (these are definitely active)
+        for ip in recent_arp_data.keys():
+            if ip not in processed_ips:
+                processed_ips.add(ip)
+                active_hosts_count += 1
+        
+        total_hosts_count = len(processed_ips)
+        
         current_time = time.time()
         last_sync_ts = getattr(shared_data, 'last_sync_timestamp', last_sync_time)
         last_sync_iso = None
@@ -5147,11 +6119,14 @@ def get_dashboard_stats():
             except Exception:
                 last_sync_iso = None
 
+        # Use calculated live network data for targets
+        inactive_targets = max(total_hosts_count - active_hosts_count, 0)
+
         stats = {
-            'target_count': safe_int(shared_data.targetnbr),
-            'active_target_count': safe_int(shared_data.targetnbr),
-            'inactive_target_count': safe_int(getattr(shared_data, 'inactive_targetnbr', 0)),
-            'total_target_count': safe_int(getattr(shared_data, 'total_targetnbr', shared_data.targetnbr)),
+            'target_count': active_hosts_count,
+            'active_target_count': active_hosts_count,
+            'inactive_target_count': inactive_targets,
+            'total_target_count': total_hosts_count,
             'new_target_count': safe_int(getattr(shared_data, 'new_targets', 0)),
             'lost_target_count': safe_int(getattr(shared_data, 'lost_targets', 0)),
             'new_target_ips': getattr(shared_data, 'new_target_ips', []),
@@ -5485,6 +6460,7 @@ def run_server(host='0.0.0.0', port=8000):
         # Start background status broadcaster
         socketio.start_background_task(broadcast_status_updates)
         socketio.start_background_task(background_sync_loop)
+        socketio.start_background_task(background_arp_scan_loop)
 
         # Run the server
         socketio.run(app, host=host, port=port, debug=False, allow_unsafe_werkzeug=True)

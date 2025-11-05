@@ -325,50 +325,61 @@ class WiFiManager:
         self._endless_loop_wifi_search()
 
     def _endless_loop_wifi_search(self):
-        """Search for and connect to known WiFi networks for 2 minutes"""
-        self.logger.info("Endless Loop: Starting WiFi search phase (2 minutes)")
+        """Search for and connect to known WiFi networks - simply enable WiFi and let system auto-reconnect"""
+        self.logger.info("Endless Loop: Starting WiFi search phase (1 minute)")
         search_start_time = time.time()
-        retry_count = 0
         
-        while (time.time() - search_start_time) < self.wifi_search_timeout and not self.should_exit:
-            retry_count += 1
-            self.logger.info(f"Endless Loop: WiFi connection attempt #{retry_count}")
+        # First check if already connected
+        if self.check_wifi_connection():
+            self.wifi_connected = True
+            self.shared_data.wifi_connected = True
+            self.current_ssid = self.get_current_ssid()
+            self.logger.info(f"Endless Loop: Already connected to {self.current_ssid}")
+            self._save_connection_state(self.current_ssid, True)
+            self.last_wifi_validation = time.time()
+            self.consecutive_validation_cycles_failed = 0
+            return True
+        
+        # Enable WiFi and let Linux/NetworkManager auto-reconnect to known networks
+        self.logger.info("Endless Loop: Enabling WiFi mode - system will auto-reconnect to known networks")
+        
+        try:
+            # Return interface to NetworkManager control (if it was in AP mode)
+            subprocess.run(['sudo', 'nmcli', 'dev', 'set', self.ap_interface, 'managed', 'yes'], 
+                         capture_output=True, text=True, timeout=10)
             
-            if self.try_connect_known_networks():
+            # Enable WiFi radio (equivalent to user toggling WiFi on)
+            subprocess.run(['sudo', 'nmcli', 'radio', 'wifi', 'on'], 
+                         capture_output=True, text=True, timeout=10)
+            
+            self.logger.info("Endless Loop: WiFi enabled - waiting up to 60 seconds for auto-connection")
+            
+        except Exception as e:
+            self.logger.error(f"Error enabling WiFi: {e}")
+        
+        # Wait up to 60 seconds for automatic connection (check every 5 seconds)
+        timeout = 60  # 1 minute to connect
+        check_interval = 5
+        elapsed = 0
+        
+        while elapsed < timeout and not self.should_exit:
+            time.sleep(check_interval)
+            elapsed += check_interval
+            
+            if self.check_wifi_connection():
                 self.wifi_connected = True
                 self.shared_data.wifi_connected = True
                 self.current_ssid = self.get_current_ssid()
-                self.logger.info(f"Endless Loop: Successfully connected to {self.current_ssid}")
+                self.logger.info(f"Endless Loop: Successfully auto-connected to {self.current_ssid} after {elapsed}s")
                 self._save_connection_state(self.current_ssid, True)
                 self.last_wifi_validation = time.time()
-                self.consecutive_validation_cycles_failed = 0  # Reset failure counter
+                self.consecutive_validation_cycles_failed = 0
                 return True
-            
-            # Try autoconnect networks too
-            if self.try_autoconnect_networks():
-                self.wifi_connected = True
-                self.shared_data.wifi_connected = True
-                self.current_ssid = self.get_current_ssid()
-                self.logger.info(f"Endless Loop: Successfully connected to autoconnect network {self.current_ssid}")
-                self._save_connection_state(self.current_ssid, True)
-                self.last_wifi_validation = time.time()
-                self.consecutive_validation_cycles_failed = 0  # Reset failure counter
-                return True
-            
-            # Calculate remaining time
-            elapsed = time.time() - search_start_time
-            remaining = self.wifi_search_timeout - elapsed
-            
-            if remaining > 10:
-                # Wait 10 seconds before next attempt
-                self.logger.info(f"Endless Loop: Retry in 10s (attempt {retry_count}, {remaining:.0f}s remaining)")
-                time.sleep(10)
-            elif remaining > 0:
-                # Less than 10 seconds remaining, wait the remainder
-                time.sleep(remaining)
+            else:
+                self.logger.debug(f"Endless Loop: Waiting for auto-connection... ({elapsed}s/{timeout}s)")
         
-        # No WiFi found after 2 minutes, switch to AP mode
-        self.logger.info(f"Endless Loop: No WiFi found after {retry_count} attempts over 2 minutes, switching to AP mode")
+        # No WiFi connected after 1 minute, switch to AP mode
+        self.logger.info(f"Endless Loop: No auto-connection established after {timeout}s, switching to AP mode")
         self._endless_loop_start_ap_mode()
         return False
 

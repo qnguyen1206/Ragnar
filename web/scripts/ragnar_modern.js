@@ -320,7 +320,9 @@ function initializeSocket() {
 
     socket.on('network_update', function(data) {
         if (currentTab === 'network') {
-            displayNetworkTable(data);
+            // Only refresh the stable data when we get background updates
+            // This prevents the twitching by not processing conflicting data sources
+            loadStableNetworkData();
         }
     });
 
@@ -416,16 +418,8 @@ function setupEventListeners() {
         clearBtn.addEventListener('click', clearConsole);
     }
 
-    // Real-time scanning buttons
-    const startScanBtn = document.getElementById('start-network-scan');
-    if (startScanBtn) {
-        startScanBtn.addEventListener('click', startRealtimeScan);
-    }
-
-    const stopScanBtn = document.getElementById('stop-network-scan');
-    if (stopScanBtn) {
-        stopScanBtn.addEventListener('click', stopRealtimeScan);
-    }
+    // Remove network scan button listeners to prevent conflicts
+    // Network tab now just displays stable data from background scanning
 }
 
 // ============================================================================
@@ -508,6 +502,13 @@ function setupAutoRefresh() {
         }
     }, 5000); // Every 5 seconds when on dashboard
     
+    // Set up dashboard stats auto-refresh
+    autoRefreshIntervals.dashboard = setInterval(() => {
+        if (currentTab === 'dashboard') {
+            loadDashboardData();
+        }
+    }, 15000); // Every 15 seconds when on dashboard
+    
     // Set up periodic update checking
     autoRefreshIntervals.updates = setInterval(() => {
         checkForUpdatesQuiet();
@@ -541,6 +542,9 @@ async function loadInitialData() {
         if (status) {
             updateDashboardStatus(status);
         }
+        
+        // Load dashboard statistics
+        await loadDashboardData();
         
         // Load initial console logs
         await loadConsoleLogs();
@@ -736,10 +740,132 @@ function updateDashboardStats(stats) {
 
 async function loadNetworkData() {
     try {
-        const data = await fetchAPI('/api/network');
-        displayNetworkTable(data);
+        // Use the new stable network data endpoint
+        await loadStableNetworkData();
     } catch (error) {
         console.error('Error loading network data:', error);
+        addConsoleMessage('Failed to load network data', 'error');
+    }
+}
+
+// ============================================================================
+// STABLE NETWORK DATA FUNCTIONS
+// ============================================================================
+
+async function loadStableNetworkData() {
+    try {
+        const data = await fetchAPI('/api/network/stable');
+        
+        if (data.success) {
+            displayStableNetworkTable(data);
+            addConsoleMessage(`Network data loaded: ${data.count} hosts`, 'info');
+        } else {
+            addConsoleMessage(`Failed to load network data: ${data.error}`, 'error');
+        }
+    } catch (error) {
+        console.error('Error loading stable network data:', error);
+        addConsoleMessage(`Network data error: ${error.message}`, 'error');
+    }
+}
+
+function displayStableNetworkTable(data) {
+    const tableBody = document.getElementById('network-hosts-table');
+    const hostCountSpan = document.getElementById('host-count');
+    
+    if (!tableBody) return;
+    
+    tableBody.innerHTML = '';
+    
+    if (!data.hosts || data.hosts.length === 0) {
+        tableBody.innerHTML = `
+            <tr>
+                <td colspan="7" class="text-center py-8 text-gray-400">
+                    No hosts discovered yet. Network scanning is running in the background.
+                </td>
+            </tr>
+        `;
+        if (hostCountSpan) hostCountSpan.textContent = '0 hosts';
+        return;
+    }
+    
+    data.hosts.forEach(host => {
+        const row = document.createElement('tr');
+        row.className = 'border-b border-slate-700 hover:bg-slate-700/50 transition-colors';
+        
+        // Status indicator
+        const statusIcon = host.status === 'up' ? 
+            '<span class="flex items-center"><div class="w-2 h-2 bg-green-500 rounded-full mr-2"></div>Online</span>' :
+            '<span class="flex items-center"><div class="w-2 h-2 bg-gray-500 rounded-full mr-2"></div>Unknown</span>';
+        
+        // Format MAC address
+        let macDisplay = host.mac === 'Unknown' ? 
+            '<span class="text-gray-500">Unknown</span>' : 
+            `<span class="font-mono text-xs">${host.mac}</span>`;
+        
+        // Format ports
+        let portsDisplay = host.ports === 'Unknown' || host.ports === 'Scanning...' ? 
+            '<span class="text-gray-500">Unknown</span>' : 
+            `<span class="text-xs">${host.ports}</span>`;
+        
+        // Format vulnerabilities
+        let vulnDisplay = host.vulnerabilities === '0' ? 
+            '<span class="text-gray-500">None</span>' : 
+            `<span class="text-orange-400">${host.vulnerabilities}</span>`;
+        
+        // Format last scan
+        let lastScanDisplay = host.last_scan === 'Never' || host.last_scan === 'Unknown' ? 
+            '<span class="text-gray-500">Never</span>' : 
+            `<span class="text-xs">${formatTimeAgo(host.last_scan)}</span>`;
+        
+        row.innerHTML = `
+            <td class="py-3 px-4">${statusIcon}</td>
+            <td class="py-3 px-4 font-mono text-sm">${host.ip}</td>
+            <td class="py-3 px-4">${host.hostname === 'Unknown' ? '<span class="text-gray-500">Unknown</span>' : host.hostname}</td>
+            <td class="py-3 px-4">${macDisplay}</td>
+            <td class="py-3 px-4">${portsDisplay}</td>
+            <td class="py-3 px-4">${vulnDisplay}</td>
+            <td class="py-3 px-4">${lastScanDisplay}</td>
+        `;
+        
+        tableBody.appendChild(row);
+    });
+    
+    // Update host count
+    if (hostCountSpan) {
+        hostCountSpan.textContent = `${data.hosts.length} hosts`;
+    }
+}
+
+function formatTimeAgo(timeString) {
+    try {
+        if (!timeString || timeString === 'Never' || timeString === 'Unknown') {
+            return 'Never';
+        }
+        
+        // If it's already a relative time string, return as is
+        if (timeString.includes('ago') || timeString.includes('Recently')) {
+            return timeString;
+        }
+        
+        const date = new Date(timeString);
+        if (isNaN(date.getTime())) {
+            return timeString; // Return original if can't parse
+        }
+        
+        const now = new Date();
+        const diffMs = now - date;
+        const diffMins = Math.floor(diffMs / (1000 * 60));
+        const diffHours = Math.floor(diffMs / (1000 * 60 * 60));
+        const diffDays = Math.floor(diffMs / (1000 * 60 * 60 * 24));
+        
+        if (diffMins < 1) return 'Just now';
+        if (diffMins < 60) return `${diffMins}m ago`;
+        if (diffHours < 24) return `${diffHours}h ago`;
+        if (diffDays < 7) return `${diffDays}d ago`;
+        
+        return date.toLocaleDateString();
+    } catch (error) {
+        return timeString;
     }
 }
 
@@ -837,22 +963,54 @@ function handleScanProgress(data) {
 }
 
 function handleScanHostUpdate(data) {
-    // Update the network table with new host data
-    if (currentTab === 'network') {
-        updateHostInTable(data);
+    if (!data) {
+        return;
     }
-    
-    // Update threat intelligence and NetKB if vulnerabilities found
-    if (data.vulnerabilities && data.vulnerabilities.length > 0) {
-        // Trigger refresh of threat intelligence tab
-        if (currentTab === 'threat') {
-            loadThreatIntelData();
+
+    const eventType = data.type || data.event || 'host_update';
+
+    if (eventType === 'sep_scan_output') {
+        if (data.message) {
+            const prefix = data.ip ? `[sep-scan ${data.ip}]` : '[sep-scan]';
+            addConsoleMessage(`${prefix} ${data.message}`, 'info');
         }
-        
-        // Update NetKB if applicable
-        if (currentTab === 'netkb') {
-            loadNetkbData();
+        return;
+    }
+
+    if (eventType === 'sep_scan_error') {
+        const prefix = data.ip ? `sep-scan error for ${data.ip}` : 'sep-scan error';
+        addConsoleMessage(`${prefix}: ${data.message || 'Unknown error'}`, 'error');
+        return;
+    }
+
+    if (eventType === 'sep_scan_completed') {
+        const ipLabel = data.ip || 'target';
+        const statusLabel = data.status === 'success' ? 'successfully' : 'with issues';
+        const level = data.status === 'success' ? 'success' : 'warning';
+        addConsoleMessage(`sep-scan completed for ${ipLabel} ${statusLabel}`, level);
+
+        if (currentTab === 'network') {
+            loadNetworkData();
         }
+        return;
+    }
+
+    // Update the network table with new host data
+    if (eventType === 'host_updated' || data.ip || data.IPs) {
+        if (currentTab === 'network') {
+            updateHostInTable(data);
+        }
+
+        // Update threat intelligence and NetKB if vulnerabilities found
+        if (data.vulnerabilities && data.vulnerabilities.length > 0) {
+            if (currentTab === 'threat') {
+                loadThreatIntelData();
+            }
+            if (currentTab === 'netkb') {
+                loadNetkbData();
+            }
+        }
+        return;
     }
 }
 
@@ -871,84 +1029,510 @@ function handleScanError(data) {
     resetScanButtons();
 }
 
+// ============================================================================
+// ENHANCED NETWORK SCANNING WITH ARP/NMAP
+// ============================================================================
+
+// Network scanning variables for enhanced scanning
+let enhancedNetworkScanInterval = null;
+let isEnhancedRealTimeScanning = false;
+
+async function startEnhancedRealTimeScan() {
+    const startBtn = document.getElementById('start-network-scan');
+    const stopBtn = document.getElementById('stop-network-scan');
+    
+    if (!startBtn || !stopBtn) return;
+    
+    try {
+        addConsoleMessage('Starting enhanced real-time network scanning (ARP + Nmap)...', 'info');
+        startBtn.disabled = true;
+        stopBtn.disabled = false;
+        isEnhancedRealTimeScanning = true;
+        
+        // Show progress section
+        document.getElementById('scan-progress').classList.remove('hidden');
+        
+        // Start immediate scan
+        await performCombinedNetworkScan();
+        
+        // Set up interval for continuous scanning
+        enhancedNetworkScanInterval = setInterval(async () => {
+            if (isEnhancedRealTimeScanning) {
+                await performCombinedNetworkScan();
+            }
+        }, 15000); // Scan every 15 seconds (ARP background scanning is every 10 seconds)
+        
+        addConsoleMessage('Enhanced real-time network scanning started', 'info');
+        
+    } catch (error) {
+        console.error('Error starting enhanced real-time scan:', error);
+        addConsoleMessage('Failed to start network scan: ' + error.message, 'error');
+        resetEnhancedScanButtons();
+    }
+}
+
+async function stopEnhancedRealTimeScan() {
+    const stopBtn = document.getElementById('stop-network-scan');
+    const startBtn = document.getElementById('start-network-scan');
+    
+    if (enhancedNetworkScanInterval) {
+        clearInterval(enhancedNetworkScanInterval);
+        enhancedNetworkScanInterval = null;
+    }
+    
+    isEnhancedRealTimeScanning = false;
+    
+    if (stopBtn && startBtn) {
+        addConsoleMessage('Stopping enhanced network scan...', 'info');
+        resetEnhancedScanButtons();
+    }
+}
+
+function resetEnhancedScanButtons() {
+    const startBtn = document.getElementById('start-network-scan');
+    const stopBtn = document.getElementById('stop-network-scan');
+    
+    if (startBtn && stopBtn) {
+        startBtn.disabled = false;
+        stopBtn.disabled = true;
+        isEnhancedRealTimeScanning = false;
+        document.getElementById('scan-progress').classList.add('hidden');
+    }
+}
+
+async function performCombinedNetworkScan() {
+    try {
+        const data = await fetchAPI('/api/scan/combined-network');
+        
+        if (data.success) {
+            updateNetworkTableWithScanData(data);
+            addConsoleMessage(`Network scan found ${data.count} hosts (ARP: ${data.arp_count}, Nmap: ${data.nmap_count})`, 'success');
+        } else {
+            addConsoleMessage(`Network scan failed: ${data.error}`, 'error');
+        }
+    } catch (error) {
+        console.error('Error performing network scan:', error);
+        addConsoleMessage(`Network scan error: ${error.message}`, 'error');
+    }
+}
+
+function updateNetworkTableWithScanData(data) {
+    const tableBody = document.getElementById('network-hosts-table');
+    const hostCountSpan = document.getElementById('host-count');
+    
+    if (!tableBody) return;
+    
+    tableBody.innerHTML = '';
+    
+    if (!data.hosts || Object.keys(data.hosts).length === 0) {
+        tableBody.innerHTML = `
+            <tr>
+                <td colspan="8" class="text-center py-8 text-gray-400">
+                    No hosts discovered. Check network connectivity and try again.
+                </td>
+            </tr>
+        `;
+        if (hostCountSpan) hostCountSpan.textContent = '0 hosts';
+        return;
+    }
+    
+    // Convert hosts object to array for easier processing
+    const hostArray = Object.values(data.hosts);
+    
+    hostArray.forEach(host => {
+        const row = document.createElement('tr');
+        row.className = 'border-b border-slate-700 hover:bg-slate-700/50 transition-colors';
+        
+        // Determine status indicator
+        const statusIcon = host.status === 'up' ? 
+            '<span class="flex items-center"><div class="w-2 h-2 bg-green-500 rounded-full mr-2"></div>Online</span>' :
+            '<span class="flex items-center"><div class="w-2 h-2 bg-red-500 rounded-full mr-2"></div>Offline</span>';
+        
+        // Format MAC address with vendor info
+        let macDisplay = host.mac || 'Unknown';
+        if (host.vendor) {
+            macDisplay += `<br><span class="text-xs text-gray-400">${host.vendor}</span>`;
+        }
+        
+        // Get source indicator
+        const sourceIcon = {
+            'arp': '<span class="text-xs px-2 py-1 bg-blue-600 rounded">ARP</span>',
+            'nmap': '<span class="text-xs px-2 py-1 bg-purple-600 rounded">NMAP</span>',
+            'arp+nmap': '<span class="text-xs px-2 py-1 bg-green-600 rounded">ARP+NMAP</span>'
+        }[host.source] || '';
+        
+        row.innerHTML = `
+            <td class="py-3 px-4">${statusIcon}</td>
+            <td class="py-3 px-4 font-mono text-sm">${host.ip}</td>
+            <td class="py-3 px-4">${host.hostname || 'Unknown'}</td>
+            <td class="py-3 px-4 font-mono text-xs">${macDisplay}</td>
+            <td class="py-3 px-4">
+                <span class="text-xs px-2 py-1 bg-gray-600 rounded">Scanning...</span>
+            </td>
+            <td class="py-3 px-4">
+                <span class="text-xs px-2 py-1 bg-gray-600 rounded">Checking...</span>
+            </td>
+            <td class="py-3 px-4 text-sm text-gray-400">${new Date().toLocaleTimeString()}</td>
+            <td class="py-3 px-4">
+                <div class="flex space-x-2">
+                    ${sourceIcon}
+                    <button onclick="scanSingleHostEnhanced('${host.ip}')" 
+                            class="text-xs px-2 py-1 bg-Ragnar-600 hover:bg-Ragnar-700 rounded transition-colors">
+                        Scan
+                    </button>
+                </div>
+            </td>
+        `;
+        
+        tableBody.appendChild(row);
+    });
+    
+    // Update host count
+    if (hostCountSpan) {
+        hostCountSpan.textContent = `${hostArray.length} hosts`;
+    }
+}
+
+async function scanSingleHostEnhanced(ip) {
+    try {
+        addConsoleMessage(`Scanning host ${ip}...`, 'info');
+        
+        const data = await postAPI('/api/scan/host', { 
+            ip: ip,
+            scan_type: 'full'
+        });
+        
+        if (data.success) {
+            addConsoleMessage(`Host ${ip} scan completed`, 'success');
+            // Refresh the network table to show updated data
+            await performCombinedNetworkScan();
+        } else {
+            addConsoleMessage(`Host ${ip} scan failed: ${data.error}`, 'error');
+        }
+    } catch (error) {
+        console.error('Error scanning host:', error);
+        addConsoleMessage(`Host scan error: ${error.message}`, 'error');
+    }
+}
+
 function updateScanProgress() {
     const progressText = document.getElementById('scan-progress-text');
     const progressBar = document.getElementById('scan-progress-bar');
     const currentTarget = document.getElementById('current-scan-target');
-    
-    const percentage = currentScanState.totalHosts > 0 ? 
+
+    const percentage = currentScanState.totalHosts > 0 ?
         (currentScanState.scannedHosts / currentScanState.totalHosts) * 100 : 0;
-    
+
     if (progressText) {
         progressText.textContent = `${currentScanState.scannedHosts}/${currentScanState.totalHosts} hosts`;
     }
-    
+
     if (progressBar) {
         progressBar.style.width = `${percentage}%`;
     }
-    
+
     if (currentTarget) {
-        currentTarget.textContent = currentScanState.currentTarget ? 
+        currentTarget.textContent = currentScanState.currentTarget ?
             `Currently scanning: ${currentScanState.currentTarget}` : '';
     }
 }
 
-function updateHostInTable(hostData) {
-    const tableBody = document.getElementById('network-hosts-table');
-    if (!tableBody) return;
-    
-    // Remove "no data" row if it exists
-    const noDataRow = tableBody.querySelector('td[colspan="8"]');
-    if (noDataRow) {
-        noDataRow.parentElement.remove();
+function escapeSelector(value) {
+    if (window.CSS && typeof CSS.escape === 'function') {
+        return CSS.escape(value);
     }
-    
-    // Find existing row or create new one
-    let row = tableBody.querySelector(`tr[data-ip="${hostData.ip}"]`);
-    if (!row) {
-        row = document.createElement('tr');
-        row.setAttribute('data-ip', hostData.ip);
-        row.className = 'border-b border-slate-700 hover:bg-slate-700/50 transition-colors';
-        tableBody.appendChild(row);
+    return value.replace(/([ #;?%&,.+*~\':"!^$\[\]()=>|\/])/g, '\\$1');
+}
+
+function parseCompactTimestamp(value) {
+    if (!value) {
+        return null;
     }
-    
-    // Update row content
-    const status = hostData.status || 'Unknown';
-    const statusClass = status === 'Active' ? 'text-green-400' : 
-                       status === 'Inactive' ? 'text-red-400' : 'text-yellow-400';
-    
-    const ports = hostData.ports && hostData.ports.length > 0 ? 
-        hostData.ports.slice(0, 5).join(', ') + (hostData.ports.length > 5 ? '...' : '') : 'None';
-    
-    const vulnCount = hostData.vulnerabilities ? hostData.vulnerabilities.length : 0;
-    const vulnDisplay = vulnCount > 0 ? 
-        `<span class="text-red-400">${vulnCount} found</span>` : 
-        '<span class="text-gray-400">None</span>';
-    
-    row.innerHTML = `
+    const digits = value.replace(/[^0-9]/g, '');
+    if (digits.length < 8) {
+        return null;
+    }
+
+    const year = Number(digits.slice(0, 4));
+    const month = Number(digits.slice(4, 6)) - 1;
+    const day = Number(digits.slice(6, 8));
+    const hour = digits.length >= 10 ? Number(digits.slice(8, 10)) : 0;
+    const minute = digits.length >= 12 ? Number(digits.slice(10, 12)) : 0;
+    const second = digits.length >= 14 ? Number(digits.slice(12, 14)) : 0;
+
+    const date = new Date(year, month, day, hour, minute, second);
+    return Number.isNaN(date.getTime()) ? null : date;
+}
+
+function buildLastScanInfo(rawStatus, isoTimestamp) {
+    const info = {
+        label: 'Never',
+        className: 'text-gray-400',
+        timestampText: '',
+        tooltip: '',
+        rawStatus: rawStatus || '',
+        rawTimestamp: isoTimestamp || ''
+    };
+
+    let statusPart = (rawStatus || '').toString().trim();
+    let timestamp = null;
+
+    if (statusPart.includes('_')) {
+        const parts = statusPart.split('_');
+        statusPart = parts[0];
+        const timestampCandidate = parts.slice(1).join('_');
+        timestamp = parseCompactTimestamp(timestampCandidate);
+    }
+
+    if (!timestamp && isoTimestamp) {
+        const parsed = new Date(isoTimestamp);
+        if (!Number.isNaN(parsed.getTime())) {
+            timestamp = parsed;
+        }
+    }
+
+    if (!timestamp && rawStatus) {
+        const digits = rawStatus.replace(/[^0-9]/g, '');
+        if (digits.length >= 8) {
+            const parsedDigits = parseCompactTimestamp(digits);
+            if (parsedDigits) {
+                timestamp = parsedDigits;
+            }
+        }
+    }
+
+    const lowerStatus = statusPart.toLowerCase();
+    if (!statusPart) {
+        if (timestamp) {
+            info.label = 'Completed';
+            info.className = 'text-blue-400';
+        } else {
+            info.label = 'Never';
+            info.className = 'text-gray-400';
+        }
+    } else if (lowerStatus.startsWith('success')) {
+        info.label = 'Success';
+        info.className = 'text-green-400';
+    } else if (lowerStatus.startsWith('failed')) {
+        info.label = 'Failed';
+        info.className = 'text-red-400';
+    } else if (['running', 'scanning', 'pending', 'inprogress', 'in_progress'].includes(lowerStatus)) {
+        info.label = statusPart.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
+        info.className = 'text-yellow-400';
+    } else {
+        info.label = statusPart.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
+        info.className = 'text-slate-300';
+    }
+
+    if (timestamp) {
+        info.timestampText = timestamp.toLocaleString();
+    }
+
+    const tooltipParts = [];
+    if (info.rawStatus) {
+        tooltipParts.push(`Status: ${info.rawStatus}`);
+    }
+    if (info.timestampText) {
+        tooltipParts.push(`Completed: ${info.timestampText}`);
+    }
+    if (info.rawTimestamp && !info.timestampText) {
+        tooltipParts.push(`Reported: ${info.rawTimestamp}`);
+    }
+    info.tooltip = tooltipParts.join('\n');
+
+    return info;
+}
+
+function normalizeHostRecord(hostData) {
+    if (!hostData) {
+        return null;
+    }
+
+    const ip = hostData.IPs || hostData.ip || hostData.address || hostData.target || '';
+    if (!ip) {
+        return null;
+    }
+
+    const hostname = hostData.Hostnames || hostData.Hostname || hostData.hostname || hostData.name || '';
+    const mac = hostData['MAC Address'] || hostData.MAC || hostData.mac || '';
+
+    const aliveValue = hostData.Alive ?? hostData.alive ?? hostData.Status ?? hostData.status ?? '';
+    const aliveString = aliveValue === undefined || aliveValue === null ? '' : String(aliveValue).trim();
+    const aliveLower = aliveString.toLowerCase();
+    const isActive = ['1', 'true', 'online', 'up', 'active', 'success'].includes(aliveLower);
+    const isInactive = ['0', 'false', 'offline', 'down', 'inactive', 'failed'].includes(aliveLower);
+
+    let statusText = 'Unknown';
+    if (isActive) {
+        statusText = 'Active';
+    } else if (isInactive) {
+        statusText = 'Inactive';
+    } else if (aliveString) {
+        statusText = aliveString.charAt(0).toUpperCase() + aliveString.slice(1);
+    }
+
+    const statusClass = isActive ? 'text-green-400' : (isInactive ? 'text-red-400' : 'text-yellow-400');
+
+    const rawPorts = hostData.Ports ?? hostData.ports ?? hostData.port_list ?? hostData.open_ports;
+    let ports = [];
+    if (Array.isArray(rawPorts)) {
+        ports = rawPorts.map(port => String(port).trim()).filter(Boolean);
+    } else if (typeof rawPorts === 'string') {
+        ports = rawPorts.split(/[,;\s]+/).map(port => port.trim()).filter(Boolean);
+    } else if (rawPorts) {
+        ports = [String(rawPorts).trim()];
+    }
+
+    const vulnObjects = Array.isArray(hostData.vulnerabilities) ? hostData.vulnerabilities : [];
+    const normalizedVulnObjects = vulnObjects.map(vuln => {
+        if (typeof vuln === 'string') {
+            return vuln;
+        }
+        if (vuln && typeof vuln === 'object') {
+            return vuln.vulnerability || vuln.raw_output || vuln.description || vuln.id || '';
+        }
+        return '';
+    }).filter(Boolean);
+
+    let vulnSummary = hostData['Nmap Vulnerabilities'] || hostData['nmap_vulnerabilities'] || hostData.vulnerability_summary || '';
+    if (!vulnSummary && typeof hostData.NmapVulnerabilities === 'string') {
+        vulnSummary = hostData.NmapVulnerabilities;
+    }
+    const summaryEntries = (typeof vulnSummary === 'string' && vulnSummary.trim())
+        ? vulnSummary.split(';').map(entry => entry.trim()).filter(Boolean)
+        : [];
+
+    const combinedVulns = [...normalizedVulnObjects, ...summaryEntries];
+    const uniqueVulns = [];
+    const seenVulns = new Set();
+    combinedVulns.forEach(entry => {
+        const key = entry.toLowerCase();
+        if (!seenVulns.has(key)) {
+            seenVulns.add(key);
+            uniqueVulns.push(entry);
+        }
+    });
+
+    const rawScanStatus = hostData['NmapVulnScanner'] || hostData['nmap_vuln_scanner'] || hostData.scan_status || '';
+    const lastScanIso = hostData.last_scan || hostData.LastScan || hostData.last_vuln_scan || '';
+    const lastScan = buildLastScanInfo(rawScanStatus, lastScanIso);
+
+    return {
+        ip: String(ip).trim(),
+        hostname: hostname || '',
+        mac: mac || '',
+        ports,
+        statusText,
+        statusClass,
+        vulnerabilityCount: uniqueVulns.length,
+        vulnerabilityPreview: uniqueVulns.slice(0, 2).join('; '),
+        vulnerabilityFull: uniqueVulns.join('; '),
+        lastScan,
+        raw: hostData
+    };
+}
+
+function formatPortsCell(ports) {
+    if (!ports || ports.length === 0) {
+        return '<span class="text-gray-400">None</span>';
+    }
+    const displayPorts = ports.slice(0, 5);
+    const displayText = escapeHtml(displayPorts.join(', '));
+    const ellipsis = ports.length > 5 ? '…' : '';
+    const tooltip = escapeHtml(ports.join(', '));
+    return `<span title="${tooltip}">${displayText}${ellipsis}</span>`;
+}
+
+function formatVulnerabilityCell(normalized) {
+    if (!normalized || normalized.vulnerabilityCount === 0) {
+        return '<span class="text-gray-400">None</span>';
+    }
+
+    const countText = `${normalized.vulnerabilityCount} ${normalized.vulnerabilityCount === 1 ? 'issue' : 'issues'}`;
+    const tooltipSource = normalized.vulnerabilityFull || normalized.vulnerabilityPreview || countText;
+    const tooltip = escapeHtml(tooltipSource);
+    const preview = normalized.vulnerabilityPreview
+        ? `<div class="text-xs text-slate-300 truncate max-w-xs" title="${tooltip}">${escapeHtml(normalized.vulnerabilityPreview)}</div>`
+        : '';
+
+    return `<span class="text-red-400 font-medium" title="${tooltip}">${countText}</span>${preview}`;
+}
+
+function formatLastScanCell(info) {
+    if (!info) {
+        return '<span class="text-gray-400">Never</span>';
+    }
+
+    const tooltip = info.tooltip ? ` title="${escapeHtml(info.tooltip)}"` : '';
+    const timestampLine = info.timestampText
+        ? `<div class="text-xs text-gray-400">${escapeHtml(info.timestampText)}</div>`
+        : '';
+
+    return `<div${tooltip}><span class="${info.className}">${escapeHtml(info.label)}</span>${timestampLine}</div>`;
+}
+
+function renderHostRow(normalized) {
+    const hostname = normalized.hostname ? escapeHtml(normalized.hostname) : 'Unknown';
+    const mac = normalized.mac ? escapeHtml(normalized.mac) : 'Unknown';
+    const ip = escapeHtml(normalized.ip);
+
+    return `
         <td class="py-3 px-4">
-            <span class="px-2 py-1 rounded text-xs ${statusClass}">${status}</span>
+            <span class="px-2 py-1 rounded text-xs ${normalized.statusClass}">${escapeHtml(normalized.statusText)}</span>
         </td>
-        <td class="py-3 px-4 font-mono">${hostData.ip}</td>
-        <td class="py-3 px-4">${hostData.hostname || 'Unknown'}</td>
-        <td class="py-3 px-4 font-mono text-sm">${hostData.mac || 'Unknown'}</td>
-        <td class="py-3 px-4 text-sm">${ports}</td>
-        <td class="py-3 px-4">${vulnDisplay}</td>
-        <td class="py-3 px-4 text-sm">${new Date().toLocaleTimeString()}</td>
+        <td class="py-3 px-4 font-mono">${ip}</td>
+        <td class="py-3 px-4">${hostname || 'Unknown'}</td>
+        <td class="py-3 px-4 font-mono text-sm">${mac || 'Unknown'}</td>
+        <td class="py-3 px-4 text-sm">${formatPortsCell(normalized.ports)}</td>
+        <td class="py-3 px-4 text-sm">${formatVulnerabilityCell(normalized)}</td>
+        <td class="py-3 px-4 text-sm">${formatLastScanCell(normalized.lastScan)}</td>
         <td class="py-3 px-4">
-            <button onclick="scanSingleHost('${hostData.ip}')" 
+            <button data-ip="${ip}" onclick="scanSingleHost(this.dataset.ip)"
                     class="bg-blue-600 hover:bg-blue-700 px-2 py-1 rounded text-xs">
                 Rescan
             </button>
         </td>
     `;
-    
-    // Update host count
+}
+
+function updateHostCountDisplay() {
+    const tableBody = document.getElementById('network-hosts-table');
     const hostCount = document.getElementById('host-count');
-    if (hostCount) {
-        const totalHosts = tableBody.querySelectorAll('tr[data-ip]').length;
-        hostCount.textContent = `${totalHosts} host${totalHosts !== 1 ? 's' : ''}`;
+    if (!tableBody || !hostCount) {
+        return;
     }
+
+    const totalHosts = tableBody.querySelectorAll('tr[data-ip]').length;
+    hostCount.textContent = `${totalHosts} host${totalHosts !== 1 ? 's' : ''}`;
+}
+
+function updateHostInTable(hostData) {
+    const tableBody = document.getElementById('network-hosts-table');
+    if (!tableBody) {
+        return;
+    }
+
+    const normalized = normalizeHostRecord(hostData);
+    if (!normalized) {
+        return;
+    }
+
+    const noDataRow = tableBody.querySelector('td[colspan="8"]');
+    if (noDataRow) {
+        noDataRow.parentElement.remove();
+    }
+
+    const selector = `tr[data-ip="${escapeSelector(normalized.ip)}"]`;
+    let row = tableBody.querySelector(selector);
+    if (!row) {
+        row = document.createElement('tr');
+        row.setAttribute('data-ip', normalized.ip);
+        row.className = 'border-b border-slate-700 hover:bg-slate-700/50 transition-colors';
+        tableBody.appendChild(row);
+    }
+
+    row.innerHTML = renderHostRow(normalized);
+    updateHostCountDisplay();
 }
 
 async function scanSingleHost(ip) {
@@ -1024,50 +1608,80 @@ async function loadFilesData() {
 async function loadHardwareProfiles() {
     try {
         const profiles = await fetchAPI('/api/config/hardware-profiles');
-        const grid = document.getElementById('hardware-profiles-grid');
+        const select = document.getElementById('hardware-profile-select');
+        const applyBtn = document.getElementById('apply-profile-btn');
         
-        if (!grid) return;
+        if (!select) return;
         
-        grid.innerHTML = '';
+        // Clear existing options
+        select.innerHTML = '<option value="">Select a hardware profile...</option>';
         
-        // Create profile cards
+        // Store profiles data for later use
+        window.hardwareProfiles = profiles;
+        
+        // Populate dropdown options
         for (const [profileId, profile] of Object.entries(profiles)) {
-            const card = document.createElement('div');
-            card.className = 'glass rounded-lg p-4 hover:border-2 hover:border-Ragnar-500 transition-all cursor-pointer';
-            card.onclick = () => confirmApplyProfile(profileId, profile);
-            
-            card.innerHTML = `
-                <div class="flex items-center justify-between mb-2">
-                    <h5 class="font-semibold text-white">${profile.name}</h5>
-                    <span class="text-xs px-2 py-1 rounded bg-slate-700 text-slate-300">${profile.ram}MB</span>
-                </div>
-                <p class="text-sm text-gray-400 mb-3">${profile.description}</p>
-                <div class="text-xs space-y-1 text-gray-500">
-                    <div class="flex justify-between">
-                        <span>Max Threads:</span>
-                        <span class="text-gray-300">${profile.settings.scanner_max_threads}</span>
-                    </div>
-                    <div class="flex justify-between">
-                        <span>Concurrent Actions:</span>
-                        <span class="text-gray-300">${profile.settings.orchestrator_max_concurrent}</span>
-                    </div>
-                    <div class="flex justify-between">
-                        <span>Scan Speed:</span>
-                        <span class="text-gray-300">${profile.settings.nmap_scan_aggressivity}</span>
-                    </div>
-                </div>
-                <button class="w-full mt-3 bg-Ragnar-600 hover:bg-Ragnar-700 text-white py-2 px-3 rounded text-sm transition-colors">
-                    Apply Profile
-                </button>
-            `;
-            
-            grid.appendChild(card);
+            const option = document.createElement('option');
+            option.value = profileId;
+            option.textContent = `${profile.name} (${profile.ram}MB RAM)`;
+            select.appendChild(option);
         }
+        
+        // Add change event listener to show profile details
+        select.addEventListener('change', function() {
+            const selectedProfileId = this.value;
+            const applyBtn = document.getElementById('apply-profile-btn');
+            
+            if (selectedProfileId && profiles[selectedProfileId]) {
+                showProfileDetails(profiles[selectedProfileId]);
+                applyBtn.disabled = false;
+            } else {
+                hideProfileDetails();
+                applyBtn.disabled = true;
+            }
+        });
         
     } catch (error) {
         console.error('Error loading hardware profiles:', error);
         addConsoleMessage('Failed to load hardware profiles', 'error');
+        
+        const select = document.getElementById('hardware-profile-select');
+        if (select) {
+            select.innerHTML = '<option value="">Error loading profiles</option>';
+        }
     }
+}
+
+function showProfileDetails(profile) {
+    const detailsDiv = document.getElementById('profile-details');
+    if (!detailsDiv) return;
+    
+    document.getElementById('profile-description').textContent = profile.description || 'No description available';
+    document.getElementById('profile-ram').textContent = `${profile.ram}MB`;
+    document.getElementById('profile-threads').textContent = profile.settings.scanner_max_threads || 'N/A';
+    document.getElementById('profile-concurrent').textContent = profile.settings.orchestrator_max_concurrent || 'N/A';
+    document.getElementById('profile-speed').textContent = profile.settings.nmap_scan_aggressivity || 'N/A';
+    
+    detailsDiv.classList.remove('hidden');
+}
+
+function hideProfileDetails() {
+    const detailsDiv = document.getElementById('profile-details');
+    if (detailsDiv) {
+        detailsDiv.classList.add('hidden');
+    }
+}
+
+async function applySelectedProfile() {
+    const select = document.getElementById('hardware-profile-select');
+    const selectedProfileId = select.value;
+    
+    if (!selectedProfileId) {
+        addConsoleMessage('Please select a hardware profile first', 'warning');
+        return;
+    }
+    
+    await confirmApplyProfile(selectedProfileId, window.hardwareProfiles[selectedProfileId]);
 }
 
 async function detectAndApplyHardware() {
@@ -1987,51 +2601,41 @@ function escapeHtml(text) {
 
 function displayNetworkTable(data) {
     const container = document.getElementById('network-table');
-    if (!container) return;
-    
-    if (!data || data.length === 0) {
-        container.innerHTML = '<p class="text-gray-400">No network data available</p>';
+    const tableBody = document.getElementById('network-hosts-table');
+    if (!container || !tableBody) {
         return;
     }
-    
-    let html = `
-        <div class="overflow-x-auto">
-            <table class="min-w-full divide-y divide-gray-700">
-                <thead class="bg-gray-800">
-                    <tr>
-                        <th class="px-6 py-3 text-left text-xs font-medium text-gray-300 uppercase tracking-wider">IP Address</th>
-                        <th class="px-6 py-3 text-left text-xs font-medium text-gray-300 uppercase tracking-wider">Hostname</th>
-                        <th class="px-6 py-3 text-left text-xs font-medium text-gray-300 uppercase tracking-wider">MAC Address</th>
-                        <th class="px-6 py-3 text-left text-xs font-medium text-gray-300 uppercase tracking-wider">Status</th>
-                        <th class="px-6 py-3 text-left text-xs font-medium text-gray-300 uppercase tracking-wider">Open Ports</th>
-                    </tr>
-                </thead>
-                <tbody class="bg-gray-900 divide-y divide-gray-700">
-    `;
-    
-    data.forEach(item => {
-        const aliveValue = item?.Alive ?? item?.alive ?? item?.Status ?? item?.status ?? 0;
-        const aliveString = typeof aliveValue === 'number' ? aliveValue.toString() : String(aliveValue || '0');
-        const isOnline = aliveString === '1' || aliveString.toLowerCase() === 'online' || aliveString === 'true';
-        const status = isOnline ? 'Online' : 'Offline';
-        const statusColor = isOnline ? 'text-green-400' : 'text-gray-400';
-        const hostname = item?.Hostnames || item?.Hostname || item?.hostname || '-';
-        const macAddress = item?.['MAC Address'] || item?.MAC || item?.mac || '-';
-        const ports = item?.Ports ? item.Ports.split(';').filter(p => p.trim()).join(', ') : 'None';
 
-        html += `
-            <tr class="hover:bg-gray-800 transition-colors">
-                <td class="px-6 py-4 whitespace-nowrap text-sm text-white">${item.IPs || 'N/A'}</td>
-                <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-300">${hostname}</td>
-                <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-300 font-mono">${macAddress}</td>
-                <td class="px-6 py-4 whitespace-nowrap text-sm ${statusColor}">${status}</td>
-                <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-300">${ports}</td>
+    tableBody.innerHTML = '';
+
+    const entries = Array.isArray(data) ? data : (data && Array.isArray(data.hosts) ? data.hosts : []);
+
+    if (!entries || entries.length === 0) {
+        tableBody.innerHTML = `
+            <tr>
+                <td colspan="8" class="text-center py-8 text-gray-400">
+                    No network data available. Start a scan to discover hosts.
+                </td>
             </tr>
         `;
+        updateHostCountDisplay();
+        return;
+    }
+
+    entries.forEach(item => {
+        const normalized = normalizeHostRecord(item);
+        if (!normalized) {
+            return;
+        }
+
+        const row = document.createElement('tr');
+        row.setAttribute('data-ip', normalized.ip);
+        row.className = 'border-b border-slate-700 hover:bg-slate-700/50 transition-colors';
+        row.innerHTML = renderHostRow(normalized);
+        tableBody.appendChild(row);
     });
-    
-    html += '</tbody></table></div>';
-    container.innerHTML = html;
+
+    updateHostCountDisplay();
 }
 
 function displayCredentialsTable(data) {
