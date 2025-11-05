@@ -1021,16 +1021,17 @@ def update_wifi_network_data():
             else:
                 # Device didn't respond - increment failure counter
                 data['failed_ping_count'] = data.get('failed_ping_count', 0) + 1
+                data['last_ping_attempt'] = current_time
                 
                 # Only mark as offline after MAX_FAILED_PINGS consecutive failures
                 if data['failed_ping_count'] >= MAX_FAILED_PINGS:
                     data['alive'] = False
                     logger.debug(f"Device {ip} marked offline after {data['failed_ping_count']} consecutive failed pings")
                 else:
-                    # Keep as alive but log the failure
-                    logger.debug(f"Device {ip} failed ping {data['failed_ping_count']}/{MAX_FAILED_PINGS} - keeping alive")
-                    # Don't change alive status yet, but update last attempt time
-                    data['last_ping_attempt'] = current_time
+                    # IMPORTANT: Keep device as "alive" until it exceeds the failure limit
+                    # This implements the proper 5-ping rule you requested
+                    data['alive'] = True  # Don't change to False until 5 failures
+                    logger.debug(f"Device {ip} failed ping {data['failed_ping_count']}/{MAX_FAILED_PINGS} - keeping alive per 5-ping rule")
 
         # Add new devices discovered via ARP that aren't in our data yet
         for ip, arp_data in arp_hosts.items():
@@ -1050,7 +1051,7 @@ def update_wifi_network_data():
                 except Exception as e:
                     logger.debug(f"Could not add new ARP discovery to NetKB for {ip}: {e}")
 
-        # Prepare aggregated counts from persisted data
+        # Prepare aggregated counts from persisted data using PROPER 5-ping rule
         aggregated_host_count = 0
         aggregated_active_count = 0
         aggregated_inactive_count = 0
@@ -1058,11 +1059,26 @@ def update_wifi_network_data():
 
         for ip, data in existing_data.items():
             aggregated_host_count += 1
-            if data.get('alive', True):
+            
+            # Apply the PROPER 5-ping rule for counting active targets
+            failed_ping_count = data.get('failed_ping_count', 0)
+            
+            # TARGET IS ACTIVE IF:
+            # 1. It has fewer than MAX_FAILED_PINGS consecutive failures, OR
+            # 2. It's marked as explicitly alive (from ARP response)
+            is_explicitly_alive = data.get('alive', True)
+            has_not_exceeded_failure_limit = failed_ping_count < MAX_FAILED_PINGS
+            
+            # A target is active if it hasn't exceeded the failure limit OR if it's currently responding
+            is_target_active = has_not_exceeded_failure_limit or is_explicitly_alive
+            
+            if is_target_active:
                 aggregated_active_count += 1
                 aggregated_port_count += sum(1 for port in data['ports'] if port)
+                logger.debug(f"[5-PING RULE] {ip}: ACTIVE (failures={failed_ping_count}/{MAX_FAILED_PINGS}, alive={is_explicitly_alive})")
             else:
                 aggregated_inactive_count += 1
+                logger.debug(f"[5-PING RULE] {ip}: INACTIVE (failures={failed_ping_count}/{MAX_FAILED_PINGS}, alive={is_explicitly_alive})")
 
         # Write updated data to WiFi-specific file
         try:
