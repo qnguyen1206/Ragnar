@@ -9,7 +9,6 @@ from concurrent.futures import ThreadPoolExecutor
 import pandas as pd
 import socket
 import subprocess
-import ipaddress
 import re
 try:
     import netifaces_plus as netifaces
@@ -178,58 +177,48 @@ class NetworkScanner:
         self.logger.info(f"Final host count after arp-scan + ping sweep: {len(all_hosts)}")
         return all_hosts
 
-
     def _ping_sweep_missing_hosts(self, arp_hosts):
         """
         Ping sweep to find hosts that don't respond to arp-scan but are alive.
-        Expands CIDR ranges like '192.168.1.0/24' into individual IPs.
+        This is particularly useful for devices that filter ARP broadcasts.
         """
         ping_discovered = {}
         known_ips = set(arp_hosts.keys())
         
-        # Define CIDRs to scan
-        target_cidrs = ['192.168.1.0/24']
-
-        for cidr in target_cidrs:
+        # Check a few specific IPs that we know might be problematic
+        # You can extend this list based on your network knowledge
+        target_ips = ['192.168.1.192', '192.168.1.193', '192.168.1.194', '192.168.1.195']
+        
+        for ip in target_ips:
+            if ip in known_ips:
+                continue  # Already found by arp-scan
+                
+            # Quick ping test
             try:
-                network = ipaddress.ip_network(cidr, strict=False)
-            except ValueError as e:
-                self.logger.error(f"Invalid network {cidr}: {e}")
-                continue
-
-            for ip in network.hosts():  # skips network/broadcast
-                ip_str = str(ip)
-                if ip_str in known_ips:
-                    continue
-
-                try:
-                    result = subprocess.run(
-                        ['ping', '-c', '1', '-W', '2', ip_str],
-                        capture_output=True, text=True, timeout=5
-                    )
-
-                    if result.returncode == 0:
-                        mac = self.get_mac_address(ip_str, "")
-                        if not mac or mac == "00:00:00:00:00:00":
-                            ip_parts = ip_str.split('.')
+                result = subprocess.run(['ping', '-c', '1', '-W', '2', ip], 
+                                      capture_output=True, text=True, timeout=5)
+                if result.returncode == 0:
+                    # Host responds to ping, try to get MAC via ARP table
+                    mac = self.get_mac_address(ip, "")
+                    if not mac or mac == "00:00:00:00:00:00":
+                        # Create pseudo-MAC for tracking
+                        ip_parts = ip.split('.')
+                        if len(ip_parts) == 4:
                             pseudo_mac = f"00:00:{int(ip_parts[0]):02x}:{int(ip_parts[1]):02x}:{int(ip_parts[2]):02x}:{int(ip_parts[3]):02x}"
                             mac = pseudo_mac
-
-                        ping_discovered[ip_str] = {
-                            "mac": mac,
-                            "vendor": "Unknown (discovered by ping)"
-                        }
-                        self.logger.info(f"Ping sweep found host: {ip_str} (MAC: {mac})")
-
-                except subprocess.TimeoutExpired:
-                    self.logger.debug(f"Ping sweep: {ip_str} timed out")
-                except Exception as e:
-                    self.logger.debug(f"Ping sweep: {ip_str} failed ({e})")
-                    continue
-
+                    
+                    ping_discovered[ip] = {
+                        "mac": mac or "00:00:00:00:00:00",
+                        "vendor": "Unknown (discovered by ping)"
+                    }
+                    self.logger.info(f"Ping sweep found additional host: {ip} (MAC: {mac})")
+            except (subprocess.TimeoutExpired, subprocess.CalledProcessError, Exception) as e:
+                self.logger.debug(f"Ping sweep: {ip} not reachable ({e})")
+                continue
+        
         if ping_discovered:
             self.logger.info(f"Ping sweep discovered {len(ping_discovered)} additional hosts not found by arp-scan")
-
+        
         return ping_discovered
 
     def check_if_csv_scan_file_exists(self, csv_scan_file, csv_result_file, netkbfile):
@@ -537,7 +526,7 @@ class NetworkScanner:
             Scans a specific port on the target IP.
             """
             s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            s.settimeout(5)  # Increased from 2 to 5 seconds for better reliability
+            s.settimeout(7)  # 7 seconds for better reliability
             try:
                 s.connect((self.target, port))
                 self.open_ports[self.target].append(port)
