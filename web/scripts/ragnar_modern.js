@@ -1930,7 +1930,7 @@ async function performUpdate() {
     }
     
     try {
-        updateElement('update-btn-text', 'Updating...');
+        updateElement('update-btn-text', 'Update now');
         const updateBtn = document.getElementById('update-btn');
         updateBtn.disabled = true;
         updateBtn.className = 'w-full bg-gray-600 text-white py-2 px-4 rounded cursor-not-allowed';
