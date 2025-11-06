@@ -22,6 +22,7 @@ import logging
 import sys
 import threading
 from datetime import datetime, timedelta
+from concurrent.futures import ThreadPoolExecutor, TimeoutError as FutureTimeoutError
 from actions.nmap_vuln_scanner import NmapVulnScanner
 from init_shared import shared_data
 from logger import Logger
@@ -45,9 +46,20 @@ class Orchestrator:
         self.load_actions()  # Load all actions from the actions file
         actions_loaded = [action.__class__.__name__ for action in self.actions + self.standalone_actions]  # Get the names of the loaded actions
         logger.info(f"Actions loaded: {actions_loaded}")
+        
         # CRITICAL: Pi Zero W2 resource management - limit concurrent actions
         # Running too many actions simultaneously causes memory exhaustion and hangs
         self.semaphore = threading.Semaphore(2)  # Max 2 concurrent actions for Pi Zero W2
+        
+        # Thread pool executor for timeout-protected action execution
+        self.executor = ThreadPoolExecutor(
+            max_workers=2,  # Match semaphore limit for Pi Zero W2
+            thread_name_prefix="RagnarAction"
+        )
+        
+        # Default timeout for action execution (in seconds)
+        self.action_timeout = getattr(self.shared_data, 'action_timeout', 300)  # 5 minutes default
+        self.vuln_scan_timeout = getattr(self.shared_data, 'vuln_scan_timeout', 600)  # 10 minutes for vuln scans
     
     def _verify_config_attributes(self):
         """Verify that all required configuration attributes exist on shared_data."""
@@ -59,13 +71,116 @@ class Orchestrator:
             'scan_vuln_running': True,
             'enable_attacks': True,
             'scan_vuln_interval': 300,
-            'scan_interval': 180
+            'scan_interval': 180,
+            'action_timeout': 300,  # 5 minutes timeout for regular actions
+            'vuln_scan_timeout': 600  # 10 minutes timeout for vulnerability scans
         }
         
         for attr, default_value in required_attrs.items():
             if not hasattr(self.shared_data, attr):
                 logger.warning(f"Missing config attribute '{attr}', setting default value: {default_value}")
                 setattr(self.shared_data, attr, default_value)
+
+    def _should_retry(self, action_key, row, status_type='success'):
+        """
+        Check if an action should be retried based on its status and retry configuration.
+        
+        Args:
+            action_key: The action name/key to check
+            row: The data row containing action status
+            status_type: Either 'success' or 'failed'
+            
+        Returns:
+            tuple: (should_retry: bool, reason: str or None)
+                   - (True, None) if action should proceed
+                   - (False, reason_string) if action should be skipped with reason
+        """
+        action_status = row.get(action_key, "")
+        
+        if status_type == 'success':
+            if 'success' not in action_status:
+                return (True, None)
+            
+            retry_enabled = getattr(self.shared_data, 'retry_success_actions', True)
+            if not retry_enabled:
+                return (False, "success retry disabled")
+            
+            delay = getattr(self.shared_data, 'success_retry_delay', 300)
+            status_prefix = 'success'
+        elif status_type == 'failed':
+            if 'failed' not in action_status:
+                return (True, None)
+            
+            retry_enabled = getattr(self.shared_data, 'retry_failed_actions', True)
+            if not retry_enabled:
+                return (False, "failed retry disabled")
+            
+            delay = getattr(self.shared_data, 'failed_retry_delay', 180)
+            status_prefix = 'failed'
+        else:
+            logger.error(f"Invalid status_type: {status_type}")
+            return (True, None)
+        
+        # Parse timestamp from status string (format: status_YYYYMMDD_HHMMSS)
+        try:
+            parts = action_status.split('_')
+            if len(parts) >= 3:
+                timestamp_str = f"{parts[1]}_{parts[2]}"
+                last_time = datetime.strptime(timestamp_str, "%Y%m%d_%H%M%S")
+                
+                retry_time = last_time + timedelta(seconds=delay)
+                if datetime.now() < retry_time:
+                    retry_in_seconds = (retry_time - datetime.now()).seconds
+                    formatted_retry_in = str(timedelta(seconds=retry_in_seconds))
+                    return (False, f"{status_prefix} retry delay, retry possible in: {formatted_retry_in}")
+        except (ValueError, IndexError) as e:
+            logger.warning(f"Error parsing timestamp for {action_key}: {e}")
+            # If we can't parse timestamp, allow retry
+            return (True, None)
+        
+        return (True, None)
+    
+    def _update_action_status(self, row, action_key, result):
+        """
+        Update action status with timestamp.
+        
+        Args:
+            row: The data row to update
+            action_key: The action name/key
+            result: 'success' or 'failed'
+            
+        Returns:
+            str: The formatted status string
+        """
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        status = f"{result}_{timestamp}"
+        row[action_key] = status
+        return status
+    
+    def _execute_with_timeout(self, action_callable, timeout, action_name="unknown"):
+        """
+        Execute an action with a timeout to prevent hanging.
+        
+        Args:
+            action_callable: Callable that executes the action
+            timeout: Maximum execution time in seconds
+            action_name: Name of the action for logging
+            
+        Returns:
+            str: 'success', 'failed', or 'timeout'
+        """
+        try:
+            future = self.executor.submit(action_callable)
+            result = future.result(timeout=timeout)
+            return result
+        except FutureTimeoutError:
+            logger.error(f"Action {action_name} timed out after {timeout} seconds")
+            # Cancel the future to prevent resource leaks
+            future.cancel()
+            return 'timeout'
+        except Exception as e:
+            logger.error(f"Action {action_name} raised exception: {e}")
+            return 'failed'
 
     def load_actions(self):
         """Load all actions from the actions file"""
@@ -187,7 +302,7 @@ class Orchestrator:
 
 
     def execute_action(self, action, ip, ports, row, action_key, current_data):
-        """Execute an action on a target"""
+        """Execute an action on a target with timeout protection"""
         if hasattr(action, 'port') and str(action.port) not in ports:
             return False
 
@@ -211,78 +326,68 @@ class Orchestrator:
             if 'success' not in parent_status:
                 return False  # Skip child action if parent action has not succeeded
 
-        # Check if the action is already successful and if retries are disabled for successful actions
-        retry_success = getattr(self.shared_data, 'retry_success_actions', True)
-        success_delay = getattr(self.shared_data, 'success_retry_delay', 300)
-        
-        if 'success' in row[action_key]:
-            if not retry_success:
-                return False
-            else:
-                try:
-                    last_success_time = datetime.strptime(row[action_key].split('_')[1] + "_" + row[action_key].split('_')[2], "%Y%m%d_%H%M%S")
-                    if datetime.now() < last_success_time + timedelta(seconds=success_delay):
-                        retry_in_seconds = (last_success_time + timedelta(seconds=success_delay) - datetime.now()).seconds
-                        formatted_retry_in = str(timedelta(seconds=retry_in_seconds))
-                        logger.warning(f"Skipping action {action.action_name} for {ip}:{action.port} due to success retry delay, retry possible in: {formatted_retry_in}")
-                        return False  # Skip if the success retry delay has not passed
-                except ValueError as ve:
-                    logger.error(f"Error parsing last success time for {action.action_name}: {ve}")
+        # Check success retry logic using helper
+        should_retry, reason = self._should_retry(action_key, row, 'success')
+        if not should_retry:
+            logger.warning(f"Skipping action {action.action_name} for {ip}:{action.port} due to {reason}")
+            return False
 
-        retry_failed = getattr(self.shared_data, 'retry_failed_actions', True)
-        failed_delay = getattr(self.shared_data, 'failed_retry_delay', 180)
-        
-        last_failed_time_str = row.get(action_key, "")
-        if 'failed' in last_failed_time_str:
-            if not retry_failed:
-                return False  # Skip retrying failed actions if retry_failed_actions is disabled
-            try:
-                last_failed_time = datetime.strptime(last_failed_time_str.split('_')[1] + "_" + last_failed_time_str.split('_')[2], "%Y%m%d_%H%M%S")
-                if datetime.now() < last_failed_time + timedelta(seconds=failed_delay):
-                    retry_in_seconds = (last_failed_time + timedelta(seconds=failed_delay) - datetime.now()).seconds
-                    formatted_retry_in = str(timedelta(seconds=retry_in_seconds))
-                    logger.warning(f"Skipping action {action.action_name} for {ip}:{action.port} due to failed retry delay, retry possible in: {formatted_retry_in}")
-                    return False  # Skip if the retry delay has not passed
-            except ValueError as ve:
-                logger.error(f"Error parsing last failed time for {action.action_name}: {ve}")
+        # Check failed retry logic using helper
+        should_retry, reason = self._should_retry(action_key, row, 'failed')
+        if not should_retry:
+            logger.warning(f"Skipping action {action.action_name} for {ip}:{action.port} due to {reason}")
+            return False
+
+        # CRITICAL: Check system resources before executing action (Pi Zero W2 protection)
+        if not resource_monitor.can_start_operation(
+            operation_name=f"action_{action.action_name}",
+            min_memory_mb=30  # Require at least 30MB free memory
+        ):
+            logger.warning(
+                f"Skipping action {action.action_name} for {ip}:{action.port} - "
+                f"Insufficient system resources (preventing hang)"
+            )
+            return False
 
         try:
-            # CRITICAL: Check system resources before executing action (Pi Zero W2 protection)
-            if not resource_monitor.can_start_operation(
-                operation_name=f"action_{action.action_name}",
-                min_memory_mb=30  # Require at least 30MB free memory
-            ):
-                logger.warning(
-                    f"Skipping action {action.action_name} for {ip}:{action.port} - "
-                    f"Insufficient system resources (preventing hang)"
-                )
-                return False
-            
             logger.info(f"Executing action {action.action_name} for {ip}:{action.port}")
             self.shared_data.ragnarstatustext2 = ip
-            result = action.execute(ip, str(action.port), row, action_key)
-            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            
+            # Execute action with timeout protection
+            action_callable = lambda: action.execute(ip, str(action.port), row, action_key)
+            result = self._execute_with_timeout(
+                action_callable,
+                timeout=self.action_timeout,
+                action_name=f"{action.action_name}@{ip}:{action.port}"
+            )
+            
+            # Update status using helper (timeout is treated as failed)
+            if result == 'timeout':
+                result_status = 'failed'
+                logger.error(f"Action {action.action_name} for {ip}:{action.port} timed out")
+            else:
+                result_status = 'success' if result == 'success' else 'failed'
+            
+            self._update_action_status(row, action_key, result_status)
+            
             if result == 'success':
-                row[action_key] = f'success_{timestamp}'
                 # Update stats immediately after successful action
                 try:
                     self.shared_data.update_stats()
                     logger.debug(f"Updated stats after successful {action.action_name}")
                 except Exception as stats_error:
                     logger.warning(f"Could not update stats: {stats_error}")
-            else:
-                row[action_key] = f'failed_{timestamp}'
+            
             self.shared_data.write_data(current_data)
             return result == 'success'
         except Exception as e:
             logger.error(f"Action {action.action_name} failed: {e}")
-            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-            row[action_key] = f'failed_{timestamp}'
+            self._update_action_status(row, action_key, 'failed')
             self.shared_data.write_data(current_data)
             return False
 
     def execute_standalone_action(self, action, current_data):
-        """Execute a standalone action"""
+        """Execute a standalone action with timeout protection"""
         row = next((r for r in current_data if r["MAC Address"] == "STANDALONE"), None)
         if not row:
             row = {
@@ -298,48 +403,39 @@ class Orchestrator:
         if action_key not in row:
             row[action_key] = ""
 
-        # Use getattr for safe config access
-        retry_success = getattr(self.shared_data, 'retry_success_actions', True)
-        success_delay = getattr(self.shared_data, 'success_retry_delay', 300)
-        
-        # Check if the action is already successful and if retries are disabled for successful actions
-        if 'success' in row[action_key]:
-            if not retry_success:
-                return False
-            else:
-                try:
-                    last_success_time = datetime.strptime(row[action_key].split('_')[1] + "_" + row[action_key].split('_')[2], "%Y%m%d_%H%M%S")
-                    if datetime.now() < last_success_time + timedelta(seconds=success_delay):
-                        retry_in_seconds = (last_success_time + timedelta(seconds=success_delay) - datetime.now()).seconds
-                        formatted_retry_in = str(timedelta(seconds=retry_in_seconds))
-                        logger.warning(f"Skipping standalone action {action.action_name} due to success retry delay, retry possible in: {formatted_retry_in}")
-                        return False  # Skip if the success retry delay has not passed
-                except ValueError as ve:
-                    logger.error(f"Error parsing last success time for {action.action_name}: {ve}")
+        # Check success retry logic using helper
+        should_retry, reason = self._should_retry(action_key, row, 'success')
+        if not should_retry:
+            logger.warning(f"Skipping standalone action {action.action_name} due to {reason}")
+            return False
 
-        retry_failed = getattr(self.shared_data, 'retry_failed_actions', True)
-        failed_delay = getattr(self.shared_data, 'failed_retry_delay', 180)
-        
-        last_failed_time_str = row.get(action_key, "")
-        if 'failed' in last_failed_time_str:
-            if not retry_failed:
-                return False  # Skip retrying failed actions if retry_failed_actions is disabled
-            try:
-                last_failed_time = datetime.strptime(last_failed_time_str.split('_')[1] + "_" + last_failed_time_str.split('_')[2], "%Y%m%d_%H%M%S")
-                if datetime.now() < last_failed_time + timedelta(seconds=failed_delay):
-                    retry_in_seconds = (last_failed_time + timedelta(seconds=failed_delay) - datetime.now()).seconds
-                    formatted_retry_in = str(timedelta(seconds=retry_in_seconds))
-                    logger.warning(f"Skipping standalone action {action.action_name} due to failed retry delay, retry possible in: {formatted_retry_in}")
-                    return False  # Skip if the retry delay has not passed
-            except ValueError as ve:
-                logger.error(f"Error parsing last failed time for {action.action_name}: {ve}")
+        # Check failed retry logic using helper
+        should_retry, reason = self._should_retry(action_key, row, 'failed')
+        if not should_retry:
+            logger.warning(f"Skipping standalone action {action.action_name} due to {reason}")
+            return False
 
         try:
             logger.info(f"Executing standalone action {action.action_name}")
-            result = action.execute()
-            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            
+            # Execute action with timeout protection
+            action_callable = lambda: action.execute()
+            result = self._execute_with_timeout(
+                action_callable,
+                timeout=self.action_timeout,
+                action_name=f"standalone_{action.action_name}"
+            )
+            
+            # Update status using helper (timeout is treated as failed)
+            if result == 'timeout':
+                result_status = 'failed'
+                logger.error(f"Standalone action {action.action_name} timed out")
+            else:
+                result_status = 'success' if result == 'success' else 'failed'
+            
+            self._update_action_status(row, action_key, result_status)
+            
             if result == 'success':
-                row[action_key] = f'success_{timestamp}'
                 logger.info(f"Standalone action {action.action_name} executed successfully")
                 # Update stats immediately after successful standalone action
                 try:
@@ -348,24 +444,19 @@ class Orchestrator:
                 except Exception as stats_error:
                     logger.warning(f"Could not update stats: {stats_error}")
             else:
-                row[action_key] = f'failed_{timestamp}'
                 logger.error(f"Standalone action {action.action_name} failed")
+            
             self.shared_data.write_data(current_data)
             return result == 'success'
         except Exception as e:
             logger.error(f"Standalone action {action.action_name} failed: {e}")
-            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-            row[action_key] = f'failed_{timestamp}'
+            self._update_action_status(row, action_key, 'failed')
             self.shared_data.write_data(current_data)
             return False
 
     def run_vulnerability_scans(self):
-        """Run vulnerability scans on all alive hosts"""
+        """Run vulnerability scans on all alive hosts with timeout protection"""
         scan_vuln_running = getattr(self.shared_data, 'scan_vuln_running', True)
-        retry_success = getattr(self.shared_data, 'retry_success_actions', True)
-        retry_failed = getattr(self.shared_data, 'retry_failed_actions', True)
-        success_delay = getattr(self.shared_data, 'success_retry_delay', 300)
-        failed_delay = getattr(self.shared_data, 'failed_retry_delay', 180)
         
         if not scan_vuln_running or not self.nmap_vuln_scanner:
             return
@@ -386,29 +477,21 @@ class Orchestrator:
                 if not ip or ip == "STANDALONE":
                     continue
                 
-                scan_status = row.get("NmapVulnScanner", "")
+                action_key = "NmapVulnScanner"
                 
-                # Check success retry delay
-                if 'success' in scan_status and retry_success:
-                    try:
-                        last_success_time = datetime.strptime(scan_status.split('_')[1] + "_" + scan_status.split('_')[2], "%Y%m%d_%H%M%S")
-                        if datetime.now() < last_success_time + timedelta(seconds=success_delay):
-                            continue
-                    except (ValueError, IndexError):
-                        pass
-                elif 'success' in scan_status and not retry_success:
+                # Initialize action_key if not present
+                if action_key not in row:
+                    row[action_key] = ""
+                
+                # Check success retry logic using helper
+                should_retry, reason = self._should_retry(action_key, row, 'success')
+                if not should_retry:
                     continue
                 
-                # Check failed retry delay
-                if 'failed' in scan_status:
-                    if not retry_failed:
-                        continue
-                    try:
-                        last_failed_time = datetime.strptime(scan_status.split('_')[1] + "_" + scan_status.split('_')[2], "%Y%m%d_%H%M%S")
-                        if datetime.now() < last_failed_time + timedelta(seconds=failed_delay):
-                            continue
-                    except (ValueError, IndexError):
-                        pass
+                # Check failed retry logic using helper
+                should_retry, reason = self._should_retry(action_key, row, 'failed')
+                if not should_retry:
+                    continue
                 
                 # Check system resources
                 if not resource_monitor.can_start_operation(
@@ -420,21 +503,34 @@ class Orchestrator:
                 
                 try:
                     logger.info(f"Vulnerability scanning {ip}...")
-                    with self.semaphore:
-                        result = self.nmap_vuln_scanner.execute(ip, row, "NmapVulnScanner")
-                        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-                        if result == 'success':
-                            row["NmapVulnScanner"] = f'success_{timestamp}'
-                            logger.info(f"Vulnerability scan successful for {ip}")
-                        else:
-                            row["NmapVulnScanner"] = f'failed_{timestamp}'
-                            logger.warning(f"Vulnerability scan failed for {ip}")
-                        self.shared_data.write_data(current_data)
-                        scans_performed += 1
+                    
+                    # Execute vulnerability scan with timeout protection
+                    scan_callable = lambda: self.nmap_vuln_scanner.execute(ip, row, action_key)
+                    result = self._execute_with_timeout(
+                        scan_callable,
+                        timeout=self.vuln_scan_timeout,
+                        action_name=f"NmapVulnScanner@{ip}"
+                    )
+                    
+                    # Update status using helper (timeout is treated as failed)
+                    if result == 'timeout':
+                        result_status = 'failed'
+                        logger.error(f"Vulnerability scan for {ip} timed out")
+                    else:
+                        result_status = 'success' if result == 'success' else 'failed'
+                    
+                    self._update_action_status(row, action_key, result_status)
+                    
+                    if result == 'success':
+                        logger.info(f"Vulnerability scan successful for {ip}")
+                    else:
+                        logger.warning(f"Vulnerability scan failed for {ip}")
+                    
+                    self.shared_data.write_data(current_data)
+                    scans_performed += 1
                 except Exception as e:
                     logger.error(f"Error scanning {ip}: {e}")
-                    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-                    row["NmapVulnScanner"] = f'failed_{timestamp}'
+                    self._update_action_status(row, action_key, 'failed')
                     self.shared_data.write_data(current_data)
             
             self.last_vuln_scan_time = datetime.now()
@@ -546,7 +642,22 @@ class Orchestrator:
 
             if action_retry_pending:
                 self.failed_scans_count = 0
+    
+    def shutdown(self):
+        """Gracefully shutdown the orchestrator and cleanup resources"""
+        logger.info("Shutting down orchestrator...")
+        try:
+            # Shutdown the executor and wait for running tasks to complete (max 30 seconds)
+            self.executor.shutdown(wait=True, cancel_futures=False)
+            logger.info("Thread pool executor shutdown complete")
+        except Exception as e:
+            logger.error(f"Error during executor shutdown: {e}")
 
 if __name__ == "__main__":
     orchestrator = Orchestrator()
-    orchestrator.run()
+    try:
+        orchestrator.run()
+    except KeyboardInterrupt:
+        logger.info("Received interrupt signal")
+    finally:
+        orchestrator.shutdown()
