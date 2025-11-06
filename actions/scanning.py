@@ -258,18 +258,20 @@ class NetworkScanner:
                     with open(netkbfile, 'r') as file:
                         reader = csv.DictReader(file)
                         existing_headers = reader.fieldnames
-                        existing_action_columns = [header for header in existing_headers if header not in ["MAC Address", "IPs", "Hostnames", "Alive", "Ports"]]
+                        existing_action_columns = [header for header in existing_headers if header not in ["MAC Address", "IPs", "Hostnames", "Alive", "Ports", "Failed_Pings"]]
                         for row in reader:
                             mac = row["MAC Address"]
                             ips = row["IPs"].split(';')
                             hostnames = row["Hostnames"].split(';')
                             alive = row["Alive"]
                             ports = row["Ports"].split(';')
+                            failed_pings = int(row.get("Failed_Pings", "0"))  # Default to 0 if missing
                             netkb_entries[mac] = {
                                 'IPs': set(ips) if ips[0] else set(),
                                 'Hostnames': set(hostnames) if hostnames[0] else set(),
                                 'Alive': alive,
-                                'Ports': set(ports) if ports[0] else set()
+                                'Ports': set(ports) if ports[0] else set(),
+                                'Failed_Pings': failed_pings
                             }
                             for action in existing_action_columns:
                                 netkb_entries[mac][action] = row.get(action, "")
@@ -298,10 +300,20 @@ class NetworkScanner:
 
                     # Check if IP is already associated with a different MAC
                     if ip in ip_to_mac and ip_to_mac[ip] != mac:
-                        # Mark the old MAC as not alive
+                        # Mark the old MAC as having a failed ping instead of immediately dead
                         old_mac = ip_to_mac[ip]
                         if old_mac in netkb_entries:
-                            netkb_entries[old_mac]['Alive'] = '0'
+                            max_failed_pings = self.shared_data.config.get('network_max_failed_pings', 15)
+                            current_failures = netkb_entries[old_mac].get('Failed_Pings', 0) + 1
+                            netkb_entries[old_mac]['Failed_Pings'] = current_failures
+                            
+                            # Only mark as dead after reaching failure threshold
+                            if current_failures >= max_failed_pings:
+                                netkb_entries[old_mac]['Alive'] = '0'
+                                self.logger.info(f"Old MAC {old_mac} marked offline after {current_failures} consecutive failed pings (IP reassigned to {mac})")
+                            else:
+                                netkb_entries[old_mac]['Alive'] = '1'  # Keep alive per 15-ping rule
+                                self.logger.debug(f"Old MAC {old_mac} failed ping {current_failures}/{max_failed_pings} due to IP reassignment - keeping alive")
 
                     # Update or create entry for the new MAC
                     ip_to_mac[ip] = mac
@@ -310,20 +322,34 @@ class NetworkScanner:
                         netkb_entries[mac]['Hostnames'].add(hostname)
                         netkb_entries[mac]['Alive'] = '1'
                         netkb_entries[mac]['Ports'].update(map(str, ports))
+                        netkb_entries[mac]['Failed_Pings'] = 0  # Reset failures since host is responsive
                     else:
                         netkb_entries[mac] = {
                             'IPs': {ip},
                             'Hostnames': {hostname},
                             'Alive': '1',
-                            'Ports': set(map(str, ports))
+                            'Ports': set(map(str, ports)),
+                            'Failed_Pings': 0  # New hosts start with 0 failed pings
                         }
                         for action in existing_action_columns:
                             netkb_entries[mac][action] = ""
 
-                # Update all existing entries to mark missing hosts as not alive
+                # Update all existing entries - implement 15-failed-pings rule instead of immediate death
+                max_failed_pings = self.shared_data.config.get('network_max_failed_pings', 15)
                 for mac in netkb_entries:
                     if mac not in alive_macs:
-                        netkb_entries[mac]['Alive'] = '0'
+                        # Host not found in current scan - increment failure count
+                        current_failures = netkb_entries[mac].get('Failed_Pings', 0)
+                        netkb_entries[mac]['Failed_Pings'] = current_failures + 1
+                        
+                        # Only mark as dead after reaching the failure threshold
+                        if netkb_entries[mac]['Failed_Pings'] >= max_failed_pings:
+                            netkb_entries[mac]['Alive'] = '0'
+                            self.logger.info(f"Host {mac} marked offline after {netkb_entries[mac]['Failed_Pings']} consecutive failed pings")
+                        else:
+                            # Keep alive until threshold reached
+                            netkb_entries[mac]['Alive'] = '1'  # Keep alive per 15-ping rule
+                            self.logger.debug(f"Host {mac} failed ping {netkb_entries[mac]['Failed_Pings']}/{max_failed_pings} - keeping alive per {max_failed_pings}-ping rule")
 
                 # Remove entries with multiple IP addresses for a single MAC address
                 netkb_entries = {mac: data for mac, data in netkb_entries.items() if len(data['IPs']) == 1}
@@ -332,14 +358,27 @@ class NetworkScanner:
 
                 with open(netkbfile, 'w', newline='') as file:
                     writer = csv.writer(file)
-                    writer.writerow(existing_headers)  # Use existing headers
+                    # Ensure Failed_Pings is included in headers
+                    if "Failed_Pings" not in existing_headers:
+                        # Insert Failed_Pings after Ports column
+                        headers_list = list(existing_headers)
+                        if "Ports" in headers_list:
+                            ports_index = headers_list.index("Ports")
+                            headers_list.insert(ports_index + 1, "Failed_Pings")
+                        else:
+                            headers_list.append("Failed_Pings")
+                        existing_headers = headers_list
+                        existing_action_columns = [header for header in existing_headers if header not in ["MAC Address", "IPs", "Hostnames", "Alive", "Ports", "Failed_Pings"]]
+                    
+                    writer.writerow(existing_headers)  # Write updated headers
                     for mac, data in sorted_netkb_entries:
                         row = [
                             mac,
                             ';'.join(sorted(data['IPs'], key=self.ip_key)),
                             ';'.join(sorted(data['Hostnames'])),
                             data['Alive'],
-                            ';'.join(sorted(data['Ports'], key=int))
+                            ';'.join(sorted(data['Ports'], key=int)),
+                            str(data.get('Failed_Pings', 0))  # Add Failed_Pings column
                         ]
                         row.extend(data.get(action, "") for action in existing_action_columns)
                         writer.writerow(row)

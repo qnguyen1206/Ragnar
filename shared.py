@@ -164,7 +164,7 @@ class SharedData:
             
             
             "__title_lists__": "List Settings",
-            "portlist": [20, 21, 22, 23, 25, 53, 67, 68, 69, 80, 88, 110, 111, 119, 123, 135, 137, 138, 139, 143, 161, 162, 179, 389, 443, 445, 465, 514, 515, 520, 554, 587, 631, 636, 993, 995, 1024, 1025, 1080, 1194, 1433, 1434, 1521, 1723, 1812, 1813, 1883, 1900, 2049, 2082, 2083, 2181, 2375, 2376, 2483, 2484, 25565, 3000, 3001, 3002, 3003, 3004, 3005, 3006, 3007, 3008, 3009, 5060, 5061, 5432, 5500, 5555, 5631, 5632, 5900, 5985, 5986, 6000, 6379, 6667, 6881, 6969, 7000, 7070, 8080, 8081, 8086, 8181, 8443, 8888, 9000, 9090, 9100, 9200, 9418, 9999, 10000],
+            "portlist": [20, 21, 22, 23, 25, 53, 67, 68, 69, 80, 88, 110, 111, 119, 123, 135, 137, 138, 139, 143, 161, 162, 179, 389, 443, 445, 465, 514, 515, 520, 554, 587, 631, 636, 993, 995, 1024, 1025, 1080, 1194, 1433, 1434, 1521, 1723, 1812, 1813, 1883, 1900, 2049, 2082, 2083, 2181, 2375, 2376, 2483, 2484, 25565, 3000, 3001, 3002, 3003, 3004, 3005, 3006, 3007, 3008, 3009, 4000, 5000, 5003, 5060, 5061, 5432, 5500, 5555, 5631, 5632, 5900, 5985, 5986, 6000, 6379, 6667, 6881, 6969, 7000, 7070, 8080, 8081, 8086, 8181, 8443, 8888, 9000, 9090, 9100, 9200, 9418, 9999, 10000],
             "mac_scan_blacklist": [],
             "ip_scan_blacklist": [],
             "steal_file_names": ["ssh.csv","hack.txt"],
@@ -175,7 +175,7 @@ class SharedData:
             "portstart": 1,
             "portend": 1000,
             "default_vulnerability_ports": [22, 80, 443],
-            "network_max_failed_pings": 5,
+            "network_max_failed_pings": 15,
             "network_device_retention_days": 14,
             "network_device_retention_hours": 8,  # Legacy data cleanup after 8 hours
             "network_ping_grace_period_minutes": 30,
@@ -532,7 +532,7 @@ class SharedData:
                     logger.error(f"Unexpected error reading actions file: {e}")
                     return
 
-                headers = ["MAC Address", "IPs", "Hostnames", "Alive", "Ports"] + action_names
+                headers = ["MAC Address", "IPs", "Hostnames", "Alive", "Ports", "Failed_Pings"] + action_names
 
                 try:
                     with open(self.netkbfile, 'w', newline='') as file:
@@ -786,7 +786,7 @@ class SharedData:
             existing_data = []
 
         # Check for missing action columns and add them
-        new_headers = ["MAC Address", "IPs", "Hostnames", "Alive", "Ports"] + action_names
+        new_headers = ["MAC Address", "IPs", "Hostnames", "Alive", "Ports", "Failed_Pings"] + action_names
         missing_headers = [header for header in new_headers if header not in existing_headers]
 
         # Update headers
