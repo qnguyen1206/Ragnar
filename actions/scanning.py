@@ -137,28 +137,89 @@ class NetworkScanner:
 
     def run_arp_scan(self):
         """Execute arp-scan to quickly discover hosts on the local network."""
-        command = ['sudo', 'arp-scan', f'--interface={self.arp_scan_interface}', '--localnet']
-        self.logger.info(f"Running arp-scan for host discovery: {' '.join(command)}")
+        # Try both --localnet and explicit subnet scanning for comprehensive discovery
+        commands = [
+            ['sudo', 'arp-scan', f'--interface={self.arp_scan_interface}', '--localnet'],
+            ['sudo', 'arp-scan', f'--interface={self.arp_scan_interface}', '192.168.1.0/24']
+        ]
+        
+        all_hosts = {}
+        
+        for command in commands:
+            self.logger.info(f"Running arp-scan for host discovery: {' '.join(command)}")
+            try:
+                result = subprocess.run(command, capture_output=True, text=True, check=True, timeout=120)
+                hosts = self._parse_arp_scan_output(result.stdout)
+                self.logger.info(f"arp-scan command '{' '.join(command)}' discovered {len(hosts)} hosts")
+                all_hosts.update(hosts)  # Merge results from both scans
+            except FileNotFoundError:
+                self.logger.error("arp-scan command not found. Install arp-scan or adjust configuration.")
+                continue
+            except subprocess.TimeoutExpired as e:
+                self.logger.error(f"arp-scan timed out: {e}")
+                hosts = self._parse_arp_scan_output(e.stdout or "")
+                all_hosts.update(hosts)
+            except subprocess.CalledProcessError as e:
+                self.logger.warning(f"arp-scan exited with code {e.returncode}: {e.stderr.strip() if e.stderr else 'no stderr'}")
+                hosts = self._parse_arp_scan_output(e.stdout or "")
+                all_hosts.update(hosts)
+            except Exception as e:
+                self.logger.error(f"Unexpected error running arp-scan: {e}")
+                continue
+        
+        self.logger.info(f"Total unique hosts discovered by all arp-scan methods: {len(all_hosts)}")
+        
+        # Supplementary ping sweep for hosts that don't respond to ARP
+        # This catches devices like 192.168.1.192 that may filter ARP but respond to ping
+        ping_discovered = self._ping_sweep_missing_hosts(all_hosts)
+        all_hosts.update(ping_discovered)
+        
+        self.logger.info(f"Final host count after arp-scan + ping sweep: {len(all_hosts)}")
+        return all_hosts
 
-        try:
-            result = subprocess.run(command, capture_output=True, text=True, check=True, timeout=120)
-            hosts = self._parse_arp_scan_output(result.stdout)
-            self.logger.info(f"arp-scan discovered {len(hosts)} hosts")
-            return hosts
-        except FileNotFoundError:
-            self.logger.error("arp-scan command not found. Install arp-scan or adjust configuration.")
-            return {}
-        except subprocess.TimeoutExpired as e:
-            self.logger.error(f"arp-scan timed out: {e}")
-            hosts = self._parse_arp_scan_output(e.stdout or "")
-            return hosts
-        except subprocess.CalledProcessError as e:
-            self.logger.warning(f"arp-scan exited with code {e.returncode}: {e.stderr.strip() if e.stderr else 'no stderr'}")
-            hosts = self._parse_arp_scan_output(e.stdout or "")
-            return hosts
-        except Exception as e:
-            self.logger.error(f"Unexpected error running arp-scan: {e}")
-            return {}
+    def _ping_sweep_missing_hosts(self, arp_hosts):
+        """
+        Ping sweep to find hosts that don't respond to arp-scan but are alive.
+        This is particularly useful for devices that filter ARP broadcasts.
+        """
+        ping_discovered = {}
+        known_ips = set(arp_hosts.keys())
+        
+        # Check a few specific IPs that we know might be problematic
+        # You can extend this list based on your network knowledge
+        target_ips = ['192.168.1.192', '192.168.1.193', '192.168.1.194', '192.168.1.195']
+        
+        for ip in target_ips:
+            if ip in known_ips:
+                continue  # Already found by arp-scan
+                
+            # Quick ping test
+            try:
+                result = subprocess.run(['ping', '-c', '1', '-W', '2', ip], 
+                                      capture_output=True, text=True, timeout=5)
+                if result.returncode == 0:
+                    # Host responds to ping, try to get MAC via ARP table
+                    mac = self.get_mac_address(ip, "")
+                    if not mac or mac == "00:00:00:00:00:00":
+                        # Create pseudo-MAC for tracking
+                        ip_parts = ip.split('.')
+                        if len(ip_parts) == 4:
+                            pseudo_mac = f"00:00:{int(ip_parts[0]):02x}:{int(ip_parts[1]):02x}:{int(ip_parts[2]):02x}:{int(ip_parts[3]):02x}"
+                            mac = pseudo_mac
+                    
+                    ping_discovered[ip] = {
+                        "mac": mac or "00:00:00:00:00:00",
+                        "vendor": "Unknown (discovered by ping)"
+                    }
+                    self.logger.info(f"Ping sweep found additional host: {ip} (MAC: {mac})")
+            except (subprocess.TimeoutExpired, subprocess.CalledProcessError, Exception) as e:
+                self.logger.debug(f"Ping sweep: {ip} not reachable ({e})")
+                continue
+        
+        if ping_discovered:
+            self.logger.info(f"Ping sweep discovered {len(ping_discovered)} additional hosts not found by arp-scan")
+        
+        return ping_discovered
 
     def check_if_csv_scan_file_exists(self, csv_scan_file, csv_result_file, netkbfile):
         """
