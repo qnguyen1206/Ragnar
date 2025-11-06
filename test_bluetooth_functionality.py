@@ -16,20 +16,57 @@ def test_bluetooth_endpoints():
     print("🔵 Testing Ragnar Bluetooth Functionality")
     print("=" * 50)
     
-    # Test endpoints
-    endpoints = [
-        ("/api/bluetooth/status", "GET", None),
-        ("/api/bluetooth/enable", "POST", None),
-        ("/api/bluetooth/disable", "POST", None),
+    # First, test basic status
+    print("📋 Phase 1: Basic Status Check")
+    print("-" * 30)
+    test_endpoint(base_url, "/api/bluetooth/status", "GET", None)
+    
+    # Phase 2: Enable Bluetooth and test powered operations
+    print("\n⚡ Phase 2: Enable Bluetooth and Test Powered Operations")
+    print("-" * 50)
+    
+    # Enable Bluetooth first
+    test_endpoint(base_url, "/api/bluetooth/enable", "POST", None)
+    time.sleep(2)  # Wait for Bluetooth to fully enable
+    
+    # Test operations that require Bluetooth to be powered on
+    powered_endpoints = [
         ("/api/bluetooth/discoverable/on", "POST", None),
         ("/api/bluetooth/discoverable/off", "POST", None),
         ("/api/bluetooth/scan/start", "POST", None),
-        ("/api/bluetooth/devices", "GET", None),
-        ("/api/bluetooth/scan/stop", "POST", None),
-        ("/api/bluetooth/enumerate", "POST", {"address": "00:00:00:00:00:00"}),
-        ("/api/bluetooth/pair", "POST", {"address": "00:00:00:00:00:00"}),
-        ("/api/bluetooth/unpair", "POST", {"address": "00:00:00:00:00:00"}),
     ]
+    
+    for endpoint, method, data in powered_endpoints:
+        test_endpoint(base_url, endpoint, method, data)
+        if "scan/start" in endpoint:
+            time.sleep(3)  # Give scan time to find devices
+    
+    # Check for discovered devices
+    print("\n📱 Checking for discovered devices...")
+    test_endpoint(base_url, "/api/bluetooth/devices", "GET", None)
+    
+    # Stop scanning
+    test_endpoint(base_url, "/api/bluetooth/scan/stop", "POST", None)
+    
+    # Phase 3: Test other endpoints
+    print("\n🔧 Phase 3: Other Operations")
+    print("-" * 30)
+    
+    remaining_endpoints = [
+        ("/api/bluetooth/enumerate", "POST", {"address": "00:00:00:00:00:00"}),
+        # Skip pair/unpair with invalid address - would test with real device
+    ]
+    
+    for endpoint, method, data in remaining_endpoints:
+        test_endpoint(base_url, endpoint, method, data)
+    
+    # Phase 4: Cleanup - disable Bluetooth
+    print("\n🧹 Phase 4: Cleanup")
+    print("-" * 20)
+    test_endpoint(base_url, "/api/bluetooth/disable", "POST", None)
+
+def test_endpoint(base_url, endpoint, method, data):
+    """Test a single endpoint"""
     
     print("Testing Bluetooth API endpoints...")
     print("-" * 30)
