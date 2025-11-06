@@ -3425,9 +3425,9 @@ async function triggerVulnScan() {
 // API HELPERS
 // ============================================================================
 
-async function fetchAPI(endpoint) {
+async function fetchAPI(endpoint, options = {}) {
     try {
-        const response = await fetch(endpoint);
+        const response = await fetch(endpoint, options);
         if (!response.ok) {
             throw new Error(`HTTP error! status: ${response.status}`);
         }
