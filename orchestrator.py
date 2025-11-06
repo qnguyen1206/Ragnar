@@ -359,6 +359,93 @@ class Orchestrator:
             self.shared_data.write_data(current_data)
             return False
 
+    def run_vulnerability_scans(self):
+        """Run vulnerability scans on all alive hosts"""
+        scan_vuln_running = getattr(self.shared_data, 'scan_vuln_running', True)
+        retry_success = getattr(self.shared_data, 'retry_success_actions', True)
+        retry_failed = getattr(self.shared_data, 'retry_failed_actions', True)
+        success_delay = getattr(self.shared_data, 'success_retry_delay', 300)
+        failed_delay = getattr(self.shared_data, 'failed_retry_delay', 180)
+        
+        if not scan_vuln_running or not self.nmap_vuln_scanner:
+            return
+            
+        try:
+            current_data = self.shared_data.read_data()
+            alive_hosts = [row for row in current_data if row.get("Alive") == '1']
+            
+            if not alive_hosts:
+                logger.debug("No alive hosts found for vulnerability scanning")
+                return
+                
+            logger.info(f"Starting vulnerability scans on {len(alive_hosts)} alive hosts...")
+            scans_performed = 0
+            
+            for row in alive_hosts:
+                ip = row.get("IPs", "")
+                if not ip or ip == "STANDALONE":
+                    continue
+                
+                scan_status = row.get("NmapVulnScanner", "")
+                
+                # Check success retry delay
+                if 'success' in scan_status and retry_success:
+                    try:
+                        last_success_time = datetime.strptime(scan_status.split('_')[1] + "_" + scan_status.split('_')[2], "%Y%m%d_%H%M%S")
+                        if datetime.now() < last_success_time + timedelta(seconds=success_delay):
+                            continue
+                    except (ValueError, IndexError):
+                        pass
+                elif 'success' in scan_status and not retry_success:
+                    continue
+                
+                # Check failed retry delay
+                if 'failed' in scan_status:
+                    if not retry_failed:
+                        continue
+                    try:
+                        last_failed_time = datetime.strptime(scan_status.split('_')[1] + "_" + scan_status.split('_')[2], "%Y%m%d_%H%M%S")
+                        if datetime.now() < last_failed_time + timedelta(seconds=failed_delay):
+                            continue
+                    except (ValueError, IndexError):
+                        pass
+                
+                # Check system resources
+                if not resource_monitor.can_start_operation(
+                    operation_name=f"vuln_scan_{ip}",
+                    min_memory_mb=30
+                ):
+                    logger.warning(f"Insufficient resources to scan {ip} - skipping")
+                    continue
+                
+                try:
+                    logger.info(f"Vulnerability scanning {ip}...")
+                    with self.semaphore:
+                        result = self.nmap_vuln_scanner.execute(ip, row, "NmapVulnScanner")
+                        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+                        if result == 'success':
+                            row["NmapVulnScanner"] = f'success_{timestamp}'
+                            logger.info(f"Vulnerability scan successful for {ip}")
+                        else:
+                            row["NmapVulnScanner"] = f'failed_{timestamp}'
+                            logger.warning(f"Vulnerability scan failed for {ip}")
+                        self.shared_data.write_data(current_data)
+                        scans_performed += 1
+                except Exception as e:
+                    logger.error(f"Error scanning {ip}: {e}")
+                    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+                    row["NmapVulnScanner"] = f'failed_{timestamp}'
+                    self.shared_data.write_data(current_data)
+            
+            self.last_vuln_scan_time = datetime.now()
+            if scans_performed > 0:
+                logger.info(f"Completed {scans_performed} vulnerability scans")
+            else:
+                logger.debug("No vulnerability scans needed at this time")
+                
+        except Exception as e:
+            logger.error(f"Error during vulnerability scanning cycle: {e}")
+
     def run(self):
         """Run the orchestrator cycle to execute actions"""
         # Use getattr for safe config access
@@ -379,43 +466,15 @@ class Orchestrator:
             
             # Run initial vulnerability scan on startup if enabled
             if scan_vuln_running and self.nmap_vuln_scanner:
-                try:
-                    logger.info("Starting initial vulnerability scan on all discovered hosts...")
-                    current_data = self.shared_data.read_data()
-                    alive_hosts = [row for row in current_data if row.get("Alive") == '1']
-                    
-                    if alive_hosts:
-                        logger.info(f"Found {len(alive_hosts)} alive hosts. Starting vulnerability scans...")
-                        for row in alive_hosts:
-                            ip = row.get("IPs", "")
-                            if not ip:
-                                continue
-                            
-                            try:
-                                logger.info(f"Scanning {ip} for vulnerabilities...")
-                                with self.semaphore:
-                                    result = self.nmap_vuln_scanner.execute(ip, row, "NmapVulnScanner")
-                                    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-                                    if result == 'success':
-                                        row["NmapVulnScanner"] = f'success_{timestamp}'
-                                    else:
-                                        row["NmapVulnScanner"] = f'failed_{timestamp}'
-                                    self.shared_data.write_data(current_data)
-                            except Exception as e:
-                                logger.error(f"Error scanning {ip} on startup: {e}")
-                        
-                        self.last_vuln_scan_time = datetime.now()
-                        logger.info("Initial vulnerability scan completed.")
-                    else:
-                        logger.info("No alive hosts found for initial vulnerability scan.")
-                except Exception as e:
-                    logger.error(f"Error during initial vulnerability scan: {e}")
+                logger.info("Running initial vulnerability scan...")
+                self.run_vulnerability_scans()
         else:
             logger.error("Network scanner not initialized. Cannot start orchestrator.")
         
         # Log initial system status
         resource_monitor.log_system_status()
         last_resource_log_time = time.time()
+        last_vuln_scan_check = time.time()
         
         while not self.shared_data.orchestrator_should_exit:
             # Periodically log resource status (every 5 minutes)
@@ -427,6 +486,13 @@ class Orchestrator:
                 if resource_monitor.get_memory_usage() > 75:
                     logger.info("High memory usage detected - forcing garbage collection")
                     resource_monitor.force_garbage_collection()
+            
+            # Periodic vulnerability scanning (independent of idle state)
+            scan_vuln_interval = getattr(self.shared_data, 'scan_vuln_interval', 300)
+            if time.time() - last_vuln_scan_check > scan_vuln_interval:
+                logger.info("Periodic vulnerability scan check triggered")
+                self.run_vulnerability_scans()
+                last_vuln_scan_check = time.time()
             
             # CRITICAL: Check system health before processing actions
             if not resource_monitor.is_system_healthy():
@@ -449,57 +515,9 @@ class Orchestrator:
                 if self.network_scanner:
                     self.shared_data.ragnarorch_status = "NetworkScanner"
                     self.network_scanner.scan()
-                     # Relire les données mises à jour après le scan
+                    # Re-read the updated data after the scan
                     current_data = self.shared_data.read_data()
                     any_action_executed = self.process_alive_ips(current_data)
-                    if scan_vuln_running and self.nmap_vuln_scanner:
-                        current_time = datetime.now()
-                        if current_time >= self.last_vuln_scan_time + timedelta(seconds=scan_vuln_interval):
-                            try:
-                                logger.info("Starting vulnerability scans...")
-                                for row in current_data:
-                                    if row["Alive"] == '1':
-                                        ip = row["IPs"]
-                                        scan_status = row.get("NmapVulnScanner", "")
-
-                                        # Check success retry delay
-                                        if 'success' in scan_status:
-                                            last_success_time = datetime.strptime(scan_status.split('_')[1] + "_" + scan_status.split('_')[2], "%Y%m%d_%H%M%S")
-                                            if not retry_success:
-                                                logger.warning(f"Skipping vulnerability scan for {ip} because retry on success is disabled.")
-                                                continue  # Skip if retry on success is disabled
-                                            if datetime.now() < last_success_time + timedelta(seconds=success_delay):
-                                                retry_in_seconds = (last_success_time + timedelta(seconds=success_delay) - datetime.now()).seconds
-                                                formatted_retry_in = str(timedelta(seconds=retry_in_seconds))
-                                                logger.warning(f"Skipping vulnerability scan for {ip} due to success retry delay, retry possible in: {formatted_retry_in}")
-                                                # Skip if the retry delay has not passed
-                                                continue
-
-                                        # Check failed retry delay
-                                        if 'failed' in scan_status:
-                                            if not retry_failed:
-                                                logger.warning(f"Skipping vulnerability scan for {ip} because retry on failure is disabled.")
-                                                continue  # Skip if retry on failure is disabled
-                                            last_failed_time = datetime.strptime(scan_status.split('_')[1] + "_" + scan_status.split('_')[2], "%Y%m%d_%H%M%S")
-                                            if datetime.now() < last_failed_time + timedelta(seconds=failed_delay):
-                                                retry_in_seconds = (last_failed_time + timedelta(seconds=failed_delay) - datetime.now()).seconds
-                                                formatted_retry_in = str(timedelta(seconds=retry_in_seconds))
-                                                logger.warning(f"Skipping vulnerability scan for {ip} due to failed retry delay, retry possible in: {formatted_retry_in}")
-                                                continue
-
-                                        with self.semaphore:
-                                            result = self.nmap_vuln_scanner.execute(ip, row, "NmapVulnScanner")
-                                            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-                                            if result == 'success':
-                                                row["NmapVulnScanner"] = f'success_{timestamp}'
-                                            else:
-                                                row["NmapVulnScanner"] = f'failed_{timestamp}'
-                                            self.shared_data.write_data(current_data)
-                                self.last_vuln_scan_time = current_time
-                            except Exception as e:
-                                logger.error(f"Error during vulnerability scan: {e}")
-
-
                 else:
                     logger.warning("No network scanner available.")
                 self.failed_scans_count += 1
