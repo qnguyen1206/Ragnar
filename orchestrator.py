@@ -619,10 +619,6 @@ class Orchestrator:
             logger.info(f"\n{'=' * 70}")
             logger.info(f"ORCHESTRATOR CYCLE #{cycle_count}")
             logger.info(f"{'=' * 70}")
-            cycle_count += 1
-            logger.info(f"\n{'=' * 70}")
-            logger.info(f"ORCHESTRATOR CYCLE #{cycle_count}")
-            logger.info(f"{'=' * 70}")
             
             # Periodically log resource status (every 5 minutes)
             if time.time() - last_resource_log_time > 300:
@@ -638,6 +634,7 @@ class Orchestrator:
             # CYCLE PHASE 1: Periodic Network Scan (ARP + Port Scan)
             # ================================================================
             current_time = time.time()
+            scan_interval = getattr(self.shared_data, 'scan_interval', scan_interval)
             if current_time - last_network_scan_time >= scan_interval:
                 logger.info(f"→ Cycle Phase 1: ARP + Port Scan (interval: {scan_interval}s)")
                 if self.network_scanner:
@@ -654,7 +651,8 @@ class Orchestrator:
             # ================================================================
             # CYCLE PHASE 2: Periodic Vulnerability Scan
             # ================================================================
-            scan_vuln_interval = getattr(self.shared_data, 'scan_vuln_interval', 300)
+            scan_vuln_running = getattr(self.shared_data, 'scan_vuln_running', scan_vuln_running)
+            scan_vuln_interval = getattr(self.shared_data, 'scan_vuln_interval', scan_vuln_interval)
             if scan_vuln_running and (time.time() - last_vuln_scan_check >= scan_vuln_interval):
                 logger.info(f"→ Cycle Phase 2: Vulnerability Scan (interval: {scan_vuln_interval}s)")
                 self.run_vulnerability_scans()
@@ -670,7 +668,7 @@ class Orchestrator:
             # ================================================================
             # CYCLE PHASE 3: Attack Phase (only if enabled)
             # ================================================================
-            enable_attacks = getattr(self.shared_data, 'enable_attacks', True)
+            enable_attacks = getattr(self.shared_data, 'enable_attacks', enable_attacks)
             if enable_attacks:
                 logger.info("→ Cycle Phase 3: Attack Phase (executing attack actions)")
             else:
