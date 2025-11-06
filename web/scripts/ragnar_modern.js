@@ -492,6 +492,12 @@ function setupAutoRefresh() {
         }
     }, 10000); // Every 10 seconds
 
+    autoRefreshIntervals.connect = setInterval(() => {
+        if (currentTab === 'connect') {
+            refreshWifiStatus();
+        }
+    }, 15000); // Every 15 seconds
+
     autoRefreshIntervals.discovered = setInterval(() => {
         if (currentTab === 'discovered' && socket && socket.connected) {
             socket.emit('request_credentials');
@@ -575,6 +581,9 @@ async function loadTabData(tabName) {
         case 'network':
             await loadNetworkData();
             break;
+        case 'connect':
+            await loadConnectData();
+            break;
         case 'discovered':
             await loadCredentialsData();
             await loadLootData();
@@ -597,9 +606,6 @@ async function loadTabData(tabName) {
             break;
         case 'config':
             await loadConfigData();
-            // Refresh Wi-Fi status when config tab is loaded
-            console.log('Loading config tab, refreshing Wi-Fi status...');
-            await refreshWifiStatus();
             break;
     }
 }
@@ -1593,9 +1599,6 @@ async function loadConfigData() {
         // Display current profile if set
         displayCurrentProfile(config);
         
-        // Load Wi-Fi interfaces
-        await loadWifiInterfaces();
-        
         // Update vulnerability count in data management card
         updateVulnerabilityCount();
         
@@ -1603,6 +1606,19 @@ async function loadConfigData() {
         checkForUpdates();
     } catch (error) {
         console.error('Error loading config:', error);
+    }
+}
+
+async function loadConnectData() {
+    try {
+        // Load Wi-Fi interfaces
+        await loadWifiInterfaces();
+        
+        // Refresh Wi-Fi status when connect tab is loaded
+        console.log('Loading connect tab, refreshing Wi-Fi status...');
+        await refreshWifiStatus();
+    } catch (error) {
+        console.error('Error loading connect data:', error);
     }
 }
 
