@@ -792,14 +792,24 @@ class WiFiManager:
             self.logger.info("Scanning networks while in AP mode using smart strategies")
             self.ap_logger.info("Starting network scan while in AP mode (non-disruptive)")
             
-            # Strategy 1: Return cached networks if we have recent data (within 10 minutes)
+            # Strategy 1: Return cached networks if we have recent data (within 5 minutes for fresher data)
             if hasattr(self, 'cached_networks') and hasattr(self, 'last_scan_time'):
                 cache_age = time.time() - self.last_scan_time
-                if cache_age < 600:  # 10 minutes cache
-                    self.ap_logger.info(f"Returning cached networks (age: {cache_age:.1f}s)")
+                if cache_age < 300:  # 5 minutes cache for fresher data
+                    self.ap_logger.info(f"Returning cached networks (age: {cache_age:.1f}s, count: {len(self.cached_networks)})")
                     return self.cached_networks
             
-            # Strategy 2: Try iwlist scan (non-disruptive to AP mode)
+            # Strategy 2: Use networks scanned before AP mode started
+            if hasattr(self, 'available_networks') and self.available_networks:
+                real_networks = [n for n in self.available_networks if not n.get('instruction')]
+                if real_networks:
+                    self.ap_logger.info(f"Using pre-AP scan results ({len(real_networks)} networks)")
+                    # Update cache
+                    self.cached_networks = real_networks
+                    self.last_scan_time = time.time()
+                    return real_networks
+            
+            # Strategy 3: Try iwlist scan (non-disruptive to AP mode)
             networks = []
             try:
                 self.ap_logger.debug("Attempting iwlist scan on AP interface...")
@@ -847,9 +857,6 @@ class WiFiManager:
                     
                     if networks:
                         self.ap_logger.info(f"iwlist scan found {len(networks)} networks")
-                        # Cache the results
-                        self.cached_networks = networks
-                        self.last_scan_time = time.time()
                         
                         # Remove duplicates and sort
                         seen_ssids = set()
@@ -861,16 +868,15 @@ class WiFiManager:
                                 network['known'] = network['ssid'] in [net['ssid'] for net in self.known_networks]
                                 unique_networks.append(network)
                         
+                        # Cache the results
+                        self.cached_networks = unique_networks
+                        self.last_scan_time = time.time()
                         self.available_networks = unique_networks
+                        
                         return unique_networks
                     
             except Exception as iwlist_error:
                 self.ap_logger.debug(f"iwlist scan failed: {iwlist_error}")
-            
-            # Strategy 3: Use previously cached networks from before AP mode
-            if hasattr(self, 'available_networks') and self.available_networks:
-                self.ap_logger.info("Using previously available networks from before AP mode")
-                return self.available_networks
             
             # Strategy 4: Return known networks as available options
             if self.known_networks:
@@ -888,21 +894,21 @@ class WiFiManager:
             # Strategy 5: Return helpful message for manual entry
             help_networks = [
                 {
-                    'ssid': '📡 Unable to scan while in AP mode',
+                    'ssid': '📡 Cached networks may be available',
                     'signal': 100,
                     'security': '',
                     'instruction': True,
                     'known': False
                 },
                 {
-                    'ssid': '✏️ Type network name manually below',
+                    'ssid': '✏️ Or type network name manually below',
                     'signal': 90,
                     'security': '',
                     'instruction': True,
                     'known': False
                 },
                 {
-                    'ssid': '💡 Or disconnect from ragnar AP first',
+                    'ssid': '� Click refresh to try scanning again',
                     'signal': 80,
                     'security': '',
                     'instruction': True,
@@ -1341,6 +1347,19 @@ class WiFiManager:
             self.logger.info(f"Starting AP mode: {self.ap_ssid}")
             self.ap_logger.info(f"Starting AP mode: SSID={self.ap_ssid}, Interface={self.ap_interface}")
             self.ap_logger.info(f"AP Configuration: IP={self.ap_ip}, Subnet={self.ap_subnet}")
+            
+            # Scan and cache WiFi networks before starting AP mode
+            self.logger.info("Scanning for WiFi networks before starting AP mode...")
+            self.ap_logger.info("Pre-AP scan: Scanning for available networks to cache")
+            try:
+                self.available_networks = self.scan_networks()
+                cached_count = len([n for n in self.available_networks if not n.get('instruction')])
+                self.logger.info(f"Cached {cached_count} networks before starting AP mode")
+                self.ap_logger.info(f"Pre-AP scan complete: Cached {cached_count} networks")
+            except Exception as scan_error:
+                self.logger.warning(f"Pre-AP network scan failed: {scan_error}")
+                self.ap_logger.warning(f"Pre-AP scan failed but continuing: {scan_error}")
+                self.available_networks = []
             
             # Create hostapd configuration
             self.ap_logger.info("Creating hostapd configuration...")
