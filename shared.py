@@ -401,6 +401,8 @@ class SharedData:
         self.ragnar_instance = None
         self.wifichanged = False
         self.bluetooth_active = False
+        self.bluetooth_scan_active = False
+        self.bluetooth_scan_start_time = 0.0
         self.wifi_connected = False
         self.pan_connected = False
         self.usb_active = False

@@ -4421,6 +4421,366 @@ def get_display():
         logger.error(f"Error getting display: {e}")
         return jsonify({'error': str(e)}), 500
 
+# ============================================================================
+# BLUETOOTH MANAGEMENT ENDPOINTS
+# ============================================================================
+
+@app.route('/api/bluetooth/status')
+def get_bluetooth_status():
+    """Get current Bluetooth status"""
+    try:
+        status = {
+            'enabled': False,
+            'discoverable': False,
+            'address': None,
+            'name': None,
+            'error': None
+        }
+        
+        # Check if Bluetooth is powered on
+        try:
+            result = subprocess.run(['bluetoothctl', 'show'], 
+                                  capture_output=True, text=True, timeout=5)
+            if result.returncode == 0:
+                output = result.stdout
+                status['enabled'] = 'Powered: yes' in output
+                status['discoverable'] = 'Discoverable: yes' in output
+                
+                # Extract address
+                addr_match = re.search(r'Controller ([0-9A-Fa-f:]{17})', output)
+                if addr_match:
+                    status['address'] = addr_match.group(1)
+                
+                # Extract name
+                name_match = re.search(r'Name: (.+)', output)
+                if name_match:
+                    status['name'] = name_match.group(1).strip()
+            else:
+                status['error'] = 'Bluetooth controller not available'
+                
+        except subprocess.TimeoutExpired:
+            status['error'] = 'Bluetooth status check timed out'
+        except Exception as e:
+            status['error'] = f'Error checking Bluetooth status: {str(e)}'
+        
+        return jsonify(status)
+        
+    except Exception as e:
+        logger.error(f"Error getting Bluetooth status: {e}")
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/bluetooth/enable', methods=['POST'])
+def enable_bluetooth():
+    """Enable Bluetooth"""
+    try:
+        result = subprocess.run(['bluetoothctl', 'power', 'on'], 
+                              capture_output=True, text=True, timeout=10)
+        
+        if result.returncode == 0:
+            logger.info("Bluetooth enabled successfully")
+            return jsonify({'success': True, 'message': 'Bluetooth enabled'})
+        else:
+            error_msg = result.stderr or 'Failed to enable Bluetooth'
+            logger.error(f"Failed to enable Bluetooth: {error_msg}")
+            return jsonify({'success': False, 'error': error_msg}), 500
+            
+    except subprocess.TimeoutExpired:
+        return jsonify({'success': False, 'error': 'Enable Bluetooth command timed out'}), 500
+    except Exception as e:
+        logger.error(f"Error enabling Bluetooth: {e}")
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+@app.route('/api/bluetooth/disable', methods=['POST'])
+def disable_bluetooth():
+    """Disable Bluetooth"""
+    try:
+        result = subprocess.run(['bluetoothctl', 'power', 'off'], 
+                              capture_output=True, text=True, timeout=10)
+        
+        if result.returncode == 0:
+            logger.info("Bluetooth disabled successfully")
+            return jsonify({'success': True, 'message': 'Bluetooth disabled'})
+        else:
+            error_msg = result.stderr or 'Failed to disable Bluetooth'
+            logger.error(f"Failed to disable Bluetooth: {error_msg}")
+            return jsonify({'success': False, 'error': error_msg}), 500
+            
+    except subprocess.TimeoutExpired:
+        return jsonify({'success': False, 'error': 'Disable Bluetooth command timed out'}), 500
+    except Exception as e:
+        logger.error(f"Error disabling Bluetooth: {e}")
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+@app.route('/api/bluetooth/discoverable/on', methods=['POST'])
+def make_bluetooth_discoverable():
+    """Make Bluetooth discoverable"""
+    try:
+        result = subprocess.run(['bluetoothctl', 'discoverable', 'on'], 
+                              capture_output=True, text=True, timeout=10)
+        
+        if result.returncode == 0:
+            logger.info("Bluetooth made discoverable")
+            return jsonify({'success': True, 'message': 'Bluetooth is now discoverable'})
+        else:
+            error_msg = result.stderr or 'Failed to make Bluetooth discoverable'
+            logger.error(f"Failed to make Bluetooth discoverable: {error_msg}")
+            return jsonify({'success': False, 'error': error_msg}), 500
+            
+    except subprocess.TimeoutExpired:
+        return jsonify({'success': False, 'error': 'Discoverable command timed out'}), 500
+    except Exception as e:
+        logger.error(f"Error making Bluetooth discoverable: {e}")
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+@app.route('/api/bluetooth/discoverable/off', methods=['POST'])
+def hide_bluetooth_device():
+    """Hide Bluetooth device (make non-discoverable)"""
+    try:
+        result = subprocess.run(['bluetoothctl', 'discoverable', 'off'], 
+                              capture_output=True, text=True, timeout=10)
+        
+        if result.returncode == 0:
+            logger.info("Bluetooth hidden (non-discoverable)")
+            return jsonify({'success': True, 'message': 'Bluetooth is now hidden'})
+        else:
+            error_msg = result.stderr or 'Failed to hide Bluetooth device'
+            logger.error(f"Failed to hide Bluetooth device: {error_msg}")
+            return jsonify({'success': False, 'error': error_msg}), 500
+            
+    except subprocess.TimeoutExpired:
+        return jsonify({'success': False, 'error': 'Hide device command timed out'}), 500
+    except Exception as e:
+        logger.error(f"Error hiding Bluetooth device: {e}")
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+@app.route('/api/bluetooth/scan/start', methods=['POST'])
+def start_bluetooth_scan():
+    """Start Bluetooth device scan"""
+    try:
+        # Start scan
+        result = subprocess.run(['bluetoothctl', 'scan', 'on'], 
+                              capture_output=True, text=True, timeout=10)
+        
+        if result.returncode == 0:
+            logger.info("Bluetooth scan started")
+            # Store scan start time in shared data
+            shared_data.bluetooth_scan_active = True
+            shared_data.bluetooth_scan_start_time = time.time()
+            return jsonify({'success': True, 'message': 'Bluetooth scan started'})
+        else:
+            error_msg = result.stderr or 'Failed to start Bluetooth scan'
+            logger.error(f"Failed to start Bluetooth scan: {error_msg}")
+            return jsonify({'success': False, 'error': error_msg}), 500
+            
+    except subprocess.TimeoutExpired:
+        return jsonify({'success': False, 'error': 'Scan start command timed out'}), 500
+    except Exception as e:
+        logger.error(f"Error starting Bluetooth scan: {e}")
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+@app.route('/api/bluetooth/scan/stop', methods=['POST'])
+def stop_bluetooth_scan():
+    """Stop Bluetooth device scan"""
+    try:
+        # Stop scan
+        result = subprocess.run(['bluetoothctl', 'scan', 'off'], 
+                              capture_output=True, text=True, timeout=10)
+        
+        if result.returncode == 0:
+            logger.info("Bluetooth scan stopped")
+            # Clear scan state in shared data
+            shared_data.bluetooth_scan_active = False
+            return jsonify({'success': True, 'message': 'Bluetooth scan stopped'})
+        else:
+            error_msg = result.stderr or 'Failed to stop Bluetooth scan'
+            logger.error(f"Failed to stop Bluetooth scan: {error_msg}")
+            return jsonify({'success': False, 'error': error_msg}), 500
+            
+    except subprocess.TimeoutExpired:
+        return jsonify({'success': False, 'error': 'Scan stop command timed out'}), 500
+    except Exception as e:
+        logger.error(f"Error stopping Bluetooth scan: {e}")
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+@app.route('/api/bluetooth/devices')
+def get_bluetooth_devices():
+    """Get discovered Bluetooth devices"""
+    try:
+        devices = []
+        
+        # Get list of devices
+        result = subprocess.run(['bluetoothctl', 'devices'], 
+                              capture_output=True, text=True, timeout=10)
+        
+        if result.returncode == 0:
+            for line in result.stdout.strip().split('\n'):
+                if line.startswith('Device '):
+                    parts = line.split(None, 2)
+                    if len(parts) >= 2:
+                        address = parts[1]
+                        name = parts[2] if len(parts) > 2 else 'Unknown Device'
+                        
+                        device_info = {
+                            'address': address,
+                            'name': name,
+                            'rssi': None,
+                            'device_class': None,
+                            'services': [],
+                            'paired': False
+                        }
+                        
+                        # Get detailed device info
+                        try:
+                            info_result = subprocess.run(['bluetoothctl', 'info', address], 
+                                                       capture_output=True, text=True, timeout=5)
+                            if info_result.returncode == 0:
+                                info_output = info_result.stdout
+                                
+                                # Extract RSSI
+                                rssi_match = re.search(r'RSSI: (-?\d+)', info_output)
+                                if rssi_match:
+                                    device_info['rssi'] = int(rssi_match.group(1))
+                                
+                                # Extract device class
+                                class_match = re.search(r'Class: (.+)', info_output)
+                                if class_match:
+                                    device_info['device_class'] = class_match.group(1).strip()
+                                
+                                # Check if paired
+                                device_info['paired'] = 'Paired: yes' in info_output
+                                
+                                # Extract services (UUIDs)
+                                uuids = re.findall(r'UUID: ([0-9a-f-]+)', info_output, re.IGNORECASE)
+                                device_info['services'] = uuids
+                                
+                        except Exception as e:
+                            logger.warning(f"Error getting device info for {address}: {e}")
+                        
+                        devices.append(device_info)
+        
+        return jsonify({'devices': devices})
+        
+    except subprocess.TimeoutExpired:
+        return jsonify({'devices': [], 'error': 'Device list command timed out'})
+    except Exception as e:
+        logger.error(f"Error getting Bluetooth devices: {e}")
+        return jsonify({'devices': [], 'error': str(e)})
+
+@app.route('/api/bluetooth/pair', methods=['POST'])
+def pair_bluetooth_device():
+    """Pair with a Bluetooth device"""
+    try:
+        data = request.get_json()
+        address = data.get('address')
+        
+        if not address:
+            return jsonify({'success': False, 'error': 'Device address required'}), 400
+        
+        # Attempt to pair
+        result = subprocess.run(['bluetoothctl', 'pair', address], 
+                              capture_output=True, text=True, timeout=30)
+        
+        if result.returncode == 0 or 'Pairing successful' in result.stdout:
+            logger.info(f"Successfully paired with {address}")
+            return jsonify({'success': True, 'message': f'Paired with {address}'})
+        else:
+            error_msg = result.stderr or result.stdout or 'Failed to pair device'
+            logger.error(f"Failed to pair with {address}: {error_msg}")
+            return jsonify({'success': False, 'error': error_msg}), 500
+            
+    except subprocess.TimeoutExpired:
+        return jsonify({'success': False, 'error': 'Pairing command timed out'}), 500
+    except Exception as e:
+        logger.error(f"Error pairing Bluetooth device: {e}")
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+@app.route('/api/bluetooth/unpair', methods=['POST'])
+def unpair_bluetooth_device():
+    """Unpair a Bluetooth device"""
+    try:
+        data = request.get_json()
+        address = data.get('address')
+        
+        if not address:
+            return jsonify({'success': False, 'error': 'Device address required'}), 400
+        
+        # Remove (unpair) device
+        result = subprocess.run(['bluetoothctl', 'remove', address], 
+                              capture_output=True, text=True, timeout=15)
+        
+        if result.returncode == 0:
+            logger.info(f"Successfully unpaired {address}")
+            return jsonify({'success': True, 'message': f'Unpaired {address}'})
+        else:
+            error_msg = result.stderr or 'Failed to unpair device'
+            logger.error(f"Failed to unpair {address}: {error_msg}")
+            return jsonify({'success': False, 'error': error_msg}), 500
+            
+    except subprocess.TimeoutExpired:
+        return jsonify({'success': False, 'error': 'Unpair command timed out'}), 500
+    except Exception as e:
+        logger.error(f"Error unpairing Bluetooth device: {e}")
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+@app.route('/api/bluetooth/enumerate', methods=['POST'])
+def enumerate_bluetooth_services():
+    """Enumerate services on a Bluetooth device"""
+    try:
+        data = request.get_json()
+        address = data.get('address')
+        
+        if not address:
+            return jsonify({'success': False, 'error': 'Device address required'}), 400
+        
+        services = []
+        
+        # Get detailed device info with services
+        result = subprocess.run(['bluetoothctl', 'info', address], 
+                              capture_output=True, text=True, timeout=15)
+        
+        if result.returncode == 0:
+            info_output = result.stdout
+            
+            # Extract UUIDs and try to map them to service names
+            uuid_patterns = re.findall(r'UUID: ([0-9a-f-]+)', info_output, re.IGNORECASE)
+            
+            # Common Bluetooth service UUIDs
+            service_map = {
+                '00001101-0000-1000-8000-00805f9b34fb': {'name': 'Serial Port Profile (SPP)', 'description': 'Serial communication'},
+                '0000110a-0000-1000-8000-00805f9b34fb': {'name': 'Audio Source', 'description': 'A2DP audio source'},
+                '0000110b-0000-1000-8000-00805f9b34fb': {'name': 'Audio Sink', 'description': 'A2DP audio sink'},
+                '0000110c-0000-1000-8000-00805f9b34fb': {'name': 'A/V Remote Control Target', 'description': 'AVRCP target'},
+                '0000110e-0000-1000-8000-00805f9b34fb': {'name': 'A/V Remote Control', 'description': 'AVRCP controller'},
+                '00001112-0000-1000-8000-00805f9b34fb': {'name': 'Headset Audio Gateway', 'description': 'HSP/HFP audio gateway'},
+                '00001108-0000-1000-8000-00805f9b34fb': {'name': 'Headset', 'description': 'HSP headset'},
+                '0000111e-0000-1000-8000-00805f9b34fb': {'name': 'Hands-Free', 'description': 'HFP hands-free'},
+                '00001124-0000-1000-8000-00805f9b34fb': {'name': 'Human Interface Device', 'description': 'HID service'},
+                '00001200-0000-1000-8000-00805f9b34fb': {'name': 'PnP Information', 'description': 'Device information'},
+                '0000180f-0000-1000-8000-00805f9b34fb': {'name': 'Battery Service', 'description': 'Battery level information'},
+                '0000180a-0000-1000-8000-00805f9b34fb': {'name': 'Device Information', 'description': 'Device metadata'},
+            }
+            
+            for uuid in uuid_patterns:
+                uuid_lower = uuid.lower()
+                service_info = service_map.get(uuid_lower, {
+                    'name': f'Unknown Service',
+                    'description': 'Custom or unknown service'
+                })
+                
+                services.append({
+                    'uuid': uuid,
+                    'name': service_info['name'],
+                    'description': service_info['description']
+                })
+            
+        return jsonify({'success': True, 'services': services})
+        
+    except subprocess.TimeoutExpired:
+        return jsonify({'success': False, 'error': 'Service enumeration timed out'}), 500
+    except Exception as e:
+        logger.error(f"Error enumerating Bluetooth services: {e}")
+        return jsonify({'success': False, 'error': str(e)}), 500
+
 
 @app.route('/api/actions', methods=['GET'])
 def get_actions():

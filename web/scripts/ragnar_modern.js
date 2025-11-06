@@ -495,6 +495,7 @@ function setupAutoRefresh() {
     autoRefreshIntervals.connect = setInterval(() => {
         if (currentTab === 'connect') {
             refreshWifiStatus();
+            refreshBluetoothStatus();
         }
     }, 15000); // Every 15 seconds
 
@@ -1617,6 +1618,10 @@ async function loadConnectData() {
         // Refresh Wi-Fi status when connect tab is loaded
         console.log('Loading connect tab, refreshing Wi-Fi status...');
         await refreshWifiStatus();
+        
+        // Refresh Bluetooth status when connect tab is loaded
+        console.log('Loading connect tab, refreshing Bluetooth status...');
+        await refreshBluetoothStatus();
     } catch (error) {
         console.error('Error loading connect data:', error);
     }
@@ -2637,6 +2642,540 @@ async function loadConsoleLogs() {
         addConsoleMessage('Unable to load historical logs from server', 'warning');
         addConsoleMessage('Console will show new messages as they occur', 'info');
     }
+}
+
+// ============================================================================
+// BLUETOOTH MANAGEMENT FUNCTIONS
+// ============================================================================
+
+// Global variables for Bluetooth
+let currentBluetoothDevices = [];
+let isBluetoothScanning = false;
+let bluetoothScanInterval = null;
+
+async function refreshBluetoothStatus() {
+    try {
+        const data = await fetchAPI('/api/bluetooth/status');
+        updateBluetoothStatus(data);
+    } catch (error) {
+        console.error('Error refreshing Bluetooth status:', error);
+        updateBluetoothStatus({
+            enabled: false,
+            discoverable: false,
+            error: 'Failed to get Bluetooth status'
+        });
+    }
+}
+
+function updateBluetoothStatus(data) {
+    const statusIndicator = document.getElementById('bluetooth-status-indicator');
+    const infoDiv = document.getElementById('bluetooth-info');
+    const powerBtn = document.getElementById('bluetooth-power-btn');
+    const powerText = document.getElementById('bluetooth-power-text');
+    const discoverableBtn = document.getElementById('bluetooth-discoverable-btn');
+    const discoverableText = document.getElementById('bluetooth-discoverable-text');
+    
+    if (!statusIndicator || !infoDiv || !powerBtn || !powerText) return;
+    
+    if (data.error) {
+        statusIndicator.className = 'text-sm px-2 py-1 rounded bg-red-700 text-red-300';
+        statusIndicator.textContent = 'Error';
+        infoDiv.textContent = data.error;
+        powerText.textContent = 'Enable Bluetooth';
+        if (discoverableText) discoverableText.textContent = 'Make Discoverable';
+        return;
+    }
+    
+    if (data.enabled) {
+        statusIndicator.className = 'text-sm px-2 py-1 rounded bg-green-700 text-green-300';
+        statusIndicator.textContent = 'Enabled';
+        powerText.textContent = 'Disable Bluetooth';
+        powerBtn.className = 'w-full bg-red-600 hover:bg-red-700 text-white py-2 px-4 rounded transition-colors';
+        
+        let infoText = 'Bluetooth is enabled';
+        if (data.address) {
+            infoText += ` | Address: ${data.address}`;
+        }
+        if (data.name) {
+            infoText += ` | Name: ${data.name}`;
+        }
+        infoDiv.textContent = infoText;
+        
+        if (discoverableBtn && discoverableText) {
+            if (data.discoverable) {
+                discoverableText.textContent = 'Hide Device';
+                discoverableBtn.className = 'w-full bg-orange-600 hover:bg-orange-700 text-white py-2 px-4 rounded transition-colors';
+            } else {
+                discoverableText.textContent = 'Make Discoverable';
+                discoverableBtn.className = 'w-full bg-cyan-600 hover:bg-cyan-700 text-white py-2 px-4 rounded transition-colors';
+            }
+            discoverableBtn.disabled = false;
+        }
+    } else {
+        statusIndicator.className = 'text-sm px-2 py-1 rounded bg-gray-700 text-gray-300';
+        statusIndicator.textContent = 'Disabled';
+        infoDiv.textContent = 'Bluetooth is disabled';
+        powerText.textContent = 'Enable Bluetooth';
+        powerBtn.className = 'w-full bg-green-600 hover:bg-green-700 text-white py-2 px-4 rounded transition-colors';
+        
+        if (discoverableBtn && discoverableText) {
+            discoverableText.textContent = 'Make Discoverable';
+            discoverableBtn.className = 'w-full bg-gray-600 hover:bg-gray-700 text-white py-2 px-4 rounded transition-colors';
+            discoverableBtn.disabled = true;
+        }
+    }
+}
+
+async function toggleBluetoothPower() {
+    const powerBtn = document.getElementById('bluetooth-power-btn');
+    const powerText = document.getElementById('bluetooth-power-text');
+    
+    if (!powerBtn || !powerText) return;
+    
+    const originalText = powerText.textContent;
+    powerText.textContent = 'Processing...';
+    powerBtn.disabled = true;
+    
+    try {
+        const isEnabled = originalText === 'Disable Bluetooth';
+        const endpoint = isEnabled ? '/api/bluetooth/disable' : '/api/bluetooth/enable';
+        
+        const response = await fetchAPI(endpoint, {
+            method: 'POST'
+        });
+        
+        if (response.success) {
+            addConsoleMessage(`Bluetooth ${isEnabled ? 'disabled' : 'enabled'} successfully`, 'success');
+            setTimeout(refreshBluetoothStatus, 1000);
+        } else {
+            throw new Error(response.error || 'Failed to toggle Bluetooth');
+        }
+    } catch (error) {
+        console.error('Error toggling Bluetooth power:', error);
+        addConsoleMessage(`Error toggling Bluetooth: ${error.message}`, 'error');
+        powerText.textContent = originalText;
+    } finally {
+        powerBtn.disabled = false;
+        if (powerText.textContent === 'Processing...') {
+            powerText.textContent = originalText;
+        }
+    }
+}
+
+async function toggleBluetoothDiscoverable() {
+    const discoverableBtn = document.getElementById('bluetooth-discoverable-btn');
+    const discoverableText = document.getElementById('bluetooth-discoverable-text');
+    
+    if (!discoverableBtn || !discoverableText) return;
+    
+    const originalText = discoverableText.textContent;
+    discoverableText.textContent = 'Processing...';
+    discoverableBtn.disabled = true;
+    
+    try {
+        const isDiscoverable = originalText === 'Hide Device';
+        const endpoint = isDiscoverable ? '/api/bluetooth/discoverable/off' : '/api/bluetooth/discoverable/on';
+        
+        const response = await fetchAPI(endpoint, {
+            method: 'POST'
+        });
+        
+        if (response.success) {
+            addConsoleMessage(`Bluetooth ${isDiscoverable ? 'hidden' : 'made discoverable'}`, 'success');
+            setTimeout(refreshBluetoothStatus, 1000);
+        } else {
+            throw new Error(response.error || 'Failed to toggle discoverable mode');
+        }
+    } catch (error) {
+        console.error('Error toggling Bluetooth discoverable:', error);
+        addConsoleMessage(`Error toggling discoverable mode: ${error.message}`, 'error');
+        discoverableText.textContent = originalText;
+    } finally {
+        discoverableBtn.disabled = false;
+        if (discoverableText.textContent === 'Processing...') {
+            discoverableText.textContent = originalText;
+        }
+    }
+}
+
+async function startBluetoothScan() {
+    const scanBtn = document.getElementById('bluetooth-scan-btn');
+    const scanText = document.getElementById('bluetooth-scan-text');
+    const scanStatus = document.getElementById('bluetooth-scan-status');
+    
+    if (!scanBtn || !scanText || !scanStatus) return;
+    
+    if (isBluetoothScanning) {
+        stopBluetoothScan();
+        return;
+    }
+    
+    isBluetoothScanning = true;
+    scanText.textContent = 'Stop Scan';
+    scanBtn.className = 'w-full bg-red-600 hover:bg-red-700 text-white py-2 px-4 rounded transition-colors mb-2';
+    scanStatus.className = 'text-sm px-2 py-1 rounded bg-blue-700 text-blue-300';
+    scanStatus.textContent = 'Scanning...';
+    
+    try {
+        const response = await fetchAPI('/api/bluetooth/scan/start', {
+            method: 'POST'
+        });
+        
+        if (response.success) {
+            addConsoleMessage('Started Bluetooth device scan', 'info');
+            
+            // Start periodic refresh to get discovered devices
+            bluetoothScanInterval = setInterval(async () => {
+                try {
+                    const devices = await fetchAPI('/api/bluetooth/devices');
+                    displayBluetoothDevices(devices.devices || []);
+                } catch (error) {
+                    console.error('Error getting Bluetooth devices:', error);
+                }
+            }, 2000);
+            
+        } else {
+            throw new Error(response.error || 'Failed to start Bluetooth scan');
+        }
+    } catch (error) {
+        console.error('Error starting Bluetooth scan:', error);
+        addConsoleMessage(`Error starting Bluetooth scan: ${error.message}`, 'error');
+        stopBluetoothScan();
+    }
+}
+
+function stopBluetoothScan() {
+    const scanBtn = document.getElementById('bluetooth-scan-btn');
+    const scanText = document.getElementById('bluetooth-scan-text');
+    const scanStatus = document.getElementById('bluetooth-scan-status');
+    
+    isBluetoothScanning = false;
+    
+    if (bluetoothScanInterval) {
+        clearInterval(bluetoothScanInterval);
+        bluetoothScanInterval = null;
+    }
+    
+    if (scanBtn && scanText && scanStatus) {
+        scanText.textContent = 'Start Scan';
+        scanBtn.className = 'w-full bg-indigo-600 hover:bg-indigo-700 text-white py-2 px-4 rounded transition-colors mb-2';
+        scanStatus.className = 'text-sm px-2 py-1 rounded bg-gray-700 text-gray-300';
+        scanStatus.textContent = 'Ready';
+    }
+    
+    // Stop the scan on the server
+    fetchAPI('/api/bluetooth/scan/stop', {
+        method: 'POST'
+    }).catch(error => {
+        console.error('Error stopping Bluetooth scan:', error);
+    });
+    
+    addConsoleMessage('Stopped Bluetooth device scan', 'info');
+}
+
+function displayBluetoothDevices(devices) {
+    const devicesList = document.getElementById('bluetooth-devices-list');
+    if (!devicesList) return;
+    
+    currentBluetoothDevices = devices;
+    
+    if (!devices || devices.length === 0) {
+        devicesList.innerHTML = `
+            <div class="text-center text-gray-400 py-8">
+                ${isBluetoothScanning ? 'Scanning for devices...' : 'No devices found. Start a scan to discover nearby devices.'}
+            </div>
+        `;
+        return;
+    }
+    
+    devicesList.innerHTML = devices.map(device => `
+        <div class="glass rounded-lg p-3 hover:bg-slate-700 transition-colors cursor-pointer"
+             onclick="showBluetoothDeviceDetails('${device.address}')">
+            <div class="flex items-center justify-between">
+                <div class="flex-1">
+                    <div class="font-medium text-white">
+                        ${escapeHtml(device.name || 'Unknown Device')}
+                    </div>
+                    <div class="text-sm text-gray-400">
+                        ${device.address} ${device.rssi ? `• ${device.rssi} dBm` : ''}
+                    </div>
+                    ${device.device_class ? `
+                        <div class="text-xs text-gray-500 mt-1">
+                            ${escapeHtml(device.device_class)}
+                        </div>
+                    ` : ''}
+                </div>
+                <div class="flex items-center space-x-2">
+                    ${device.rssi ? `
+                        <div class="text-xs px-2 py-1 rounded ${getRSSIClass(device.rssi)}">
+                            ${device.rssi} dBm
+                        </div>
+                    ` : ''}
+                    ${device.paired ? `
+                        <div class="text-xs px-2 py-1 rounded bg-green-700 text-green-300">
+                            Paired
+                        </div>
+                    ` : ''}
+                </div>
+            </div>
+        </div>
+    `).join('');
+}
+
+function getRSSIClass(rssi) {
+    if (rssi >= -40) return 'bg-green-700 text-green-300';
+    if (rssi >= -60) return 'bg-yellow-700 text-yellow-300';
+    if (rssi >= -80) return 'bg-orange-700 text-orange-300';
+    return 'bg-red-700 text-red-300';
+}
+
+function showBluetoothDeviceDetails(address) {
+    const device = currentBluetoothDevices.find(d => d.address === address);
+    if (!device) return;
+    
+    const modal = document.getElementById('bluetooth-device-modal');
+    const nameInput = document.getElementById('bt-device-name');
+    const macInput = document.getElementById('bt-device-mac');
+    const rssiInput = document.getElementById('bt-device-rssi');
+    const classInput = document.getElementById('bt-device-class');
+    const servicesDiv = document.getElementById('bt-device-services');
+    const pairBtn = document.getElementById('bt-pair-btn');
+    
+    if (!modal || !nameInput || !macInput) return;
+    
+    nameInput.value = device.name || 'Unknown Device';
+    macInput.value = device.address;
+    if (rssiInput) rssiInput.value = device.rssi ? `${device.rssi} dBm` : 'Unknown';
+    if (classInput) classInput.value = device.device_class || 'Unknown';
+    
+    if (servicesDiv) {
+        if (device.services && device.services.length > 0) {
+            servicesDiv.innerHTML = device.services.map(service => `
+                <div class="mb-1 text-sm">${escapeHtml(service)}</div>
+            `).join('');
+        } else {
+            servicesDiv.innerHTML = '<div class="text-gray-400">No services detected</div>';
+        }
+    }
+    
+    if (pairBtn) {
+        if (device.paired) {
+            pairBtn.innerHTML = `
+                <svg class="w-4 h-4 inline mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13.828 10.172a4 4 0 00-5.656 0l-4 4a4 4 0 105.656 5.656l1.102-1.101m-.758-4.899a4 4 0 005.656 0l4-4a4 4 0 00-5.656-5.656l-1.1 1.1"></path>
+                </svg>
+                Unpair Device
+            `;
+            pairBtn.className = 'bg-red-600 hover:bg-red-700 text-white py-2 px-4 rounded transition-colors';
+        } else {
+            pairBtn.innerHTML = `
+                <svg class="w-4 h-4 inline mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13.828 10.172a4 4 0 00-5.656 0l-4 4a4 4 0 105.656 5.656l1.102-1.101m-.758-4.899a4 4 0 005.656 0l4-4a4 4 0 00-5.656-5.656l-1.1 1.1"></path>
+                </svg>
+                Pair Device
+            `;
+            pairBtn.className = 'bg-green-600 hover:bg-green-700 text-white py-2 px-4 rounded transition-colors';
+        }
+        pairBtn.setAttribute('data-device-address', device.address);
+    }
+    
+    modal.classList.remove('hidden');
+    modal.classList.add('flex');
+}
+
+function closeBluetoothDeviceModal() {
+    const modal = document.getElementById('bluetooth-device-modal');
+    const statusDiv = document.getElementById('bt-device-status');
+    
+    if (modal) {
+        modal.classList.add('hidden');
+        modal.classList.remove('flex');
+    }
+    
+    if (statusDiv) {
+        statusDiv.classList.add('hidden');
+        statusDiv.innerHTML = '';
+    }
+}
+
+async function pairBluetoothDevice() {
+    const pairBtn = document.getElementById('bt-pair-btn');
+    const statusDiv = document.getElementById('bt-device-status');
+    
+    if (!pairBtn) return;
+    
+    const address = pairBtn.getAttribute('data-device-address');
+    if (!address) return;
+    
+    const device = currentBluetoothDevices.find(d => d.address === address);
+    if (!device) return;
+    
+    const originalHTML = pairBtn.innerHTML;
+    pairBtn.innerHTML = 'Processing...';
+    pairBtn.disabled = true;
+    
+    if (statusDiv) {
+        statusDiv.classList.remove('hidden');
+        statusDiv.innerHTML = `
+            <div class="bg-blue-600 rounded p-3 text-sm">
+                ${device.paired ? 'Unpairing' : 'Pairing'} device ${device.name || address}...
+            </div>
+        `;
+    }
+    
+    try {
+        const endpoint = device.paired ? '/api/bluetooth/unpair' : '/api/bluetooth/pair';
+        const response = await fetchAPI(endpoint, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({
+                address: address
+            })
+        });
+        
+        if (response.success) {
+            const action = device.paired ? 'unpaired' : 'paired';
+            addConsoleMessage(`Device ${device.name || address} ${action} successfully`, 'success');
+            
+            if (statusDiv) {
+                statusDiv.innerHTML = `
+                    <div class="bg-green-600 rounded p-3 text-sm">
+                        Device ${action} successfully
+                    </div>
+                `;
+            }
+            
+            // Refresh the device list
+            setTimeout(() => {
+                if (isBluetoothScanning) {
+                    fetchAPI('/api/bluetooth/devices').then(data => {
+                        displayBluetoothDevices(data.devices || []);
+                    }).catch(error => {
+                        console.error('Error refreshing devices:', error);
+                    });
+                }
+                closeBluetoothDeviceModal();
+            }, 2000);
+            
+        } else {
+            throw new Error(response.error || `Failed to ${device.paired ? 'unpair' : 'pair'} device`);
+        }
+    } catch (error) {
+        console.error('Error pairing/unpairing device:', error);
+        addConsoleMessage(`Error: ${error.message}`, 'error');
+        
+        if (statusDiv) {
+            statusDiv.innerHTML = `
+                <div class="bg-red-600 rounded p-3 text-sm">
+                    Error: ${error.message}
+                </div>
+            `;
+        }
+    } finally {
+        pairBtn.disabled = false;
+        if (pairBtn.innerHTML === 'Processing...') {
+            pairBtn.innerHTML = originalHTML;
+        }
+    }
+}
+
+async function enumerateBluetoothServices() {
+    const enumerateBtn = document.getElementById('bt-enumerate-btn');
+    const statusDiv = document.getElementById('bt-device-status');
+    const servicesDiv = document.getElementById('bt-device-services');
+    
+    if (!enumerateBtn) return;
+    
+    const address = document.getElementById('bt-pair-btn')?.getAttribute('data-device-address');
+    if (!address) return;
+    
+    const device = currentBluetoothDevices.find(d => d.address === address);
+    if (!device) return;
+    
+    const originalHTML = enumerateBtn.innerHTML;
+    enumerateBtn.innerHTML = 'Enumerating...';
+    enumerateBtn.disabled = true;
+    
+    if (statusDiv) {
+        statusDiv.classList.remove('hidden');
+        statusDiv.innerHTML = `
+            <div class="bg-blue-600 rounded p-3 text-sm">
+                Enumerating services for ${device.name || address}...
+            </div>
+        `;
+    }
+    
+    try {
+        const response = await fetchAPI('/api/bluetooth/enumerate', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({
+                address: address
+            })
+        });
+        
+        if (response.success && response.services) {
+            addConsoleMessage(`Found ${response.services.length} services on ${device.name || address}`, 'success');
+            
+            if (servicesDiv) {
+                if (response.services.length > 0) {
+                    servicesDiv.innerHTML = response.services.map(service => `
+                        <div class="mb-2 p-2 bg-slate-800 rounded text-sm">
+                            <div class="font-medium">${escapeHtml(service.name || 'Unknown Service')}</div>
+                            <div class="text-gray-400 text-xs">${service.uuid}</div>
+                            ${service.description ? `<div class="text-gray-500 text-xs mt-1">${escapeHtml(service.description)}</div>` : ''}
+                        </div>
+                    `).join('');
+                } else {
+                    servicesDiv.innerHTML = '<div class="text-gray-400">No services found</div>';
+                }
+            }
+            
+            if (statusDiv) {
+                statusDiv.innerHTML = `
+                    <div class="bg-green-600 rounded p-3 text-sm">
+                        Found ${response.services.length} services
+                    </div>
+                `;
+            }
+            
+        } else {
+            throw new Error(response.error || 'Failed to enumerate services');
+        }
+    } catch (error) {
+        console.error('Error enumerating services:', error);
+        addConsoleMessage(`Error enumerating services: ${error.message}`, 'error');
+        
+        if (statusDiv) {
+            statusDiv.innerHTML = `
+                <div class="bg-red-600 rounded p-3 text-sm">
+                    Error: ${error.message}
+                </div>
+            `;
+        }
+    } finally {
+        enumerateBtn.disabled = false;
+        if (enumerateBtn.innerHTML === 'Enumerating...') {
+            enumerateBtn.innerHTML = originalHTML;
+        }
+    }
+}
+
+function clearBluetoothDevices() {
+    const devicesList = document.getElementById('bluetooth-devices-list');
+    if (devicesList) {
+        devicesList.innerHTML = `
+            <div class="text-center text-gray-400 py-8">
+                Start a Bluetooth scan to discover nearby devices
+            </div>
+        `;
+    }
+    currentBluetoothDevices = [];
+    addConsoleMessage('Cleared Bluetooth device list', 'info');
 }
 
 // ============================================================================
@@ -4679,6 +5218,17 @@ window.openWifiConnectModal = openWifiConnectModal;
 window.closeWifiConnectModal = closeWifiConnectModal;
 window.togglePasswordVisibility = togglePasswordVisibility;
 window.connectToWifiNetwork = connectToWifiNetwork;
+
+// Bluetooth Management Functions
+window.refreshBluetoothStatus = refreshBluetoothStatus;
+window.toggleBluetoothPower = toggleBluetoothPower;
+window.toggleBluetoothDiscoverable = toggleBluetoothDiscoverable;
+window.startBluetoothScan = startBluetoothScan;
+window.showBluetoothDeviceDetails = showBluetoothDeviceDetails;
+window.closeBluetoothDeviceModal = closeBluetoothDeviceModal;
+window.pairBluetoothDevice = pairBluetoothDevice;
+window.enumerateBluetoothServices = enumerateBluetoothServices;
+window.clearBluetoothDevices = clearBluetoothDevices;
 
 // File Management Functions
 window.loadFiles = loadFiles;
