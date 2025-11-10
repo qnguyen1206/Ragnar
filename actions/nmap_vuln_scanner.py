@@ -3,6 +3,10 @@
 # It scans for vulnerabilities on various ports and saves the results and progress.
 
 import os
+import sys
+# Add parent directory to path BEFORE importing local modules
+sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
 import re
 import pandas as pd
 import subprocess
@@ -14,8 +18,6 @@ from rich.console import Console
 from rich.progress import Progress, BarColumn, TextColumn
 from shared import SharedData
 from logger import Logger
-import sys
-sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from nmap_logger import nmap_logger
 
 logger = Logger(name="nmap_vuln_scanner.py", level=logging.INFO)
