@@ -15,8 +15,8 @@
 # - Logging events and errors to ensure maintainability and ease of debugging.
 # - Handling graceful degradation by managing retries and idle states when no new targets are found.
 
-# VERSION: 11:10:18:21 - Fix ThreadPoolExecutor shutdown bug (auto-recreate if shutdown)
-ORCHESTRATOR_VERSION = "11:10:18:21"
+# VERSION: 11:10:18:30 - Fix vulnerability scanner "cannot schedule new futures" bug (auto-recreate executor on error)
+ORCHESTRATOR_VERSION = "11:10:18:30"
 
 import json
 import importlib
@@ -69,7 +69,21 @@ class Orchestrator:
     def _ensure_executor(self):
         """Ensure the thread pool executor is created and available"""
         with self.executor_lock:
-            if self.executor is None or self.executor._shutdown:
+            # Check if executor is None, shutdown, or broken
+            needs_new_executor = (
+                self.executor is None or 
+                self.executor._shutdown or
+                getattr(self.executor, '_broken', False)
+            )
+            
+            if needs_new_executor:
+                # Clean up old executor if it exists
+                if self.executor is not None:
+                    try:
+                        self.executor.shutdown(wait=False, cancel_futures=True)
+                    except Exception as cleanup_error:
+                        logger.debug(f"Executor cleanup error (safe to ignore): {cleanup_error}")
+                
                 logger.info("Creating new ThreadPoolExecutor")
                 self.executor = ThreadPoolExecutor(
                     max_workers=2,  # Match semaphore limit for Pi Zero W2
@@ -185,6 +199,7 @@ class Orchestrator:
         Returns:
             str: 'success', 'failed', or 'timeout'
         """
+        future = None
         try:
             # Ensure executor is available before using it
             executor = self._ensure_executor()
@@ -194,8 +209,33 @@ class Orchestrator:
         except FutureTimeoutError:
             logger.error(f"Action {action_name} timed out after {timeout} seconds")
             # Cancel the future to prevent resource leaks
-            future.cancel()
+            if future:
+                future.cancel()
             return 'timeout'
+        except RuntimeError as e:
+            if "cannot schedule new futures" in str(e):
+                logger.error(f"Executor shutdown detected for {action_name}, recreating executor...")
+                # Force recreate executor
+                with self.executor_lock:
+                    if self.executor:
+                        try:
+                            self.executor.shutdown(wait=False, cancel_futures=True)
+                        except:
+                            pass
+                        self.executor = None
+                    self._ensure_executor()
+                # Retry the action once with new executor
+                try:
+                    executor = self._ensure_executor()
+                    future = executor.submit(action_callable)
+                    result = future.result(timeout=timeout)
+                    return result
+                except Exception as retry_error:
+                    logger.error(f"Retry failed for {action_name}: {retry_error}")
+                    return 'failed'
+            else:
+                logger.error(f"Action {action_name} raised RuntimeError: {e}")
+                return 'failed'
         except Exception as e:
             logger.error(f"Action {action_name} raised exception: {e}")
             return 'failed'
