@@ -199,11 +199,13 @@ class NetworkScanner:
         
         # Nmap arguments for network-wide scan:
         # -Pn: Skip host discovery (treat all as online)
-        # -sT: TCP connect scan
+        # -sS: SYN scan (requires root, 10x faster than -sT)
         # --open: Only show open ports
+        # --min-rate 5000: Send at least 5000 probes per second
+        # --max-retries 1: No slow resends
+        # --host-timeout 10s: Limit per-host time strictly
         # -v: Verbose output
-        # --host-timeout 3m: 3 minute timeout per host
-        nmap_args = f"-Pn -sT -p{port_list} --open --host-timeout 3m -v"
+        nmap_args = f"-Pn -sS -p{port_list} --open --min-rate 5000 --max-retries 1 --host-timeout 10s -v"
         
         nmap_command = f"nmap {nmap_args} {network_cidr}"
         self.logger.info(f"🔍 Executing: {nmap_command}")
