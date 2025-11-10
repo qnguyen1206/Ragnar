@@ -669,6 +669,8 @@ class Orchestrator:
         
         if scan_vuln_running and self.nmap_vuln_scanner:
             logger.info("Running initial vulnerability scan on all discovered hosts...")
+            # Set orchestrator status to show vulnerability scanning in web UI
+            self.shared_data.ragnarorch_status = "NmapVulnScanner"
             self.run_vulnerability_scans(force=True)  # Force scan at startup
             logger.info("✓ Phase 2 complete: Vulnerability scan finished")
         else:
