@@ -535,7 +535,7 @@ class NetworkScanner:
             Scans a specific port on the target IP.
             """
             s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            s.settimeout(10)  # 10 seconds for better reliability on Pi network
+            s.settimeout(30)
             try:
                 s.connect((self.target, port))
                 self.open_ports[self.target].append(port)
