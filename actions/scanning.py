@@ -38,12 +38,12 @@ except ImportError:
         # Final fallback
         def gma(*args, **kwargs):
             return "00:00:00:00:00:00"
+import sys
+sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from shared import SharedData
 from logger import Logger
 import ipaddress
 import nmap
-import sys
-sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from nmap_logger import nmap_logger
 
 logger = Logger(name="scanning.py", level=logging.DEBUG)
