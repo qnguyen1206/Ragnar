@@ -64,7 +64,7 @@ class Orchestrator:
         
         # Default timeout for action execution (in seconds)
         self.action_timeout = getattr(self.shared_data, 'action_timeout', 300)  # 5 minutes default
-        self.vuln_scan_timeout = getattr(self.shared_data, 'vuln_scan_timeout', 600)  # 10 minutes for vuln scans
+        self.vuln_scan_timeout = getattr(self.shared_data, 'vuln_scan_timeout', 1800)  # 30 minutes for vuln scans
     
     def _ensure_executor(self):
         """Ensure the thread pool executor is created and available"""
@@ -103,7 +103,7 @@ class Orchestrator:
             'scan_vuln_interval': 300,
             'scan_interval': 180,
             'action_timeout': 300,  # 5 minutes timeout for regular actions
-            'vuln_scan_timeout': 600  # 10 minutes timeout for vulnerability scans
+            'vuln_scan_timeout': 1800  # 30 minutes timeout for vulnerability scans
         }
         
         for attr, default_value in required_attrs.items():
