@@ -1070,12 +1070,14 @@ class NetworkScanner:
                     self.logger.debug("No alive hosts found for port calculation")
                     return
                 
-                alive_df.loc[:, 'Ports'] = alive_df['Ports'].fillna('')
+                # Convert Ports column to string type to avoid pandas dtype warning
+                alive_df = alive_df.copy()
+                alive_df['Ports'] = alive_df['Ports'].fillna('').astype(str)
                 # Count non-empty port entries (split by ';' and filter out empty strings)
-                alive_df.loc[:, 'Port Count'] = alive_df['Ports'].apply(
-                    lambda x: len([p for p in str(x).split(';') if p.strip()]) if x else 0
+                alive_df['Port Count'] = alive_df['Ports'].apply(
+                    lambda x: len([p for p in x.split(';') if p.strip()]) if x else 0
                 )
-                self.total_open_ports = alive_df['Port Count'].sum()
+                self.total_open_ports = int(alive_df['Port Count'].sum())
                 
                 self.logger.debug(f"Calculated total open ports: {self.total_open_ports}")
                 
