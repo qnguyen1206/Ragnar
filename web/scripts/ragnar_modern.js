@@ -5500,6 +5500,54 @@ function showVulnerabilityDetails(vuln) {
         'low': 'text-blue-400'
     };
     
+    // Extract CVE IDs from vulnerability text and create links
+    function formatVulnerabilityWithLinks(vulnText) {
+        // Match CVE patterns (CVE-YYYY-NNNNN)
+        const cvePattern = /(CVE-\d{4}-\d{4,7})/gi;
+        const cves = vulnText.match(cvePattern);
+        
+        if (!cves || cves.length === 0) {
+            return `<div class="text-white font-mono text-sm break-all">${vulnText}</div>`;
+        }
+        
+        // Create links section
+        let linksHtml = '<div class="mt-3 pt-3 border-t border-slate-700">';
+        linksHtml += '<div class="text-sm text-slate-400 mb-2">CVE References:</div>';
+        linksHtml += '<div class="flex flex-wrap gap-2">';
+        
+        const uniqueCVEs = [...new Set(cves)]; // Remove duplicates
+        uniqueCVEs.forEach(cve => {
+            const nvdUrl = `https://nvd.nist.gov/vuln/detail/${cve}`;
+            const mitreUrl = `https://cve.mitre.org/cgi-bin/cvename.cgi?name=${cve}`;
+            
+            linksHtml += `
+                <div class="bg-slate-700/50 rounded px-3 py-2 flex items-center space-x-2">
+                    <span class="text-Ragnar-400 font-mono text-sm">${cve}</span>
+                    <a href="${nvdUrl}" target="_blank" rel="noopener noreferrer" 
+                       class="text-blue-400 hover:text-blue-300 transition-colors" 
+                       title="View on NIST NVD">
+                        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" 
+                                  d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14"></path>
+                        </svg>
+                    </a>
+                    <a href="${mitreUrl}" target="_blank" rel="noopener noreferrer" 
+                       class="text-green-400 hover:text-green-300 transition-colors" 
+                       title="View on MITRE">
+                        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" 
+                                  d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path>
+                        </svg>
+                    </a>
+                </div>
+            `;
+        });
+        
+        linksHtml += '</div></div>';
+        
+        return `<div class="text-white font-mono text-sm break-all">${vulnText}</div>${linksHtml}`;
+    }
+    
     content.innerHTML = `
         <div class="space-y-4">
             <div class="bg-slate-800/50 rounded-lg p-4">
@@ -5509,7 +5557,7 @@ function showVulnerabilityDetails(vuln) {
             
             <div class="bg-slate-800/50 rounded-lg p-4">
                 <div class="text-sm text-slate-400 mb-1">Vulnerability</div>
-                <div class="text-white font-mono text-sm break-all">${vuln.vulnerability}</div>
+                ${formatVulnerabilityWithLinks(vuln.vulnerability)}
             </div>
             
             <div class="grid grid-cols-2 gap-4">
