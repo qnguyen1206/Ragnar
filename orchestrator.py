@@ -15,6 +15,9 @@
 # - Logging events and errors to ensure maintainability and ease of debugging.
 # - Handling graceful degradation by managing retries and idle states when no new targets are found.
 
+# VERSION: 11:10:17:40 - Hourly vuln scans + new IP detection
+ORCHESTRATOR_VERSION = "11:10:17:40"
+
 import json
 import importlib
 import os
@@ -595,6 +598,8 @@ class Orchestrator:
         # ====================================================================
         # PHASE 3: Attack Phase (if enabled)
         # ====================================================================
+        logger.info("=" * 70)
+        logger.info(f"🔥 ORCHESTRATOR VERSION: {ORCHESTRATOR_VERSION} 🔥")
         logger.info("=" * 70)
         logger.info(f"ORCHESTRATOR STARTUP - PHASE 3: Attack Phase (enabled={enable_attacks})")
         logger.info("=" * 70)
