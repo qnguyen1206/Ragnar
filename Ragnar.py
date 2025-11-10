@@ -54,30 +54,47 @@ class Ragnar:
 
     def run(self):
         """Main loop for Ragnar. Waits for Wi-Fi connection and starts Orchestrator."""
+        logger.info("=" * 70)
+        logger.info("RAGNAR MAIN THREAD STARTING")
+        logger.info("=" * 70)
+        
         # Initialize Wi-Fi management system
         logger.info("Starting Wi-Fi management system...")
         self.wifi_manager.start()
+        logger.info("Wi-Fi management system started")
         
         # Main loop to keep Ragnar running
+        logger.info("Entering main Ragnar loop...")
+        loop_count = 0
         while not self.shared_data.should_exit:
+            loop_count += 1
+            if loop_count % 6 == 1:  # Log every 60 seconds (6 iterations * 10 sec)
+                logger.info(f"Ragnar main loop iteration {loop_count}, manual_mode={self.shared_data.manual_mode}")
+            
             if not self.shared_data.manual_mode:
                 self.check_and_start_orchestrator()
             time.sleep(10)  # Main loop idle waiting
+        
+        logger.info("Ragnar main loop exited")
 
 
 
     def check_and_start_orchestrator(self):
         """Check Wi-Fi and start the orchestrator if connected."""
-        if self.wifi_manager.check_wifi_connection():
+        wifi_connected = self.wifi_manager.check_wifi_connection()
+        logger.debug(f"WiFi connection check: {wifi_connected}")
+        
+        if wifi_connected:
             self.shared_data.wifi_connected = True
             if self.orchestrator_thread is None or not self.orchestrator_thread.is_alive():
+                logger.info("WiFi detected - attempting to start Orchestrator...")
                 self.start_orchestrator()
         else:
             self.shared_data.wifi_connected = False
             if not self.wifi_manager.startup_complete:
                 logger.info("Waiting for Wi-Fi management system to complete startup...")
             else:
-                logger.info("Waiting for Wi-Fi connection to start Orchestrator...")
+                logger.debug("Waiting for Wi-Fi connection to start Orchestrator...")
 
     def start_orchestrator(self):
         """Start the orchestrator thread."""
