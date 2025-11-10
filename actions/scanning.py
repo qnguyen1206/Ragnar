@@ -76,7 +76,17 @@ class NetworkScanner:
         self.port_scan_workers = max(2, min(6, cpu_count))
         self.host_scan_workers = max(2, min(6, cpu_count))
         self.semaphore = threading.Semaphore(min(4, max(1, cpu_count // 2 or 1)))
-        self.nm = nmap.PortScanner()  # Initialize nmap.PortScanner()
+        
+        # Try to initialize nmap, but fall back to socket-based scanning if unavailable
+        try:
+            self.nm = nmap.PortScanner()  # Initialize nmap.PortScanner()
+            self.nmap_available = True
+            logger.info("Nmap is available for port scanning")
+        except Exception as e:
+            self.nm = None
+            self.nmap_available = False
+            logger.warning(f"Nmap not available, using Python socket-based port scanning: {e}")
+        
         self.running = False
         self.arp_scan_interface = "wlan0"
 
