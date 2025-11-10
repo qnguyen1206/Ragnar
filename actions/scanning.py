@@ -187,6 +187,11 @@ class NetworkScanner:
         
         # Define CIDRs to scan
         target_cidrs = ['192.168.1.0/24']
+        
+        # CRITICAL TARGET: Always ensure 192.168.1.192 is checked explicitly
+        priority_targets = ['192.168.1.192']
+
+        self.logger.info(f"🔍 Starting ping sweep - ARP found {len(arp_hosts)} hosts, checking {254} additional IPs")
 
         for cidr in target_cidrs:
             try:
@@ -195,9 +200,43 @@ class NetworkScanner:
                 self.logger.error(f"Invalid network {cidr}: {e}")
                 continue
 
+            # First, ping priority targets explicitly
+            for priority_ip in priority_targets:
+                if priority_ip in known_ips:
+                    self.logger.info(f"✅ Priority target {priority_ip} already found by ARP scan")
+                    continue
+                
+                self.logger.info(f"🎯 PRIORITY PING: Testing critical target {priority_ip}")
+                try:
+                    result = subprocess.run(
+                        ['ping', '-c', '3', '-W', '3', priority_ip],  # 3 pings, 3 sec timeout
+                        capture_output=True, text=True, timeout=10
+                    )
+
+                    if result.returncode == 0:
+                        mac = self.get_mac_address(priority_ip, "")
+                        if not mac or mac == "00:00:00:00:00:00":
+                            ip_parts = priority_ip.split('.')
+                            pseudo_mac = f"00:00:{int(ip_parts[0]):02x}:{int(ip_parts[1]):02x}:{int(ip_parts[2]):02x}:{int(ip_parts[3]):02x}"
+                            mac = pseudo_mac
+
+                        ping_discovered[priority_ip] = {
+                            "mac": mac,
+                            "vendor": "Priority target (discovered by ping)"
+                        }
+                        self.logger.info(f"🎉 PRIORITY TARGET FOUND: {priority_ip} (MAC: {mac})")
+                    else:
+                        self.logger.warning(f"❌ Priority target {priority_ip} not responding to ping")
+
+                except subprocess.TimeoutExpired:
+                    self.logger.warning(f"⏰ Priority target {priority_ip} ping timed out")
+                except Exception as e:
+                    self.logger.error(f"💥 Priority target {priority_ip} ping failed: {e}")
+
+            # Then scan the rest of the network
             for ip in network.hosts():  # skips network/broadcast
                 ip_str = str(ip)
-                if ip_str in known_ips:
+                if ip_str in known_ips or ip_str in priority_targets:
                     continue
 
                 try:
@@ -217,7 +256,7 @@ class NetworkScanner:
                             "mac": mac,
                             "vendor": "Unknown (discovered by ping)"
                         }
-                        self.logger.info(f"Ping sweep found host: {ip_str} (MAC: {mac})")
+                        self.logger.info(f"📡 Ping sweep found host: {ip_str} (MAC: {mac})")
 
                 except subprocess.TimeoutExpired:
                     self.logger.debug(f"Ping sweep: {ip_str} timed out")
@@ -226,7 +265,11 @@ class NetworkScanner:
                     continue
 
         if ping_discovered:
-            self.logger.info(f"Ping sweep discovered {len(ping_discovered)} additional hosts not found by arp-scan")
+            self.logger.info(f"🎊 PING SWEEP COMPLETE: Discovered {len(ping_discovered)} additional hosts not found by arp-scan")
+            for ip, data in ping_discovered.items():
+                self.logger.info(f"   📍 {ip} - MAC: {data['mac']} - {data['vendor']}")
+        else:
+            self.logger.warning(f"❌ Ping sweep found no additional hosts beyond ARP scan results")
 
         return ping_discovered
 
