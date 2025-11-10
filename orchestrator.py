@@ -509,7 +509,14 @@ class Orchestrator:
                     logger.info(f"Vulnerability scanning {ip}...")
                     
                     # Execute vulnerability scan with timeout protection
-                    scan_callable = lambda: self.nmap_vuln_scanner.execute(ip, row, action_key)
+                    # Note: nmap_vuln_scanner is guaranteed to be not None here due to function entry check
+                    if self.nmap_vuln_scanner is None:
+                        logger.error("Vulnerability scanner became unavailable")
+                        continue
+                    
+                    # Type narrowing: Store reference to avoid repeated None checks
+                    vuln_scanner = self.nmap_vuln_scanner
+                    scan_callable = lambda: vuln_scanner.execute(ip, row, action_key)
                     result = self._execute_with_timeout(
                         scan_callable,
                         timeout=self.vuln_scan_timeout,
