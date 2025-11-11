@@ -69,11 +69,12 @@ class Orchestrator:
             'success_retry_delay': 300,
             'failed_retry_delay': 180,
             'scan_vuln_running': True,
+            'scan_vuln_no_ports': True,  # Enable scanning hosts without discovered ports
             'enable_attacks': True,
             'scan_vuln_interval': 300,
             'scan_interval': 180,
-            'action_timeout': 300,  # 5 minutes timeout for regular actions
-            'vuln_scan_timeout': 1800  # 30 minutes timeout for vulnerability scans
+            'action_timeout': 300,  # 5 minutes default for actions
+            'vuln_scan_timeout': 1800  # 30 minutes for vulnerability scans
         }
         
         for attr, default_value in required_attrs.items():
