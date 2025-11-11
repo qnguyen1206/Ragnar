@@ -3461,8 +3461,19 @@ def deep_scan_host():
                         'service': data.get('service')
                     })
                 
+                # Decide scan mode (top100 by default; allow full if client sets mode=full or full=true)
+                mode_flag = (data.get('mode') or data.get('scan_mode') or '').lower()
+                full_flag = str(data.get('full', '')).lower() in ['1','true','yes']
+                use_top_ports = not (mode_flag in ['full','all','65535'] or full_flag)
+
+                socketio.emit('deep_scan_update', {
+                    'type': 'deep_scan_progress',
+                    'ip': ip,
+                    'message': f"Parameters accepted: ip={ip} mode={'top100' if use_top_ports else 'full-range'} range={portstart}-{portend}"
+                })
+
                 # Perform the deep scan with progress callback
-                result = scanner.deep_scan_host(ip, portstart, portend, progress_callback=progress_callback)
+                result = scanner.deep_scan_host(ip, portstart, portend, progress_callback=progress_callback, use_top_ports=use_top_ports)
                 
                 # Emit final result
                 if result['success']:
@@ -3501,10 +3512,11 @@ def deep_scan_host():
         
         return jsonify({
             'status': 'success',
-            'message': f'Started deep scan of {ip} (ports {portstart}-{portend})',
+            'message': f"Started deep scan of {ip} (mode={'top100' if portend==65535 else 'custom'})",
             'ip': ip,
             'portstart': portstart,
-            'portend': portend
+            'portend': portend,
+            'mode': 'top100'
         })
         
     except Exception as e:
