@@ -3799,7 +3799,7 @@ function displayConfigForm(config) {
     
     // Group config by sections
     const sections = {
-        'General': ['manual_mode', 'debug_mode', 'scan_vuln_running', 'enable_attacks', 'blacklistcheck'],
+        'General': ['manual_mode', 'debug_mode', 'scan_vuln_running', 'scan_vuln_no_ports', 'enable_attacks', 'blacklistcheck'],
         'Timing': ['startup_delay', 'web_delay', 'screen_delay', 'scan_interval'],
         'Display': ['epd_type', 'ref_width', 'ref_height']
     };
@@ -3813,7 +3813,7 @@ function displayConfigForm(config) {
         
         keys.forEach(key => {
             // Check if config has the key, or provide defaults for known boolean settings
-            const knownBooleans = ['manual_mode', 'debug_mode', 'scan_vuln_running', 'enable_attacks', 'blacklistcheck'];
+            const knownBooleans = ['manual_mode', 'debug_mode', 'scan_vuln_running', 'scan_vuln_no_ports', 'enable_attacks', 'blacklistcheck'];
             let value = config[key];
             
             // If key is missing and it's a known boolean, default to true (except manual_mode)
@@ -3827,10 +3827,15 @@ function displayConfigForm(config) {
                 const description = escapeHtml(getConfigDescription(key));
                 
                 if (type === 'checkbox') {
+                    // Determine if this checkbox should be disabled based on dependencies
+                    const disabledAttr = (key === 'scan_vuln_no_ports' && !config.scan_vuln_running) ? 'disabled' : '';
+                    const disabledClass = disabledAttr ? 'opacity-50 cursor-not-allowed' : '';
+                    
                     html += `
-                        <label class="flex items-center space-x-3 p-3 rounded-lg hover:bg-slate-700 hover:bg-opacity-50 transition-colors cursor-pointer">
-                            <input type="checkbox" name="${key}" ${value ? 'checked' : ''} 
-                                   class="w-5 h-5 rounded bg-slate-700 border-slate-600 text-Ragnar-500 focus:ring-Ragnar-500">
+                        <label class="flex items-center space-x-3 p-3 rounded-lg hover:bg-slate-700 hover:bg-opacity-50 transition-colors cursor-pointer ${disabledClass}">
+                            <input type="checkbox" name="${key}" ${value ? 'checked' : ''} ${disabledAttr}
+                                   class="w-5 h-5 rounded bg-slate-700 border-slate-600 text-Ragnar-500 focus:ring-Ragnar-500"
+                                   ${key === 'scan_vuln_running' ? 'onchange="handleVulnScanToggle(this)"' : ''}>
                             <span class="flex items-center gap-2">
                                 ${label}
                                 <span class="info-icon" tabindex="0" role="button" aria-label="${description}" data-tooltip="${description}">ⓘ</span>
@@ -3868,6 +3873,24 @@ function displayConfigForm(config) {
         e.preventDefault();
         await saveConfig(e.target);
     });
+}
+
+// Handle vulnerability scanning checkbox toggle to enable/disable dependent options
+function handleVulnScanToggle(checkbox) {
+    const scanVulnNoPortsCheckbox = document.querySelector('input[name="scan_vuln_no_ports"]');
+    const scanVulnNoPortsLabel = scanVulnNoPortsCheckbox ? scanVulnNoPortsCheckbox.closest('label') : null;
+    
+    if (scanVulnNoPortsCheckbox) {
+        scanVulnNoPortsCheckbox.disabled = !checkbox.checked;
+        
+        if (scanVulnNoPortsLabel) {
+            if (checkbox.checked) {
+                scanVulnNoPortsLabel.classList.remove('opacity-50', 'cursor-not-allowed');
+            } else {
+                scanVulnNoPortsLabel.classList.add('opacity-50', 'cursor-not-allowed');
+            }
+        }
+    }
 }
 
 async function saveConfig(form) {
