@@ -374,6 +374,10 @@ function initializeSocket() {
         handleScanError(data);
     });
 
+    socket.on('deep_scan_update', function(data) {
+        handleDeepScanUpdate(data);
+    });
+
     socket.on('connect_error', function(error) {
         reconnectAttempts++;
         console.error('Connection error:', error);
@@ -807,7 +811,14 @@ function displayStableNetworkTable(data) {
         return;
     }
     
-    data.hosts.forEach(host => {
+    data.hosts.forEach((host, index) => {
+        // DEBUG: Log first few host objects to see structure
+        if (index < 5) {
+            console.log(`🔍 Host ${index}:`, host);
+            console.log(`   IP field:`, host.ip, typeof host.ip);
+            console.log(`   All fields:`, Object.keys(host));
+        }
+        
         const row = document.createElement('tr');
         row.className = 'border-b border-slate-700 hover:bg-slate-700/50 transition-colors';
         
@@ -844,6 +855,14 @@ function displayStableNetworkTable(data) {
             <td class="py-3 px-4">${portsDisplay}</td>
             <td class="py-3 px-4">${vulnDisplay}</td>
             <td class="py-3 px-4">${lastScanDisplay}</td>
+            <td class="py-3 px-4">
+                <button onclick="console.log('🖱️ Button clicked for IP:', '${host.ip}', 'Type:', typeof '${host.ip}'); console.log('🖱️ Host object:', ${JSON.stringify(host).replace(/"/g, '&quot;')}); triggerDeepScan('${host.ip}')" 
+                        id="deep-scan-btn-${host.ip.replace(/\./g, '-')}"
+                        class="deep-scan-button bg-purple-600 hover:bg-purple-700 text-white text-xs px-3 py-1 rounded transition-all duration-300"
+                        title="Scan all 65535 ports with TCP connect (-sT). IP: ${host.ip}">
+                    Deep Scan
+                </button>
+            </td>
         `;
         
         tableBody.appendChild(row);
@@ -1046,6 +1065,153 @@ function handleScanCompleted(data) {
 function handleScanError(data) {
     addConsoleMessage(`Scan error: ${data.error}`, 'error');
     resetScanButtons();
+}
+
+// ============================================================================
+// DEEP SCAN FUNCTIONS
+// ============================================================================
+
+// TEST FUNCTION - Direct deep scan test
+function testDeepScan() {
+    console.log('🧪 Testing deep scan with hardcoded IP...');
+    triggerDeepScan('192.168.1.211');
+}
+
+async function triggerDeepScan(ip) {
+    try {
+        // EXPLICIT DEBUG: Log what we received
+        console.log('🔍 triggerDeepScan CALLED');
+        console.log('   Received IP parameter:', ip);
+        console.log('   IP type:', typeof ip);
+        console.log('   IP length:', ip ? ip.length : 'null/undefined');
+        
+        if (!ip) {
+            console.error('❌ IP parameter is empty in triggerDeepScan!');
+            addConsoleMessage('Error: No IP address provided for deep scan', 'error');
+            return;
+        }
+        
+        addConsoleMessage(`Starting deep scan on ${ip}...`, 'info');
+        
+        console.log('📤 Sending POST request to /api/scan/deep');
+        console.log('   Request body:', JSON.stringify({ ip: ip }));
+        
+        const response = await fetch('/api/scan/deep', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({ ip: ip })
+        });
+        
+        console.log('📥 Response received, status:', response.status);
+        
+        const data = await response.json();
+        console.log('📋 Response data:', data);
+        
+        if (data.status === 'success') {
+            addConsoleMessage(`Deep scan initiated for ${ip} - scanning all 65535 ports`, 'success');
+        } else {
+            addConsoleMessage(`Failed to start deep scan: ${data.message}`, 'error');
+        }
+    } catch (error) {
+        console.error('Error triggering deep scan:', error);
+        addConsoleMessage(`Error starting deep scan: ${error.message}`, 'error');
+    }
+}
+
+function handleDeepScanUpdate(data) {
+    const { type, ip, message } = data;
+    
+    // Get the button for this IP
+    const buttonId = `deep-scan-btn-${ip.replace(/\./g, '-')}`;
+    const button = document.getElementById(buttonId);
+    
+    switch (type) {
+        case 'deep_scan_started':
+            addConsoleMessage(`🔍 ${message}`, 'info');
+            if (button) {
+                button.classList.remove('bg-purple-600', 'hover:bg-purple-700');
+                button.classList.add('bg-blue-600', 'cursor-wait');
+                button.disabled = true;
+                button.textContent = 'Scan started';
+            }
+            break;
+        
+        case 'deep_scan_progress':
+            // Update button with short progress messages
+            if (button) {
+                const event = data.event;
+                if (event === 'scanning') {
+                    button.textContent = 'Scanning...';
+                } else if (event === 'hostname') {
+                    // Extract short hostname (max 20 chars already in message)
+                    button.textContent = message;
+                } else if (event === 'port_found') {
+                    const port = data.port;
+                    const service = data.service;
+                    button.textContent = `Port ${port} found`;
+                }
+            }
+            break;
+            
+        case 'deep_scan_completed':
+            const portCount = data.open_ports ? data.open_ports.length : 0;
+            const duration = data.scan_duration ? data.scan_duration.toFixed(2) : 'unknown';
+            addConsoleMessage(`✅ Deep scan of ${ip} complete: ${portCount} ports found in ${duration}s`, 'success');
+            
+            // Show detailed port information
+            if (data.open_ports && data.open_ports.length > 0) {
+                const portList = data.open_ports.slice(0, 10).join(', ');
+                const moreText = data.open_ports.length > 10 ? ` (+${data.open_ports.length - 10} more)` : '';
+                addConsoleMessage(`   Open ports: ${portList}${moreText}`, 'info');
+            }
+            
+            // Update button to show completion
+            if (button) {
+                button.classList.remove('bg-blue-600', 'cursor-wait');
+                button.classList.add('bg-green-600');
+                button.textContent = `✅ ${portCount} ports`;
+                button.disabled = true;
+                
+                // Reset button after 3 seconds
+                setTimeout(() => {
+                    button.classList.remove('bg-green-600');
+                    button.classList.add('bg-purple-600', 'hover:bg-purple-700');
+                    button.textContent = 'Deep Scan';
+                    button.disabled = false;
+                }, 3000);
+            }
+            
+            // Refresh network table to show updated port information
+            if (currentTab === 'network') {
+                loadNetworkData();
+            }
+            break;
+            
+        case 'deep_scan_error':
+            addConsoleMessage(`❌ Deep scan error for ${ip}: ${message}`, 'error');
+            
+            // Update button to show error
+            if (button) {
+                button.classList.remove('bg-blue-600', 'cursor-wait');
+                button.classList.add('bg-red-600');
+                button.textContent = '❌ Error';
+                button.disabled = true;
+                
+                // Reset button after 3 seconds
+                setTimeout(() => {
+                    button.classList.remove('bg-red-600');
+                    button.classList.add('bg-purple-600', 'hover:bg-purple-700');
+                    button.textContent = 'Deep Scan';
+                    button.disabled = false;
+                }, 3000);
+            }
+            break;
+            
+        default:
+            addConsoleMessage(`Deep scan update: ${message}`, 'info');
+    }
 }
 
 // ============================================================================

@@ -145,6 +145,31 @@
             outline: 2px solid #ffffff;
             outline-offset: 2px;
         }
+        
+        /* Deep Scan Button Animations */
+        .deep-scan-button {
+            min-width: 90px;
+            transition: all 0.3s ease;
+            font-weight: 500;
+        }
+        
+        .deep-scan-button:disabled {
+            cursor: not-allowed;
+            opacity: 0.9;
+        }
+        
+        @keyframes scan-pulse {
+            0%, 100% { 
+                box-shadow: 0 0 10px rgba(59, 130, 246, 0.5);
+            }
+            50% { 
+                box-shadow: 0 0 20px rgba(59, 130, 246, 0.8);
+            }
+        }
+        
+        .deep-scan-button.bg-blue-600 {
+            animation: scan-pulse 2s ease-in-out infinite;
+        }
     </style>
 </head>
 
@@ -580,11 +605,12 @@
                                 <th class="text-left py-3 px-4 font-medium">Open Ports</th>
                                 <th class="text-left py-3 px-4 font-medium">Vulnerabilities</th>
                                 <th class="text-left py-3 px-4 font-medium">Last Scan</th>
+                                <th class="text-left py-3 px-4 font-medium">Actions</th>
                             </tr>
                         </thead>
                         <tbody id="network-hosts-table">
                             <tr>
-                                <td colspan="7" class="text-center py-8 text-gray-400">
+                                <td colspan="8" class="text-center py-8 text-gray-400">
                                     Loading network data...
                                 </td>
                             </tr>

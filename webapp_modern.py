@@ -3339,6 +3339,191 @@ def scan_single_host():
         logger.error(f"Error scanning single host: {e}")
         return jsonify({'status': 'error', 'message': str(e)}), 500
 
+@app.route('/api/scan/deep', methods=['POST'])
+def deep_scan_host():
+    """Perform a deep scan on a single host using TCP connect scan (-sT) on all ports"""
+    try:
+        # ===== REQUEST INTROSPECTION =====
+        logger.info("🎯 DEEP SCAN API ENDPOINT CALLED")
+        logger.info(f"   Method={request.method} Content-Type={request.content_type} Content-Length={request.content_length}")
+        # Log a safe subset of headers
+        try:
+            hdr_subset = {k: v for k, v in request.headers.items() if k in ['User-Agent','Content-Type','Origin','Referer']}
+            logger.debug(f"   Headers subset: {hdr_subset}")
+        except Exception as e_hdr:
+            logger.debug(f"   Could not log headers subset: {e_hdr}")
+
+        raw_body = request.get_data(cache=False)  # bytes
+        logger.debug(f"   Raw body repr: {raw_body!r}")
+
+        data = {}
+        # Robust JSON parsing with fallback to form/query
+        if request.content_type and 'application/json' in request.content_type.lower():
+            try:
+                data = request.get_json(force=True, silent=True) or {}
+            except Exception as json_err:
+                logger.error(f"   JSON parse error: {json_err}")
+                data = {}
+        if not data:
+            # Fallbacks
+            form_dict = request.form.to_dict() if request.form else {}
+            args_dict = request.args.to_dict() if request.args else {}
+            data = {**args_dict, **form_dict}
+        logger.info(f"   Parsed data: {data} (type={type(data).__name__})")
+
+        ip = (data.get('ip') or '').strip()
+        portstart_raw = data.get('portstart', 1)
+        # ===== SECONDARY RAW BODY PARSING FALLBACK =====
+        # If IP is still empty after initial structured parsing, attempt to extract it manually
+        if not ip:
+            try:
+                raw_text = raw_body.decode('utf-8', errors='ignore').strip()
+                logger.debug(f"   Fallback raw body text: {raw_text}")
+                # Case 1: Proper JSON that get_json() failed to parse (malformed headers / PowerShell curl issues)
+                if raw_text.startswith('{') and raw_text.endswith('}'):
+                    import json as _json
+                    try:
+                        manual_json = _json.loads(raw_text)
+                        ip = (manual_json.get('ip') or '').strip()
+                        logger.debug(f"   Extracted IP from manual JSON fallback: [{ip}]")
+                    except Exception as mj_err:
+                        logger.debug(f"   Manual JSON decode failed: {mj_err}")
+                # Case 2: application/x-www-form-urlencoded style: ip=192.168.1.192
+                if not ip and ('=' in raw_text or '&' in raw_text):
+                    import urllib.parse as _up
+                    parsed_qs = _up.parse_qs(raw_text)
+                    if 'ip' in parsed_qs and parsed_qs['ip']:
+                        ip = (parsed_qs['ip'][0] or '').strip()
+                        logger.debug(f"   Extracted IP from querystring style body: [{ip}]")
+                # Case 3: Loose key:value or key=value pattern inside text
+                if not ip:
+                    import re as _re
+                    m = _re.search(r'"?ip"?\s*[:=]\s*"?(\d{1,3}(?:\.\d{1,3}){3})"?', raw_text)
+                    if m:
+                        ip = m.group(1).strip()
+                        logger.debug(f"   Extracted IP via regex heuristic: [{ip}]")
+            except Exception as fb_err:
+                logger.debug(f"   Raw body manual parse error: {fb_err}")
+        # Log final IP extraction state before validation
+        logger.debug(f"   Final extracted IP after fallbacks: [{ip}]")
+        portend_raw = data.get('portend', 65535)
+        try:
+            portstart = int(portstart_raw)
+        except (TypeError, ValueError):
+            portstart = 1
+        try:
+            portend = int(portend_raw)
+        except (TypeError, ValueError):
+            portend = 65535
+
+        if not ip:
+            # Include a small, safe snippet of raw body to aid debugging (truncated to 120 chars)
+            try:
+                snippet = raw_body.decode('utf-8','ignore')[:120]
+            except Exception:
+                snippet = '<un-decodable>'
+            logger.error(f"❌ Deep scan request missing IP after all parsing attempts. Raw snippet: {snippet!r}")
+            return jsonify({'status': 'error', 'message': 'IP address is required', 'raw_snippet': snippet}), 400
+
+        # Decide scan mode early so API response reflects reality
+        mode_flag = (data.get('mode') or data.get('scan_mode') or '').lower()
+        full_flag = str(data.get('full', '')).lower() in ['1','true','yes']
+        use_top_ports = not (mode_flag in ['full','all','65535'] or full_flag)
+        logger.info(
+            f"🎯 DEEP SCAN PARAMETERS - IP=[{ip}] Ports={portstart}-{portend} mode={'top3000' if use_top_ports else 'full-range'}"
+        )
+
+        # Validate IP address format
+        import ipaddress
+        try:
+            ipaddress.ip_address(ip)
+        except ValueError:
+            return jsonify({'status': 'error', 'message': 'Invalid IP address format'}), 400
+
+        # Start deep scan in background thread
+        def deep_scan_background():
+            try:
+                # Import the scanner
+                from actions.scanning import NetworkScanner
+                
+                # Create scanner instance
+                scanner = NetworkScanner(shared_data)
+                
+                # Emit scan started event
+                socketio.emit('deep_scan_update', {
+                    'type': 'deep_scan_started',
+                    'ip': ip,
+                    'message': f'Starting deep scan on {ip} (ports {portstart}-{portend})...'
+                })
+                
+                # Define progress callback to emit real-time updates
+                def progress_callback(event_type, data):
+                    socketio.emit('deep_scan_update', {
+                        'type': 'deep_scan_progress',
+                        'event': event_type,
+                        'ip': ip,
+                        'message': data.get('message', ''),
+                        'port': data.get('port'),
+                        'service': data.get('service')
+                    })
+                
+                socketio.emit('deep_scan_update', {
+                    'type': 'deep_scan_progress',
+                    'ip': ip,
+                    'message': f"Parameters accepted: ip={ip} mode={'top3000' if use_top_ports else 'full-range'} range={portstart}-{portend}"
+                })
+
+                # Perform the deep scan with progress callback
+                result = scanner.deep_scan_host(ip, portstart, portend, progress_callback=progress_callback, use_top_ports=use_top_ports)
+                
+                # Emit final result
+                if result['success']:
+                    socketio.emit('deep_scan_update', {
+                        'type': 'deep_scan_completed',
+                        'ip': ip,
+                        'open_ports': result['open_ports'],
+                        'hostname': result['hostname'],
+                        'port_details': result['port_details'],
+                        'scan_duration': result['scan_duration'],
+                        'message': result['message']
+                    })
+                    
+                    # Also emit a network update to refresh the table
+                    socketio.emit('network_update', {'refresh': True})
+                else:
+                    socketio.emit('deep_scan_update', {
+                        'type': 'deep_scan_error',
+                        'ip': ip,
+                        'message': result['message']
+                    })
+                    
+            except Exception as e:
+                logger.error(f"Error in deep scan background task for {ip}: {e}")
+                socketio.emit('deep_scan_update', {
+                    'type': 'deep_scan_error',
+                    'ip': ip,
+                    'message': f'Deep scan error: {str(e)}'
+                })
+
+        # Start the deep scan in a background thread
+        import threading
+        scan_thread = threading.Thread(target=deep_scan_background)
+        scan_thread.daemon = True
+        scan_thread.start()
+        
+        return jsonify({
+            'status': 'success',
+            'message': f"Started deep scan of {ip} (mode={'top3000' if use_top_ports else 'full-range'})",
+            'ip': ip,
+            'portstart': portstart,
+            'portend': portend,
+            'mode': 'top3000' if use_top_ports else 'full-range'
+        })
+        
+    except Exception as e:
+        logger.error(f"Error initiating deep scan: {e}")
+        return jsonify({'status': 'error', 'message': str(e)}), 500
+
 # ============================================================================
 # SYSTEM MANAGEMENT ENDPOINTS
 # ============================================================================
