@@ -110,6 +110,13 @@ class NmapVulnScanner:
             
             # Determine scan strategy based on detected ports
             if not ports_to_scan:
+                # Check if scanning hosts without ports is enabled
+                scan_vuln_no_ports = getattr(self.shared_data, 'scan_vuln_no_ports', True)
+                
+                if not scan_vuln_no_ports:
+                    logger.info(f"No ports detected for {ip} and scan_vuln_no_ports is disabled. Skipping vulnerability scan.")
+                    return None  # Skip scanning this host
+                
                 # No ports detected - scan top 50 ports for vulnerabilities
                 logger.info(f"No ports detected for {ip}. Scanning top 50 ports for vulnerabilities.")
                 nmap_command = [

@@ -20,6 +20,10 @@ const configMetadata = {
         label: "Vulnerability Scanning",
         description: "Enable automatic vulnerability scans on discovered hosts based on the configured interval."
     },
+    scan_vuln_no_ports: {
+        label: "Scan Hosts Without Ports",
+        description: "When enabled, vulnerability scans will scan the top 50 common ports on hosts where no ports were discovered. When disabled, only hosts with discovered ports will be scanned."
+    },
     enable_attacks: {
         label: "Enable Attacks",
         description: "Allow Ragnar to perform automated attacks (SSH, FTP, SMB, SQL, etc.) on discovered targets. Disable to only scan without attacking."
