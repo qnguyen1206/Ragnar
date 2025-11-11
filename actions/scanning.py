@@ -1323,7 +1323,7 @@ class NetworkScanner:
         Returns:
             dict: {'success': bool, 'open_ports': list, 'hostname': str, 'message': str}
         """
-        self.logger.info(f"🔍 DEEP SCAN initiated for {ip} (ports {portstart}-{portend})")
+        self.logger.info(f"🔍 DEEP SCAN initiated for IP=[{ip}] ports [{portstart}-{portend}]")
         
         try:
             # Use -sT for TCP connect scan (doesn't require root, works everywhere)
@@ -1414,70 +1414,125 @@ class NetworkScanner:
     
     def _merge_deep_scan_results(self, ip, hostname, open_ports, port_details):
         """
-        Merge deep scan results into NetKB without overwriting existing data.
+        Merge deep scan results into BOTH NetKB and WiFi-specific network file.
         Adds new ports while preserving all existing information.
         """
         netkbfile = self.shared_data.netkbfile
         
         try:
-            # Read current NetKB using DictReader to match the CSV format
+            # ===== PART 1: Update NetKB (MAC-indexed, semicolon-separated) =====
             if not os.path.exists(netkbfile):
                 self.logger.warning(f"NetKB file not found: {netkbfile}")
-                return
-            
-            # Read the entire file into memory
-            netkb_entries = {}
-            with open(netkbfile, 'r') as file:
-                reader = csv.DictReader(file)
-                headers = reader.fieldnames
+            else:
+                # Read the entire file into memory
+                netkb_entries = {}
+                with open(netkbfile, 'r') as file:
+                    reader = csv.DictReader(file)
+                    headers = reader.fieldnames
+                    
+                    for row in reader:
+                        mac = row['MAC Address']
+                        netkb_entries[mac] = row
                 
-                for row in reader:
-                    mac = row['MAC Address']
-                    netkb_entries[mac] = row
+                # Find the MAC address for this IP
+                target_mac = None
+                for mac, data in netkb_entries.items():
+                    if ip in data.get('IPs', '').split(';'):
+                        target_mac = mac
+                        break
+                
+                if not target_mac:
+                    self.logger.warning(f"IP {ip} not found in NetKB - skipping NetKB merge")
+                else:
+                    # Get existing ports
+                    existing_ports_str = netkb_entries[target_mac].get('Ports', '')
+                    existing_ports = set()
+                    
+                    if existing_ports_str:
+                        # Parse existing ports (semicolon separated in NetKB)
+                        existing_ports = {p.strip() for p in existing_ports_str.split(';') if p.strip()}
+                    
+                    # Merge with new ports from deep scan
+                    new_ports = {str(p) for p in open_ports}
+                    merged_ports = existing_ports.union(new_ports)
+                    
+                    # Update the entry
+                    netkb_entries[target_mac]['Ports'] = ';'.join(sorted(merged_ports, key=lambda x: int(x) if x.isdigit() else 0))
+                    
+                    # Update hostname if we got one and it's not already set
+                    existing_hostname = netkb_entries[target_mac].get('Hostnames', '')
+                    if hostname and not existing_hostname:
+                        netkb_entries[target_mac]['Hostnames'] = hostname
+                    
+                    # Mark as deep scanned
+                    netkb_entries[target_mac]['Deep_Scanned'] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                    netkb_entries[target_mac]['Deep_Scan_Ports'] = str(len(open_ports))
+                    
+                    # Write back to file
+                    with open(netkbfile, 'w', newline='') as file:
+                        writer = csv.DictWriter(file, fieldnames=headers)
+                        writer.writeheader()
+                        for mac in sorted(netkb_entries.keys()):
+                            writer.writerow(netkb_entries[mac])
+                    
+                    self.logger.info(f"📝 Merged deep scan results into NetKB: {ip} (MAC: {target_mac}) now has {len(merged_ports)} total ports ({len(new_ports)} from deep scan)")
             
-            # Find the MAC address for this IP
-            target_mac = None
-            for mac, data in netkb_entries.items():
-                if ip in data.get('IPs', '').split(';'):
-                    target_mac = mac
-                    break
+            # ===== PART 2: Update WiFi-specific network file (IP-indexed, comma-separated) =====
+            # This is the file the web UI actually displays!
+            from webapp_modern import get_wifi_specific_network_file
+            wifi_network_file = get_wifi_specific_network_file()
             
-            if not target_mac:
-                self.logger.warning(f"IP {ip} not found in NetKB - cannot merge deep scan results")
-                return
-            
-            # Get existing ports
-            existing_ports_str = netkb_entries[target_mac].get('Ports', '')
-            existing_ports = set()
-            
-            if existing_ports_str:
-                # Parse existing ports (semicolon separated in NetKB)
-                existing_ports = {p.strip() for p in existing_ports_str.split(';') if p.strip()}
-            
-            # Merge with new ports from deep scan
-            new_ports = {str(p) for p in open_ports}
-            merged_ports = existing_ports.union(new_ports)
-            
-            # Update the entry
-            netkb_entries[target_mac]['Ports'] = ';'.join(sorted(merged_ports, key=lambda x: int(x) if x.isdigit() else 0))
-            
-            # Update hostname if we got one and it's not already set
-            existing_hostname = netkb_entries[target_mac].get('Hostnames', '')
-            if hostname and not existing_hostname:
-                netkb_entries[target_mac]['Hostnames'] = hostname
-            
-            # Mark as deep scanned
-            netkb_entries[target_mac]['Deep_Scanned'] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-            netkb_entries[target_mac]['Deep_Scan_Ports'] = str(len(open_ports))
-            
-            # Write back to file
-            with open(netkbfile, 'w', newline='') as file:
-                writer = csv.DictWriter(file, fieldnames=headers)
-                writer.writeheader()
-                for mac in sorted(netkb_entries.keys()):
-                    writer.writerow(netkb_entries[mac])
-            
-            self.logger.info(f"📝 Merged deep scan results into NetKB: {ip} (MAC: {target_mac}) now has {len(merged_ports)} total ports ({len(new_ports)} from deep scan)")
+            if not os.path.exists(wifi_network_file):
+                self.logger.warning(f"WiFi-specific network file not found: {wifi_network_file}")
+            else:
+                # Read WiFi network file
+                wifi_entries = []
+                with open(wifi_network_file, 'r', encoding='utf-8', errors='ignore') as file:
+                    reader = csv.DictReader(file)
+                    wifi_headers = reader.fieldnames
+                    
+                    for row in reader:
+                        wifi_entries.append(row)
+                
+                # Find the entry for this IP
+                target_entry = None
+                for entry in wifi_entries:
+                    if entry.get('IP', '').strip() == ip:
+                        target_entry = entry
+                        break
+                
+                if not target_entry:
+                    self.logger.warning(f"IP {ip} not found in WiFi network file - skipping WiFi file merge")
+                else:
+                    # Get existing ports
+                    existing_ports_str = target_entry.get('Ports', '')
+                    existing_ports = set()
+                    
+                    if existing_ports_str:
+                        # Parse existing ports (semicolon separated)
+                        existing_ports = {p.strip() for p in existing_ports_str.split(';') if p.strip()}
+                    
+                    # Merge with new ports from deep scan
+                    new_ports = {str(p) for p in open_ports}
+                    merged_ports = existing_ports.union(new_ports)
+                    
+                    # Update the entry
+                    target_entry['Ports'] = ';'.join(sorted(merged_ports, key=lambda x: int(x) if x.isdigit() else 0))
+                    
+                    # Update hostname if we got one and it's not already set
+                    if hostname and not target_entry.get('Hostname', '').strip():
+                        target_entry['Hostname'] = hostname
+                    
+                    # Update LastSeen timestamp
+                    target_entry['LastSeen'] = datetime.now().isoformat()
+                    
+                    # Write back to file
+                    with open(wifi_network_file, 'w', newline='', encoding='utf-8') as file:
+                        writer = csv.DictWriter(file, fieldnames=wifi_headers)
+                        writer.writeheader()
+                        writer.writerows(wifi_entries)
+                    
+                    self.logger.info(f"📝 Merged deep scan results into WiFi network file: {ip} now has {len(merged_ports)} total ports ({len(new_ports)} from deep scan)")
             
         except Exception as e:
             self.logger.error(f"Error merging deep scan results for {ip}: {e}")
