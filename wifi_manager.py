@@ -69,6 +69,9 @@ class WiFiManager:
         self.known_networks = []
         self.available_networks = []
         self.current_ssid = None
+        # Failsafe cycle tracking (cycles with no WiFi and no AP clients)
+        self.no_connection_cycles = 0
+        self.failsafe_cycle_limit = shared_data.config.get('wifi_failsafe_cycle_limit', 10)
         
         # AP mode settings
         self.ap_ssid = shared_data.config.get('wifi_ap_ssid', 'Ragnar')
@@ -374,10 +377,23 @@ class WiFiManager:
                 self._save_connection_state(self.current_ssid, True)
                 self.last_wifi_validation = time.time()
                 self.consecutive_validation_cycles_failed = 0
+                self.no_connection_cycles = 0  # Reset failsafe counter on success
                 return True
             else:
                 self.logger.debug(f"Endless Loop: Waiting for auto-connection... ({elapsed}s/{timeout}s)")
         
+        # Strengthened validation before AP fallback: perform a strong connectivity check (ping 8.8.8.8)
+        self.logger.info("Endless Loop: Performing strong connectivity verification before AP fallback")
+        if self._strong_wifi_presence_check():
+            self.logger.info("Endless Loop: Strong check indicates WiFi connectivity; aborting AP fallback")
+            self.wifi_connected = True
+            self.shared_data.wifi_connected = True
+            self.current_ssid = self.get_current_ssid()
+            self._save_connection_state(self.current_ssid, True)
+            self.last_wifi_validation = time.time()
+            self.no_connection_cycles = 0
+            return True
+
         # No WiFi connected after 1 minute, switch to AP mode
         self.logger.info(f"Endless Loop: No auto-connection established after {timeout}s, switching to AP mode")
         self._endless_loop_start_ap_mode()
@@ -422,6 +438,13 @@ class WiFiManager:
                     self.logger.warning("Endless Loop: Wi-Fi connection lost!")
                     self._save_connection_state(None, False)
                     self.wifi_validation_failures = 0  # Reset validation failures
+                    # Increment failsafe cycle counter when connection is lost and AP not active yet
+                    if not self.ap_mode_active:
+                        self.no_connection_cycles += 1
+                        self.logger.warning(f"Failsafe counter increment (loss): {self.no_connection_cycles}/{self.failsafe_cycle_limit}")
+                        if self.no_connection_cycles >= self.failsafe_cycle_limit:
+                            self.logger.error("Failsafe threshold reached during monitoring - initiating reboot")
+                            self._failsafe_reboot()
                     self._endless_loop_wifi_search()
                 elif not was_connected and self.wifi_connected:
                     self.logger.info("Endless Loop: Wi-Fi connection established!")
@@ -429,6 +452,7 @@ class WiFiManager:
                     self._save_connection_state(current_ssid, True)
                     self.last_wifi_validation = current_time
                     self.wifi_validation_failures = 0
+                    self.no_connection_cycles = 0  # Reset failsafe counter on success
                     if self.ap_mode_active:
                         self.logger.info("Endless Loop: Stopping AP mode due to successful WiFi connection")
                         self.stop_ap_mode()

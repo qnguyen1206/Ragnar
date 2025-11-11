@@ -202,6 +202,7 @@ class SharedData:
             "wifi_reconnect_interval": 20,
             "wifi_ap_cycle_enabled": True,
             "wifi_initial_connection_timeout": 60,
+            "wifi_failsafe_cycle_limit": 10,
 
             "network_device_retention_days": 14,
 

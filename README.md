@@ -4,10 +4,7 @@
 ![Status](https://img.shields.io/badge/Status-Development-blue.svg)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
-
-
-<p align="center">
-<img width="300" height="600" alt="image" src="https://github.com/user-attachments/assets/d79940c5-5076-430f-aa75-a4094a4d2910" />
+![image](https://github.com/user-attachments/assets/3bed08a1-b6cf-4014-9661-85350dc5becc)
 
 </p>
 
