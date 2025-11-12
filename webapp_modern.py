@@ -1090,8 +1090,12 @@ def update_wifi_network_data():
             existing_data.pop(ip, None)
 
         # Update alive status based on current ARP cache data with robust connectivity tracking
+        # IMPORTANT: Only update ping counters when we have fresh ARP data (within last ARP_SCAN_INTERVAL)
         current_time = datetime.now().isoformat()
+        current_timestamp = time.time()
         arp_hosts = network_scan_cache.get('arp_hosts', {})
+        last_arp_scan_time = network_scan_cache.get('last_arp_scan', 0)
+        arp_data_is_fresh = (current_timestamp - last_arp_scan_time) < ARP_SCAN_INTERVAL + 2  # +2 for timing tolerance
         MAX_FAILED_PINGS = shared_data.config.get('network_max_failed_pings', 15)  # Changed to 15 for more stability
         
         for ip, data in existing_data.items():
@@ -1119,9 +1123,10 @@ def update_wifi_network_data():
                     except Exception as e:
                         logger.debug(f"Could not update NetKB with real MAC for {ip}: {e}")
             else:
-                # Device didn't respond - increment failure counter
-                data['failed_ping_count'] = data.get('failed_ping_count', 0) + 1
-                data['last_ping_attempt'] = current_time
+                # Device didn't respond - only increment counter if we have fresh ARP data
+                if arp_data_is_fresh:
+                    data['failed_ping_count'] = data.get('failed_ping_count', 0) + 1
+                    data['last_ping_attempt'] = current_time
                 
                 # Only mark as offline after MAX_FAILED_PINGS consecutive failures
                 if data['failed_ping_count'] >= MAX_FAILED_PINGS:
