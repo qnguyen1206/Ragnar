@@ -1884,11 +1884,22 @@ port=0
             self.logger.error(f"Error in AP cleanup: {e}")
     
     def get_status(self):
-        """Get current Wi-Fi manager status"""
+        """Get current Wi-Fi manager status with real-time SSID check"""
+        # Always get fresh connection status and SSID
+        wifi_connected = self.check_wifi_connection()
+        current_ssid = self.get_current_ssid() if wifi_connected else None
+        
+        # Update internal state
+        self.wifi_connected = wifi_connected
+        if current_ssid:
+            self.current_ssid = current_ssid
+        elif not wifi_connected:
+            self.current_ssid = None
+        
         status = {
-            'wifi_connected': self.wifi_connected,
+            'wifi_connected': wifi_connected,
             'ap_mode_active': self.ap_mode_active,
-            'current_ssid': self.current_ssid,
+            'current_ssid': current_ssid,
             'known_networks_count': len(self.known_networks),
             'connection_attempts': self.connection_attempts,
             'startup_complete': self.startup_complete,

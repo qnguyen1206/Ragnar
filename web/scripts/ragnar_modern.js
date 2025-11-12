@@ -3939,8 +3939,8 @@ function updateDashboardStatus(data) {
         }
     }
     
-    // Update connectivity status
-    updateConnectivityIndicator('wifi-status', data.wifi_connected);
+    // Update connectivity status with WiFi SSID
+    updateConnectivityIndicator('wifi-status', data.wifi_connected, data.current_ssid, data.ap_mode_active);
     updateConnectivityIndicator('bluetooth-status', data.bluetooth_active);
     updateConnectivityIndicator('usb-status', data.usb_active);
     updateConnectivityIndicator('pan-status', data.pan_connected);
@@ -3953,13 +3953,30 @@ function updateElement(id, value) {
     }
 }
 
-function updateConnectivityIndicator(id, active) {
+function updateConnectivityIndicator(id, active, ssid = null, apMode = false) {
     const element = document.getElementById(id);
     if (element) {
         if (active) {
             element.className = 'w-3 h-3 bg-green-500 rounded-full pulse-glow';
         } else {
             element.className = 'w-3 h-3 bg-gray-600 rounded-full';
+        }
+    }
+    
+    // Update WiFi SSID display if this is the WiFi indicator
+    if (id === 'wifi-status') {
+        const ssidDisplay = document.getElementById('wifi-ssid-display');
+        if (ssidDisplay) {
+            if (apMode) {
+                ssidDisplay.textContent = ssid ? `AP Mode: ${ssid}` : 'AP Mode';
+                ssidDisplay.className = 'text-xs text-blue-400 truncate';
+            } else if (active && ssid) {
+                ssidDisplay.textContent = ssid;
+                ssidDisplay.className = 'text-xs text-gray-400 truncate';
+            } else {
+                ssidDisplay.textContent = 'Not connected';
+                ssidDisplay.className = 'text-xs text-gray-500 truncate';
+            }
         }
     }
 }

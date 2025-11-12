@@ -6226,6 +6226,15 @@ def get_current_status():
     except Exception as e:
         logger.debug(f"Unable to refresh gamification stats: {e}")
 
+    # Get WiFi status details from WiFi manager
+    wifi_status = {}
+    try:
+        wifi_manager = getattr(shared_data, 'ragnar_instance', None)
+        if wifi_manager and hasattr(wifi_manager, 'wifi_manager'):
+            wifi_status = wifi_manager.wifi_manager.get_status()
+    except Exception as e:
+        logger.debug(f"Could not get WiFi status from manager: {e}")
+
     return {
         'ragnar_status': safe_str(shared_data.ragnarstatustext),
         'ragnar_status2': safe_str(shared_data.ragnarstatustext2),
@@ -6241,7 +6250,10 @@ def get_current_status():
         'level': safe_int(shared_data.levelnbr),
         'points': safe_int(shared_data.coinnbr),
         'coins': safe_int(shared_data.coinnbr),
-        'wifi_connected': safe_bool(shared_data.wifi_connected),
+        'wifi_connected': wifi_status.get('wifi_connected', safe_bool(shared_data.wifi_connected)),
+        'current_ssid': wifi_status.get('current_ssid'),
+        'ap_mode_active': wifi_status.get('ap_mode_active', False),
+        'ap_ssid': wifi_status.get('ap_ssid'),
         'bluetooth_active': safe_bool(shared_data.bluetooth_active),
         'pan_connected': safe_bool(shared_data.pan_connected),
         'usb_active': safe_bool(shared_data.usb_active),
