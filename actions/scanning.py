@@ -1326,7 +1326,7 @@ class NetworkScanner:
             # Build nmap args depending on mode
             if use_top_ports:
                 # Fast scan of most common ports (top 3000) for broader coverage while still faster than full range
-                nmap_args = "nmap -Pn -sT -p- --open -T4 --min-rate 500 --max-retries 1 -v"
+                nmap_args = "-Pn -sT -p- --open -T4 --min-rate 500 --max-retries 1 -v"
                 self.logger.info(f"🚀 EXECUTING DEEP SCAN (TOP 3000): nmap {nmap_args} {ip}")
                 self.logger.info("   Mode: top3000 common ports (fast/extended)")
             else:
