@@ -90,7 +90,8 @@ The e-Paper HAT display and web interface make it easy to monitor and interact w
 <p align="center">
   <img width="150" height="300" alt="image" src="https://github.com/user-attachments/assets/463d32c7-f6ca-447c-b62b-f18f2429b2b2" />
 </p>
-<img width="1423" height="905" alt="image" src="https://github.com/user-attachments/assets/13d9248a-c3e2-455c-92ed-0b3192b5905a" />
+
+![image](https://github.com/user-attachments/assets/88345794-edfc-49e8-90ab-48d72b909e86)
 
 
 ## 🚀 Getting Started
