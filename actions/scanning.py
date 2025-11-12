@@ -863,10 +863,7 @@ class NetworkScanner:
             self.use_nmap_results = False
 
         def scan_network_and_write_to_csv(self):
-            """
-            Scans the network using nmap for host/port discovery and arp-scan for MAC addresses.
-            Merges results to get complete host information (IP, MAC, hostname, ports).
-            """
+
             self.outer_instance.check_if_csv_scan_file_exists(self.csv_scan_file, self.csv_result_file, self.netkbfile)
             with self.outer_instance.lock:
                 try:
@@ -1074,11 +1071,7 @@ class NetworkScanner:
                 if self.df.empty or 'Alive' not in self.df.columns or 'Ports' not in self.df.columns:
                     self.logger.warning("DataFrame is empty or missing required columns for port calculation")
                     return
-                
-                # The Alive column is persisted as strings ("1"/"0").
-                # Convert to string and compare against "1" to ensure
-                # compatibility with legacy data written by earlier
-                # components.
+
                 alive_mask = self.df['Alive'].astype(str).str.strip() == '1'
                 alive_df = self.df[alive_mask].copy()
                 
