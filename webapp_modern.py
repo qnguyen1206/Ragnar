@@ -2397,6 +2397,173 @@ def get_activity_logs():
         logger.error(f"Error getting activity logs: {e}")
         return jsonify({'error': str(e)}), 500
 
+
+@app.route('/api/attack', methods=['GET', 'POST'])
+def attack_logs():
+    """
+    Attack logs endpoint - Log and retrieve attack action outputs
+    
+    GET: Retrieve attack logs (optionally filtered by IP, action type, or timeframe)
+    POST: Log a new attack output
+    """
+    if request.method == 'POST':
+        try:
+            # Log a new attack output
+            data = request.get_json()
+            
+            # Extract attack details
+            attack_type = data.get('attack_type', 'Unknown')
+            target_ip = data.get('target_ip', 'Unknown')
+            target_port = data.get('target_port', '')
+            status = data.get('status', 'unknown')  # success, failed, timeout
+            message = data.get('message', '')
+            details = data.get('details', {})
+            timestamp = data.get('timestamp', datetime.now().strftime('%Y-%m-%d %H:%M:%S'))
+            
+            # Create attack log directory if it doesn't exist
+            attack_log_dir = os.path.join(shared_data.logsdir, 'attacks')
+            os.makedirs(attack_log_dir, exist_ok=True)
+            
+            # Create attack log file (one per day)
+            log_date = datetime.now().strftime('%Y-%m-%d')
+            attack_log_file = os.path.join(attack_log_dir, f'attacks_{log_date}.json')
+            
+            # Prepare log entry
+            log_entry = {
+                'timestamp': timestamp,
+                'attack_type': attack_type,
+                'target_ip': target_ip,
+                'target_port': target_port,
+                'status': status,
+                'message': message,
+                'details': details
+            }
+            
+            # Load existing logs or create new list
+            if os.path.exists(attack_log_file):
+                try:
+                    with open(attack_log_file, 'r', encoding='utf-8') as f:
+                        attack_logs = json.load(f)
+                except json.JSONDecodeError:
+                    attack_logs = []
+            else:
+                attack_logs = []
+            
+            # Append new log entry
+            attack_logs.append(log_entry)
+            
+            # Save updated logs
+            with open(attack_log_file, 'w', encoding='utf-8') as f:
+                json.dump(attack_logs, f, indent=2)
+            
+            # Also log to main logger for debugging
+            logger.info(f"Attack logged: {attack_type} on {target_ip}:{target_port} - {status}")
+            
+            return jsonify({
+                'success': True,
+                'message': 'Attack output logged successfully',
+                'log_entry': log_entry
+            }), 201
+            
+        except Exception as e:
+            logger.error(f"Error logging attack output: {e}")
+            return jsonify({
+                'success': False,
+                'error': str(e)
+            }), 500
+    
+    else:  # GET request
+        try:
+            # Retrieve attack logs with optional filtering
+            ip_filter = request.args.get('ip', None)
+            attack_type_filter = request.args.get('type', None)
+            status_filter = request.args.get('status', None)
+            limit = int(request.args.get('limit', 100))
+            days_back = int(request.args.get('days', 7))
+            
+            attack_log_dir = os.path.join(shared_data.logsdir, 'attacks')
+            
+            if not os.path.exists(attack_log_dir):
+                return jsonify({
+                    'attack_logs': [],
+                    'total_count': 0,
+                    'message': 'No attack logs found'
+                })
+            
+            # Collect logs from recent days
+            all_logs = []
+            cutoff_date = datetime.now() - timedelta(days=days_back)
+            
+            for log_file in os.listdir(attack_log_dir):
+                if not log_file.startswith('attacks_') or not log_file.endswith('.json'):
+                    continue
+                
+                # Check if log file is within date range
+                try:
+                    file_date_str = log_file.replace('attacks_', '').replace('.json', '')
+                    file_date = datetime.strptime(file_date_str, '%Y-%m-%d')
+                    
+                    if file_date < cutoff_date:
+                        continue
+                except:
+                    continue
+                
+                log_path = os.path.join(attack_log_dir, log_file)
+                try:
+                    with open(log_path, 'r', encoding='utf-8') as f:
+                        logs = json.load(f)
+                        all_logs.extend(logs)
+                except Exception as e:
+                    logger.error(f"Error reading attack log file {log_file}: {e}")
+                    continue
+            
+            # Apply filters
+            filtered_logs = all_logs
+            
+            if ip_filter:
+                filtered_logs = [log for log in filtered_logs if log.get('target_ip') == ip_filter]
+            
+            if attack_type_filter:
+                filtered_logs = [log for log in filtered_logs if log.get('attack_type') == attack_type_filter]
+            
+            if status_filter:
+                filtered_logs = [log for log in filtered_logs if log.get('status') == status_filter]
+            
+            # Sort by timestamp (most recent first)
+            filtered_logs.sort(key=lambda x: x.get('timestamp', ''), reverse=True)
+            
+            # Apply limit
+            filtered_logs = filtered_logs[:limit]
+            
+            # Generate summary statistics
+            total_count = len(all_logs)
+            filtered_count = len(filtered_logs)
+            success_count = len([log for log in filtered_logs if log.get('status') == 'success'])
+            failed_count = len([log for log in filtered_logs if log.get('status') == 'failed'])
+            
+            return jsonify({
+                'attack_logs': filtered_logs,
+                'total_count': total_count,
+                'filtered_count': filtered_count,
+                'success_count': success_count,
+                'failed_count': failed_count,
+                'filters_applied': {
+                    'ip': ip_filter,
+                    'type': attack_type_filter,
+                    'status': status_filter,
+                    'days': days_back,
+                    'limit': limit
+                }
+            })
+            
+        except Exception as e:
+            logger.error(f"Error retrieving attack logs: {e}")
+            return jsonify({
+                'success': False,
+                'error': str(e)
+            }), 500
+
+
 @app.route('/api/debug/verbose-logs')
 def get_verbose_debug_logs():
     """Get super verbose debugging logs for tracing data flow issues"""

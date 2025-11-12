@@ -520,6 +520,7 @@ function setupAutoRefresh() {
         if (currentTab === 'discovered' && socket && socket.connected) {
             socket.emit('request_credentials');
             socket.emit('request_loot');
+            loadAttackLogs(); // Also refresh attack logs
         }
     }, 20000); // Every 20 seconds
     
@@ -605,6 +606,7 @@ async function loadTabData(tabName) {
         case 'discovered':
             await loadCredentialsData();
             await loadLootData();
+            await loadAttackLogs();
             break;
         case 'threat-intel':
             await loadThreatIntelData();
@@ -1913,6 +1915,221 @@ async function loadLootData() {
     } catch (error) {
         console.error('Error loading loot data:', error);
     }
+}
+
+// Attack Logs Functions
+let currentAttackFilter = 'all';
+let attackLogsCache = null;
+
+async function loadAttackLogs() {
+    try {
+        const data = await fetchAPI('/api/attack?limit=200&days=7');
+        attackLogsCache = data;
+        displayAttackLogs(data);
+    } catch (error) {
+        console.error('Error loading attack logs:', error);
+        document.getElementById('attack-logs-container').innerHTML = `
+            <div class="text-center text-red-400 py-8">
+                <svg class="w-12 h-12 mx-auto mb-3 opacity-50" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path>
+                </svg>
+                <p>Error loading attack logs</p>
+                <p class="text-sm text-gray-500 mt-2">${error.message}</p>
+            </div>
+        `;
+    }
+}
+
+function filterAttackLogs(status) {
+    currentAttackFilter = status;
+    
+    // Update filter button styles
+    document.querySelectorAll('.attack-filter-btn').forEach(btn => {
+        if (btn.getAttribute('data-filter') === status) {
+            btn.classList.add('ring-2', 'ring-white');
+        } else {
+            btn.classList.remove('ring-2', 'ring-white');
+        }
+    });
+    
+    // Re-display with filter
+    if (attackLogsCache) {
+        displayAttackLogs(attackLogsCache);
+    }
+}
+
+async function refreshAttackLogs() {
+    await loadAttackLogs();
+}
+
+function displayAttackLogs(data) {
+    if (!data || !data.attack_logs) {
+        document.getElementById('attack-logs-container').innerHTML = `
+            <div class="text-center text-gray-400 py-8">
+                <svg class="w-12 h-12 mx-auto mb-3 opacity-50" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"></path>
+                </svg>
+                <p>No attack logs found</p>
+            </div>
+        `;
+        return;
+    }
+    
+    // Update statistics
+    document.getElementById('attack-stat-total').textContent = data.total_count || 0;
+    document.getElementById('attack-stat-success').textContent = data.success_count || 0;
+    document.getElementById('attack-stat-failed').textContent = data.failed_count || 0;
+    
+    // Calculate timeout count
+    const timeoutCount = data.attack_logs.filter(log => log.status === 'timeout').length;
+    document.getElementById('attack-stat-timeout').textContent = timeoutCount;
+    
+    // Filter logs based on current filter
+    let logs = data.attack_logs;
+    if (currentAttackFilter !== 'all') {
+        logs = logs.filter(log => log.status === currentAttackFilter);
+    }
+    
+    if (logs.length === 0) {
+        document.getElementById('attack-logs-container').innerHTML = `
+            <div class="text-center text-gray-400 py-8">
+                <svg class="w-12 h-12 mx-auto mb-3 opacity-50" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12"></path>
+                </svg>
+                <p>No ${currentAttackFilter === 'all' ? '' : currentAttackFilter} attacks found</p>
+            </div>
+        `;
+        return;
+    }
+    
+    // Group logs by IP address
+    const logsByIP = {};
+    logs.forEach(log => {
+        const ip = log.target_ip || 'Unknown';
+        if (!logsByIP[ip]) {
+            logsByIP[ip] = [];
+        }
+        logsByIP[ip].push(log);
+    });
+    
+    // Sort IPs
+    const sortedIPs = Object.keys(logsByIP).sort();
+    
+    // Build HTML
+    let html = '<div class="space-y-4">';
+    
+    sortedIPs.forEach(ip => {
+        const hostLogs = logsByIP[ip];
+        const successCount = hostLogs.filter(l => l.status === 'success').length;
+        const failedCount = hostLogs.filter(l => l.status === 'failed').length;
+        const timeoutCount = hostLogs.filter(l => l.status === 'timeout').length;
+        
+        html += `
+            <div class="bg-slate-800 bg-opacity-50 rounded-lg border border-slate-700 overflow-hidden">
+                <div class="px-4 py-3 bg-slate-900 bg-opacity-50 flex items-center justify-between cursor-pointer hover:bg-opacity-70 transition-colors" onclick="toggleAttackHost('${ip}')">
+                    <div class="flex items-center space-x-3">
+                        <svg class="w-5 h-5 text-Ragnar-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 3v2m6-2v2M9 19v2m6-2v2M5 9H3m2 6H3m18-6h-2m2 6h-2M7 19h10a2 2 0 002-2V7a2 2 0 00-2-2H7a2 2 0 00-2 2v10a2 2 0 002 2zM9 9h6v6H9V9z"></path>
+                        </svg>
+                        <span class="font-semibold text-lg">${ip}</span>
+                        <span class="text-sm text-gray-400">(${hostLogs.length} attacks)</span>
+                    </div>
+                    <div class="flex items-center space-x-4">
+                        <span class="text-sm text-green-400">✓ ${successCount}</span>
+                        <span class="text-sm text-red-400">✗ ${failedCount}</span>
+                        <span class="text-sm text-yellow-400">⏱ ${timeoutCount}</span>
+                        <svg id="attack-chevron-${ip.replace(/\./g, '-')}" class="w-5 h-5 text-gray-400 transform transition-transform" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"></path>
+                        </svg>
+                    </div>
+                </div>
+                <div id="attack-host-${ip.replace(/\./g, '-')}" class="hidden px-4 py-3 space-y-2">
+        `;
+        
+        // Sort logs by timestamp (most recent first)
+        hostLogs.sort((a, b) => {
+            return new Date(b.timestamp) - new Date(a.timestamp);
+        });
+        
+        hostLogs.forEach(log => {
+            const statusColors = {
+                'success': 'bg-green-900 bg-opacity-30 border-green-500',
+                'failed': 'bg-red-900 bg-opacity-30 border-red-500',
+                'timeout': 'bg-yellow-900 bg-opacity-30 border-yellow-500'
+            };
+            
+            const statusIcons = {
+                'success': '✓',
+                'failed': '✗',
+                'timeout': '⏱'
+            };
+            
+            const statusTextColors = {
+                'success': 'text-green-400',
+                'failed': 'text-red-400',
+                'timeout': 'text-yellow-400'
+            };
+            
+            const colorClass = statusColors[log.status] || 'bg-gray-900 bg-opacity-30 border-gray-500';
+            const icon = statusIcons[log.status] || '•';
+            const textColor = statusTextColors[log.status] || 'text-gray-400';
+            
+            html += `
+                <div class="border-l-4 ${colorClass} p-3 rounded-r-lg">
+                    <div class="flex items-start justify-between">
+                        <div class="flex-1">
+                            <div class="flex items-center space-x-2 mb-1">
+                                <span class="font-semibold ${textColor}">${icon} ${log.attack_type}</span>
+                                ${log.target_port ? `<span class="text-xs text-gray-400">Port ${log.target_port}</span>` : ''}
+                                <span class="text-xs text-gray-500">${log.timestamp}</span>
+                            </div>
+                            ${log.message ? `<p class="text-sm text-gray-300 mb-2">${escapeHtml(log.message)}</p>` : ''}
+                            ${Object.keys(log.details || {}).length > 0 ? `
+                                <div class="text-xs space-y-1 mt-2">
+                                    ${Object.entries(log.details).map(([key, value]) => `
+                                        <div class="flex items-center space-x-2">
+                                            <span class="text-gray-500">${key}:</span>
+                                            <span class="text-gray-300 font-mono">${escapeHtml(String(value))}</span>
+                                        </div>
+                                    `).join('')}
+                                </div>
+                            ` : ''}
+                        </div>
+                    </div>
+                </div>
+            `;
+        });
+        
+        html += `
+                </div>
+            </div>
+        `;
+    });
+    
+    html += '</div>';
+    
+    document.getElementById('attack-logs-container').innerHTML = html;
+}
+
+function toggleAttackHost(ip) {
+    const containerId = `attack-host-${ip.replace(/\./g, '-')}`;
+    const chevronId = `attack-chevron-${ip.replace(/\./g, '-')}`;
+    const container = document.getElementById(containerId);
+    const chevron = document.getElementById(chevronId);
+    
+    if (container.classList.contains('hidden')) {
+        container.classList.remove('hidden');
+        chevron.classList.add('rotate-180');
+    } else {
+        container.classList.add('hidden');
+        chevron.classList.remove('rotate-180');
+    }
+}
+
+function escapeHtml(text) {
+    const div = document.createElement('div');
+    div.textContent = text;
+    return div.innerHTML;
 }
 
 async function loadConfigData() {

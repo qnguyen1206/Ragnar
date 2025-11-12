@@ -280,40 +280,51 @@ class Orchestrator:
         any_action_executed = False
         action_executed_status = None
 
+        # Process all parent actions (those without dependencies) across ALL hosts
         for action in self.actions:
-            for row in current_data:
-                if row["Alive"] != '1':
-                    continue
-                ip, ports = row["IPs"], row["Ports"].split(';')
+            if action.b_parent_action is None:
                 action_key = action.action_name
-
-                if action.b_parent_action is None:
+                
+                for row in current_data:
+                    if row["Alive"] != '1':
+                        continue
+                    
+                    ip, ports = row["IPs"], row["Ports"].split(';')
+                    
                     with self.semaphore:
                         if self.execute_action(action, ip, ports, row, action_key, current_data):
                             action_executed_status = action_key
                             any_action_executed = True
                             self.shared_data.ragnarorch_status = action_executed_status
-
+                            
+                            # After parent succeeds, immediately try child actions on same host
                             for child_action in self.actions:
                                 if child_action.b_parent_action == action_key:
                                     with self.semaphore:
                                         if self.execute_action(child_action, ip, ports, row, child_action.action_name, current_data):
                                             action_executed_status = child_action.action_name
                                             self.shared_data.ragnarorch_status = action_executed_status
-                                            break
-                            break
+                    
+                    # Continue processing remaining hosts for this action
 
+        # Process all child actions (those with parent dependencies) across ALL hosts
         for child_action in self.actions:
             if child_action.b_parent_action:
                 action_key = child_action.action_name
+                
                 for row in current_data:
+                    if row["Alive"] != '1':
+                        continue
+                    
                     ip, ports = row["IPs"], row["Ports"].split(';')
+                    
                     with self.semaphore:
                         if self.execute_action(child_action, ip, ports, row, action_key, current_data):
                             action_executed_status = child_action.action_name
                             any_action_executed = True
                             self.shared_data.ragnarorch_status = action_executed_status
-                            break
+                    
+                    # Continue processing remaining hosts for this child action
 
         return any_action_executed
 
