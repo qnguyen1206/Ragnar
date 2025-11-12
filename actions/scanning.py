@@ -172,11 +172,7 @@ class NetworkScanner:
         return all_hosts
 
     def run_nmap_network_scan(self, network_cidr, portstart, portend, extra_ports):
-        """
-        Use nmap to scan entire network for host discovery AND port scanning in one efficient sweep.
-        This is much faster and more reliable than ping sweeps.
-        Returns: dict of {ip: {'hostname': str, 'open_ports': [int]}}
-        """
+
         self.logger.info(f"🚀 Starting nmap network-wide scan: {network_cidr}")
         
         # Most common ports - top 50 commonly used ports
@@ -1302,24 +1298,6 @@ class NetworkScanner:
             self.logger.error(f"Error in scan: {e}")
 
     def deep_scan_host(self, ip, portstart=1, portend=65535, progress_callback=None, use_top_ports=True):
-        """Perform a deep scan on a single host using nmap -sT (TCP connect scan).
-
-        By default (use_top_ports=True) scans the TOP 3000 most common ports via
-        ``nmap --top-ports 3000`` for broader coverage while still faster than a full range scan.
-        When use_top_ports=False, scans the full port range ``portstart-portend``.
-
-        Results are merged with existing data without overwriting existing ports.
-
-        Args:
-            ip (str): Target IPv4 address.
-            portstart (int): Starting port if doing full-range scan.
-            portend (int): Ending port if doing full-range scan.
-            progress_callback (callable|None): Optional callback to emit progress events.
-            use_top_ports (bool): Whether to use nmap --top-ports 3000 fast/extended mode.
-
-        Returns:
-            dict: Scan outcome including success flag, open_ports list, hostname, timing and message.
-        """
         # Debug input parameters (single consolidated line for easier grepping)
         self.logger.info("🔍 DEEP SCAN METHOD CALLED")
         self.logger.info(
