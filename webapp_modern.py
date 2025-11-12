@@ -4192,16 +4192,31 @@ def connect_wifi():
         if not wifi_manager or not hasattr(wifi_manager, 'wifi_manager'):
             return jsonify({'success': False, 'error': 'Wi-Fi manager not available'}), 503
         
+        # Log the connection attempt
+        logger.info(f"API: Attempting to connect to WiFi network: {ssid}")
+        
+        # Check if currently in AP mode
+        was_in_ap_mode = wifi_manager.wifi_manager.ap_mode_active
+        if was_in_ap_mode:
+            logger.info(f"API: Currently in AP mode, will stop AP before connecting to {ssid}")
+        
         # Try to connect
         success = wifi_manager.wifi_manager.connect_to_network(ssid, password)
         
-        if success and save_network:
-            # Add to known networks if connection successful
-            wifi_manager.wifi_manager.add_known_network(ssid, password, priority)
-        
-        message = 'Connected successfully' if success else 'Connection failed'
-        if success and is_ap_client_request():
-            message = 'Connected successfully! Ragnar will now use this network. You can disconnect from this AP.'
+        if success:
+            logger.info(f"API: Successfully connected to {ssid}")
+            # Add to known networks if connection successful and save requested
+            if save_network:
+                wifi_manager.wifi_manager.add_known_network(ssid, password, priority)
+            
+            message = 'Connected successfully'
+            if is_ap_client_request():
+                message = 'Connected successfully! Ragnar will now use this network. You can disconnect from this AP.'
+        else:
+            logger.error(f"API: Failed to connect to {ssid}")
+            message = 'Connection failed. Please check the password and try again.'
+            if was_in_ap_mode:
+                message += ' Note: AP mode was stopped to attempt connection.'
         
         return jsonify({
             'success': success,
@@ -4210,6 +4225,8 @@ def connect_wifi():
         
     except Exception as e:
         logger.error(f"Error connecting to Wi-Fi: {e}")
+        import traceback
+        logger.error(traceback.format_exc())
         return jsonify({'success': False, 'error': str(e)}), 500
 
 @app.route('/api/wifi/disconnect', methods=['POST'])

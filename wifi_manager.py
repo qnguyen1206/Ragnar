@@ -1066,34 +1066,61 @@ class WiFiManager:
         """Connect to a specific Wi-Fi network"""
         try:
             self.logger.info(f"Connecting to network: {ssid}")
-            
-            # Check if connection already exists
-            result = subprocess.run(['nmcli', 'con', 'show', ssid], 
-                                  capture_output=True, text=True)
-            
-            if result.returncode == 0:
-                # Connection exists, try to activate it
-                self.logger.info(f"Using existing connection for {ssid}")
-                result = subprocess.run(['nmcli', 'con', 'up', ssid], 
-                                      capture_output=True, text=True, timeout=30)
+            if password:
+                self.logger.info(f"Password provided: {'*' * len(password)} (length: {len(password)})")
             else:
-                # Create new connection
-                cmd = ['nmcli', 'dev', 'wifi', 'connect', ssid]
-                if password:
-                    cmd.extend(['password', password])
-                
-                result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+                self.logger.info("No password provided (open network or saved credentials)")
+            
+            # CRITICAL: If in AP mode, stop it first before connecting to WiFi
+            if self.ap_mode_active:
+                self.logger.info("Stopping AP mode before connecting to WiFi network...")
+                self.stop_ap_mode()
+                time.sleep(2)  # Give system time to clean up AP mode
+            
+            # First, try to delete any existing connection to ensure fresh connection
+            # This prevents using old/incorrect passwords
+            delete_result = subprocess.run(['nmcli', 'con', 'delete', ssid], 
+                                         capture_output=True, text=True)
+            if delete_result.returncode == 0:
+                self.logger.info(f"Deleted existing connection for {ssid}")
+            
+            # Always create a new connection with the provided credentials
+            cmd = ['nmcli', 'dev', 'wifi', 'connect', ssid]
+            if password:
+                cmd.extend(['password', password])
+            
+            self.logger.info(f"Executing: nmcli dev wifi connect {ssid} password {'***' if password else '(none)'}")
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
             
             if result.returncode == 0:
                 # Wait a moment and verify connection
+                self.logger.info(f"Connection command succeeded, verifying connection...")
                 time.sleep(5)
-                return self.check_wifi_connection()
+                connected = self.check_wifi_connection()
+                if connected:
+                    self.logger.info(f"Successfully connected to {ssid}")
+                else:
+                    self.logger.warning(f"Connection command succeeded but verification failed for {ssid}")
+                return connected
             else:
-                self.logger.error(f"nmcli error: {result.stderr}")
+                error_msg = result.stderr.strip()
+                self.logger.error(f"nmcli connection failed for {ssid}: {error_msg}")
+                
+                # Parse common errors
+                if "Secrets were required, but not provided" in error_msg:
+                    self.logger.error("Password was required but not provided or incorrect")
+                elif "No network with SSID" in error_msg:
+                    self.logger.error(f"Network {ssid} not found in range")
+                
                 return False
                 
+        except subprocess.TimeoutExpired:
+            self.logger.error(f"Connection attempt to {ssid} timed out after 30 seconds")
+            return False
         except Exception as e:
             self.logger.error(f"Error connecting to {ssid}: {e}")
+            import traceback
+            self.logger.error(traceback.format_exc())
             return False
 
     def disconnect_wifi(self):
