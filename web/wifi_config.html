@@ -1,86 +1,143 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="en" class="dark">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Ragnar Wi-Fi Configuration</title>
-    <style>
-        * {
-            margin: 0;
-            padding: 0;
-            box-sizing: border-box;
+    <link rel="icon" href="/web/images/ragnar.ico" type="image/x-icon">
+    
+    <!-- Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    
+    <!-- Custom Tailwind Config -->
+    <script>
+        tailwind.config = {
+            darkMode: 'class',
+            theme: {
+                extend: {
+                    colors: {
+                        Ragnar: {
+                            50: '#f0f9ff',
+                            100: '#e0f2fe',
+                            200: '#bae6fd',
+                            300: '#7dd3fc',
+                            400: '#38bdf8',
+                            500: '#0ea5e9',
+                            600: '#0284c7',
+                            700: '#0369a1',
+                            800: '#075985',
+                            900: '#0c4a6e',
+                        }
+                    }
+                }
+            }
         }
-
-        body {
-            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-            min-height: 100vh;
-            padding: 20px;
+    </script>
+    
+    <style>
+        @keyframes pulse-glow {
+            0%, 100% { box-shadow: 0 0 5px rgba(14, 165, 233, 0.5); }
+            50% { box-shadow: 0 0 20px rgba(14, 165, 233, 0.8); }
+        }
+        .pulse-glow {
+            animation: pulse-glow 2s ease-in-out infinite;
+        }
+        
+        .glass {
+            background: rgba(15, 23, 42, 0.7);
+            backdrop-filter: blur(10px);
+            border: 1px solid rgba(255, 255, 255, 0.1);
         }
 
         .container {
-            max-width: 800px;
+            max-width: 1200px;
             margin: 0 auto;
-            background: white;
-            border-radius: 15px;
-            box-shadow: 0 20px 40px rgba(0,0,0,0.1);
-            padding: 30px;
+            background: rgba(15, 23, 42, 0.8);
+            backdrop-filter: blur(20px);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            border-radius: 24px;
+            box-shadow: 0 25px 50px rgba(0, 0, 0, 0.4);
+            padding: 40px;
         }
 
         .header {
             text-align: center;
-            margin-bottom: 30px;
-            color: #333;
+            margin-bottom: 40px;
+            color: white;
         }
 
         .header h1 {
             font-size: 2.5em;
             margin-bottom: 10px;
-            background: linear-gradient(45deg, #667eea, #764ba2);
+            background: linear-gradient(to right, #38bdf8, #0284c7);
             -webkit-background-clip: text;
             -webkit-text-fill-color: transparent;
+            background-clip: text;
+            font-weight: 800;
+        }
+        
+        .header p {
+            color: #94a3b8;
+            font-size: 1.1rem;
         }
 
         .status-card {
-            background: #f8f9fa;
-            border-radius: 10px;
-            padding: 20px;
+            background: rgba(15, 23, 42, 0.6);
+            backdrop-filter: blur(10px);
+            border-radius: 12px;
+            padding: 24px;
             margin-bottom: 30px;
-            border-left: 4px solid #28a745;
+            border-left: 4px solid #22c55e;
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            border-left: 4px solid #22c55e;
         }
 
         .status-card.disconnected {
-            border-left-color: #dc3545;
+            border-left-color: #ef4444;
         }
 
         .status-card.ap-mode {
-            border-left-color: #ffc107;
+            border-left-color: #f59e0b;
+        }
+        
+        .status-card p {
+            color: #e2e8f0;
+            margin-bottom: 8px;
+        }
+        
+        .status-card strong {
+            color: #f8fafc;
+        }
+        
+        .status-card span {
+            color: #94a3b8;
         }
 
         .ap-timer {
-            background: #fff3cd;
-            border: 1px solid #ffeaa7;
-            border-radius: 8px;
-            padding: 15px;
-            margin-top: 15px;
+            background: rgba(245, 158, 11, 0.1);
+            border: 1px solid rgba(245, 158, 11, 0.3);
+            border-radius: 12px;
+            padding: 20px;
+            margin-top: 20px;
             text-align: center;
+            backdrop-filter: blur(10px);
         }
 
         .timer-display {
             font-size: 2em;
             font-weight: bold;
-            color: #e17055;
+            color: #fbbf24;
             margin: 10px 0;
             font-family: 'Courier New', monospace;
         }
 
         .timer-display.urgent {
-            color: #d63031;
+            color: #f87171;
             animation: pulse 1s infinite;
         }
 
         .timer-description {
-            color: #6c757d;
+            color: #cbd5e7;
             font-size: 0.9em;
             margin-bottom: 10px;
         }
@@ -96,51 +153,98 @@
         }
 
         .section h2 {
-            color: #333;
+            color: #f8fafc;
             margin-bottom: 15px;
             padding-bottom: 10px;
-            border-bottom: 2px solid #eee;
+            border-bottom: 2px solid rgba(255, 255, 255, 0.1);
+            font-weight: 600;
         }
 
         .btn {
-            background: linear-gradient(45deg, #667eea, #764ba2);
+            background: linear-gradient(135deg, #0284c7 0%, #0369a1 100%);
             color: white;
             border: none;
             padding: 12px 24px;
-            border-radius: 8px;
+            border-radius: 10px;
             cursor: pointer;
             font-size: 16px;
+            font-weight: 600;
             transition: all 0.3s ease;
             margin: 5px;
+            box-shadow: 0 4px 12px rgba(2, 132, 199, 0.3);
         }
 
         .btn:hover {
             transform: translateY(-2px);
-            box-shadow: 0 5px 15px rgba(0,0,0,0.2);
+            box-shadow: 0 6px 16px rgba(2, 132, 199, 0.4);
+            background: linear-gradient(135deg, #0369a1 0%, #075985 100%);
         }
 
         .btn-secondary {
-            background: #6c757d;
+            background: linear-gradient(135deg, #475569 0%, #334155 100%);
+            box-shadow: 0 4px 12px rgba(71, 85, 105, 0.3);
+        }
+        
+        .btn-secondary:hover {
+            background: linear-gradient(135deg, #334155 0%, #1e293b 100%);
+            box-shadow: 0 6px 16px rgba(71, 85, 105, 0.4);
         }
 
         .btn-danger {
-            background: #dc3545;
+            background: linear-gradient(135deg, #ef4444 0%, #dc2626 100%);
+            box-shadow: 0 4px 12px rgba(239, 68, 68, 0.3);
+        }
+        
+        .btn-danger:hover {
+            background: linear-gradient(135deg, #dc2626 0%, #b91c1c 100%);
+            box-shadow: 0 6px 16px rgba(239, 68, 68, 0.4);
         }
 
         .btn-success {
-            background: #28a745;
+            background: linear-gradient(135deg, #22c55e 0%, #16a34a 100%);
+            box-shadow: 0 4px 12px rgba(34, 197, 94, 0.3);
+        }
+        
+        .btn-success:hover {
+            background: linear-gradient(135deg, #16a34a 0%, #15803d 100%);
+            box-shadow: 0 6px 16px rgba(34, 197, 94, 0.4);
+        }
+        
+        .btn:disabled {
+            opacity: 0.6;
+            cursor: not-allowed;
+            transform: none;
         }
 
         .network-list {
             max-height: 400px;
             overflow-y: auto;
-            border: 1px solid #dee2e6;
-            border-radius: 8px;
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            border-radius: 12px;
+            background: rgba(15, 23, 42, 0.4);
+        }
+        
+        .network-list::-webkit-scrollbar {
+            width: 8px;
+        }
+        
+        .network-list::-webkit-scrollbar-track {
+            background: rgba(15, 23, 42, 0.5);
+            border-radius: 4px;
+        }
+        
+        .network-list::-webkit-scrollbar-thumb {
+            background: rgba(56, 189, 248, 0.5);
+            border-radius: 4px;
+        }
+        
+        .network-list::-webkit-scrollbar-thumb:hover {
+            background: rgba(56, 189, 248, 0.8);
         }
 
         .network-item {
             padding: 15px;
-            border-bottom: 1px solid #eee;
+            border-bottom: 1px solid rgba(255, 255, 255, 0.05);
             display: flex;
             justify-content: space-between;
             align-items: center;
@@ -148,7 +252,7 @@
         }
 
         .network-item:hover {
-            background-color: #f8f9fa;
+            background-color: rgba(56, 189, 248, 0.1);
         }
 
         .network-item:last-child {
@@ -161,12 +265,12 @@
 
         .network-name {
             font-weight: bold;
-            color: #333;
+            color: #f8fafc;
         }
 
         .network-details {
             font-size: 0.9em;
-            color: #666;
+            color: #94a3b8;
             margin-top: 5px;
         }
 
@@ -178,14 +282,14 @@
         .signal-bar {
             width: 100%;
             height: 6px;
-            background: #e9ecef;
+            background: rgba(15, 23, 42, 0.6);
             border-radius: 3px;
             overflow: hidden;
         }
 
         .signal-fill {
             height: 100%;
-            background: linear-gradient(90deg, #dc3545, #ffc107, #28a745);
+            background: linear-gradient(90deg, #ef4444, #f59e0b, #22c55e);
             transition: width 0.3s ease;
         }
 
@@ -195,23 +299,32 @@
 
         .form-group label {
             display: block;
-            margin-bottom: 5px;
-            font-weight: bold;
-            color: #333;
+            margin-bottom: 8px;
+            font-weight: 600;
+            color: #f8fafc;
         }
 
         .form-group input {
             width: 100%;
             padding: 12px;
-            border: 2px solid #dee2e6;
-            border-radius: 8px;
+            border: 1px solid rgba(255, 255, 255, 0.2);
+            border-radius: 10px;
             font-size: 16px;
-            transition: border-color 0.3s ease;
+            transition: all 0.3s ease;
+            background: rgba(15, 23, 42, 0.6);
+            color: white;
+            backdrop-filter: blur(10px);
         }
 
         .form-group input:focus {
             outline: none;
-            border-color: #667eea;
+            border-color: #38bdf8;
+            box-shadow: 0 0 0 3px rgba(56, 189, 248, 0.2);
+            background: rgba(15, 23, 42, 0.8);
+        }
+        
+        .form-group input::placeholder {
+            color: #64748b;
         }
 
         .modal {
@@ -222,56 +335,79 @@
             top: 0;
             width: 100%;
             height: 100%;
-            background-color: rgba(0,0,0,0.5);
+            background-color: rgba(0, 0, 0, 0.8);
         }
 
         .modal-content {
-            background-color: white;
+            background: rgba(15, 23, 42, 0.95);
+            backdrop-filter: blur(20px);
+            border: 1px solid rgba(255, 255, 255, 0.1);
             margin: 10% auto;
             padding: 30px;
-            border-radius: 15px;
+            border-radius: 20px;
             width: 90%;
             max-width: 500px;
-            box-shadow: 0 20px 40px rgba(0,0,0,0.2);
+            box-shadow: 0 25px 50px rgba(0, 0, 0, 0.5);
+            color: white;
+        }
+        
+        .modal-content h2 {
+            color: #f8fafc;
+            margin-bottom: 20px;
         }
 
         .close {
-            color: #aaa;
+            color: #94a3b8;
             float: right;
             font-size: 28px;
             font-weight: bold;
             cursor: pointer;
+            transition: color 0.2s;
         }
 
         .close:hover {
-            color: #333;
+            color: #f8fafc;
         }
 
         .alert {
-            padding: 15px;
+            padding: 15px 20px;
             margin-bottom: 20px;
-            border-radius: 8px;
+            border-radius: 12px;
             display: none;
+            backdrop-filter: blur(10px);
+            border: 1px solid rgba(255, 255, 255, 0.1);
         }
 
         .alert-success {
-            background-color: #d4edda;
-            border: 1px solid #c3e6cb;
-            color: #155724;
+            background: rgba(34, 197, 94, 0.2);
+            border-color: rgba(34, 197, 94, 0.3);
+            color: #86efac;
         }
 
         .alert-danger {
-            background-color: #f8d7da;
-            border: 1px solid #f5c6cb;
-            color: #721c24;
+            background: rgba(239, 68, 68, 0.2);
+            border-color: rgba(239, 68, 68, 0.3);
+            color: #fca5a5;
+        }
+        
+        .alert-info {
+            background: rgba(56, 189, 248, 0.2);
+            border-color: rgba(56, 189, 248, 0.3);
+            color: #7dd3fc;
+        }
+        
+        .alert-warning {
+            background: rgba(245, 158, 11, 0.2);
+            border-color: rgba(245, 158, 11, 0.3);
+            color: #fcd34d;
         }
 
         .loading {
             display: inline-block;
             width: 20px;
             height: 20px;
-            border: 3px solid #f3f3f3;
-            border-top: 3px solid #667eea;
+            border: 3px solid rgba(255, 255, 255, 0.3);
+            border-top: 3px solid white;
             border-radius: 50%;
             animation: spin 1s linear infinite;
             margin-right: 10px;
@@ -287,14 +423,15 @@
             margin-right: 10px;
         }
 
-        .connected { color: #28a745; }
-        .disconnected { color: #dc3545; }
-        .ap-mode { color: #ffc107; }
+        .connected { color: #22c55e; }
+        .disconnected { color: #ef4444; }
+        .ap-mode { color: #f59e0b; }
 
         @media (max-width: 768px) {
             .container {
                 padding: 20px;
                 margin: 10px;
+                border-radius: 20px;
             }
             
             .header h1 {
@@ -313,9 +450,10 @@
         }
     </style>
 </head>
-<body>
+<body class="bg-gradient-to-br from-slate-900 via-slate-800 to-slate-900 text-white min-h-screen p-5">
     <div class="container">
         <div class="header">
+            <img src="/web/images/ragnar.ico" alt="Ragnar" style="width: 64px; height: 64px; margin: 0 auto 16px; display: block; filter: drop-shadow(0 5px 15px rgba(14, 165, 233, 0.4));">
             <h1>Ragnar Wi-Fi Manager</h1>
             <p>Configure your network connection</p>
         </div>
@@ -574,9 +712,9 @@
                 // Handle instructional networks differently
                 if (network.instruction) {
                     return `
-                        <div class="network-item" style="background: rgba(255, 193, 7, 0.1); border-left: 4px solid #ffc107;">
+                        <div class="network-item" style="background: rgba(245, 158, 11, 0.1); border-left: 4px solid #f59e0b;">
                             <div class="network-info">
-                                <div class="network-name" style="color: #856404;">${network.ssid}</div>
+                                <div class="network-name" style="color: #fbbf24;">${network.ssid}</div>
                             </div>
                         </div>
                     `;
@@ -896,21 +1034,21 @@
             const manualEntryHtml = `
                 <div id="manual-entry-section" class="section" style="margin-top: 20px;">
                     <h2>Manual Network Entry</h2>
-                    <p style="color: #666; margin-bottom: 15px;">
+                    <p style="color: #94a3b8; margin-bottom: 15px;">
                         Enter network details manually if your network doesn't appear in the scan.
                     </p>
-                    <div id="manual-entry" style="padding: 20px; background: rgba(102, 126, 234, 0.1); border-radius: 8px; border: 1px solid rgba(102, 126, 234, 0.3);">
+                    <div id="manual-entry" style="padding: 24px; background: rgba(56, 189, 248, 0.1); border-radius: 12px; border: 1px solid rgba(56, 189, 248, 0.2); backdrop-filter: blur(10px);">
                         <div class="form-group">
                             <label for="manual-ssid">Network Name (SSID):</label>
-                            <input type="text" id="manual-ssid" placeholder="Enter network name" style="width: 100%; padding: 10px; border: 1px solid #ddd; border-radius: 5px;">
+                            <input type="text" id="manual-ssid" placeholder="Enter network name">
                         </div>
                         <div class="form-group">
                             <label for="manual-password">Password:</label>
-                            <input type="password" id="manual-password" placeholder="Enter password (leave blank for open networks)" style="width: 100%; padding: 10px; border: 1px solid #ddd; border-radius: 5px;">
+                            <input type="password" id="manual-password" placeholder="Enter password (leave blank for open networks)">
                         </div>
                         <div class="form-group">
                             <label for="manual-priority">Priority (1-10):</label>
-                            <input type="number" id="manual-priority" value="5" min="1" max="10" style="width: 100px; padding: 10px; border: 1px solid #ddd; border-radius: 5px;">
+                            <input type="number" id="manual-priority" value="5" min="1" max="10" style="width: 120px;">
                         </div>
                         <button onclick="connectManualNetwork()" class="btn btn-success" style="margin-right: 10px;">
                             <span id="manual-connect-loading" style="display: none;" class="loading"></span>
