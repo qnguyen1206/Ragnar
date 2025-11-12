@@ -2949,6 +2949,69 @@ def trigger_vulnerability_scan_for_threat_intel():
             'suggestion': 'Try using the Manual mode to trigger vulnerability scans'
         }), 500
 
+@app.route('/api/vulnerability-scan/history', methods=['GET'])
+def get_vulnerability_scan_history():
+    """Get incremental scan history statistics"""
+    try:
+        # Access the nmap_vuln_scanner from shared_data
+        vuln_scanner = getattr(shared_data, 'nmap_vuln_scanner', None)
+        
+        if not vuln_scanner:
+            return jsonify({
+                'error': 'Vulnerability scanner not initialized',
+                'stats': {
+                    'total_macs_tracked': 0,
+                    'total_ports_scanned': 0,
+                    'average_ports_per_mac': 0,
+                    'mac_details': {}
+                }
+            }), 200
+        
+        stats = vuln_scanner.get_scan_history_stats()
+        
+        return jsonify({
+            'success': True,
+            'stats': stats,
+            'message': f"Tracking {stats['total_macs_tracked']} MAC addresses with {stats['total_ports_scanned']} scanned ports"
+        })
+        
+    except Exception as e:
+        logger.error(f"Error getting scan history: {e}")
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/vulnerability-scan/history/reset', methods=['POST'])
+def reset_vulnerability_scan_history():
+    """Reset incremental scan history for specific MAC or all"""
+    try:
+        data = request.get_json() if request.is_json else {}
+        mac = data.get('mac', None)
+        
+        # Access the nmap_vuln_scanner from shared_data
+        vuln_scanner = getattr(shared_data, 'nmap_vuln_scanner', None)
+        
+        if not vuln_scanner:
+            return jsonify({
+                'error': 'Vulnerability scanner not initialized'
+            }), 500
+        
+        success = vuln_scanner.reset_scan_history(mac)
+        
+        if mac:
+            message = f"Reset scan history for MAC {mac}" if success else f"MAC {mac} not found in history"
+        else:
+            message = "Reset ALL scan history - next scan will be a full rescan"
+        
+        return jsonify({
+            'success': success,
+            'message': message,
+            'mac': mac,
+            'timestamp': datetime.now().isoformat()
+        })
+        
+    except Exception as e:
+        logger.error(f"Error resetting scan history: {e}")
+        return jsonify({'error': str(e)}), 500
+
 # ============================================================================
 # REAL-TIME SCANNING ENDPOINTS
 # ============================================================================
