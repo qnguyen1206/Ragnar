@@ -806,12 +806,21 @@ function displayStableNetworkTable(data) {
     
     if (!tableBody) return;
     
+    // Save all existing deep scan button states before clearing table
+    const existingRows = tableBody.querySelectorAll('tr[data-ip]');
+    existingRows.forEach(row => {
+        const ip = row.getAttribute('data-ip');
+        if (ip) {
+            saveDeepScanButtonState(ip);
+        }
+    });
+    
     tableBody.innerHTML = '';
     
     if (!data.hosts || data.hosts.length === 0) {
         tableBody.innerHTML = `
             <tr>
-                <td colspan="7" class="text-center py-8 text-gray-400">
+                <td colspan="8" class="text-center py-8 text-gray-400">
                     No hosts discovered yet. Network scanning is running in the background.
                 </td>
             </tr>
@@ -865,22 +874,38 @@ function displayStableNetworkTable(data) {
             <td class="py-3 px-4">${vulnDisplay}</td>
             <td class="py-3 px-4">${lastScanDisplay}</td>
             <td class="py-3 px-4">
-                <button onclick="console.log('🖱️ Button clicked for IP:', '${host.ip}', 'Type:', typeof '${host.ip}'); console.log('🖱️ Host object:', ${JSON.stringify(host).replace(/"/g, '&quot;')}); triggerDeepScan('${host.ip}')" 
-                        id="deep-scan-btn-${host.ip.replace(/\./g, '-')}"
-                        class="deep-scan-button bg-purple-600 hover:bg-purple-700 text-white text-xs px-3 py-1 rounded transition-all duration-300"
-                        title="Scan all 65535 ports with TCP connect (-sT). IP: ${host.ip}">
-                    Deep Scan
-                </button>
+                <div class="flex space-x-2">
+                    <button onclick="scanSingleHost('${host.ip}')"
+                            class="bg-blue-600 hover:bg-blue-700 px-2 py-1 rounded text-xs">
+                        Rescan
+                    </button>
+                    <button onclick="console.log('🖱️ Button clicked for IP:', '${host.ip}', 'Type:', typeof '${host.ip}'); console.log('🖱️ Host object:', ${JSON.stringify(host).replace(/"/g, '&quot;')}); triggerDeepScan('${host.ip}')" 
+                            id="deep-scan-btn-${host.ip.replace(/\./g, '-')}"
+                            data-scan-status="idle"
+                            class="deep-scan-button bg-purple-600 hover:bg-purple-700 text-white text-xs px-3 py-1 rounded transition-all duration-300"
+                            title="Scan all 65535 ports with TCP connect (-sT). IP: ${host.ip}">
+                        Deep Scan
+                    </button>
+                </div>
             </td>
         `;
         
+        // Set data-ip attribute for state management
+        row.setAttribute('data-ip', host.ip);
+        
         tableBody.appendChild(row);
+        
+        // Restore deep scan button state after adding to DOM
+        restoreDeepScanButtonState(host.ip);
     });
     
     // Update host count
     if (hostCountSpan) {
         hostCountSpan.textContent = `${data.hosts.length} hosts`;
     }
+    
+    // Cleanup old button states for removed hosts
+    cleanupOldDeepScanStates();
 }
 
 function formatTimeAgo(timeString) {
@@ -924,6 +949,65 @@ let currentScanState = {
     currentTarget: '',
     startTime: null
 };
+
+// Deep scan button state management
+let deepScanButtonStates = new Map(); // Map<IP, {status, text, classes, disabled}>
+
+function saveDeepScanButtonState(ip) {
+    const buttonId = `deep-scan-btn-${ip.replace(/\./g, '-')}`;
+    const button = document.getElementById(buttonId);
+    
+    if (button) {
+        const state = {
+            status: button.dataset.scanStatus || 'idle',
+            text: button.textContent,
+            classes: button.className,
+            disabled: button.disabled,
+            title: button.title
+        };
+        deepScanButtonStates.set(ip, state);
+        console.log(`💾 Saved deep scan button state for ${ip}:`, state);
+    }
+}
+
+function restoreDeepScanButtonState(ip) {
+    const buttonId = `deep-scan-btn-${ip.replace(/\./g, '-')}`;
+    const button = document.getElementById(buttonId);
+    const state = deepScanButtonStates.get(ip);
+    
+    if (button && state) {
+        button.textContent = state.text;
+        button.className = state.classes;
+        button.disabled = state.disabled;
+        button.title = state.title;
+        button.dataset.scanStatus = state.status;
+        console.log(`🔄 Restored deep scan button state for ${ip}:`, state);
+    } else if (button && !state) {
+        console.log(`⚠️ No saved state found for ${ip}, keeping default button state`);
+    }
+}
+
+function clearDeepScanButtonState(ip) {
+    if (deepScanButtonStates.has(ip)) {
+        deepScanButtonStates.delete(ip);
+        console.log(`🗑️ Cleared deep scan button state for ${ip}`);
+    }
+}
+
+function cleanupOldDeepScanStates() {
+    // Remove states for IPs that no longer have buttons in the DOM
+    let cleanedCount = 0;
+    for (const [ip] of deepScanButtonStates) {
+        const buttonId = `deep-scan-btn-${ip.replace(/\./g, '-')}`;
+        if (!document.getElementById(buttonId)) {
+            deepScanButtonStates.delete(ip);
+            cleanedCount++;
+        }
+    }
+    if (cleanedCount > 0) {
+        console.log(`🧹 Cleaned up ${cleanedCount} old deep scan button states`);
+    }
+}
 
 // Real-time scanning control functions
 async function startRealtimeScan() {
@@ -1100,6 +1184,19 @@ async function triggerDeepScan(ip) {
             return;
         }
         
+        // Update button immediately to show scan is starting
+        const buttonId = `deep-scan-btn-${ip.replace(/\./g, '-')}`;
+        const button = document.getElementById(buttonId);
+        if (button) {
+            button.classList.remove('bg-purple-600', 'hover:bg-purple-700');
+            button.classList.add('bg-blue-600', 'cursor-wait');
+            button.disabled = true;
+            button.textContent = 'Initiating...';
+            button.dataset.scanStatus = 'initiating';
+            // Save the updated state
+            saveDeepScanButtonState(ip);
+        }
+        
         addConsoleMessage(`Starting deep scan on ${ip}...`, 'info');
         
         console.log('📤 Sending POST request to /api/scan/deep');
@@ -1122,10 +1219,31 @@ async function triggerDeepScan(ip) {
             addConsoleMessage(`Deep scan initiated for ${ip} - scanning all 65535 ports`, 'success');
         } else {
             addConsoleMessage(`Failed to start deep scan: ${data.message}`, 'error');
+            // Reset button on failure
+            if (button) {
+                button.classList.remove('bg-blue-600', 'cursor-wait');
+                button.classList.add('bg-purple-600', 'hover:bg-purple-700');
+                button.disabled = false;
+                button.textContent = 'Deep Scan';
+                button.dataset.scanStatus = 'idle';
+                clearDeepScanButtonState(ip);
+            }
         }
     } catch (error) {
         console.error('Error triggering deep scan:', error);
         addConsoleMessage(`Error starting deep scan: ${error.message}`, 'error');
+        
+        // Reset button on error
+        const buttonId = `deep-scan-btn-${ip.replace(/\./g, '-')}`;
+        const button = document.getElementById(buttonId);
+        if (button) {
+            button.classList.remove('bg-blue-600', 'cursor-wait');
+            button.classList.add('bg-purple-600', 'hover:bg-purple-700');
+            button.disabled = false;
+            button.textContent = 'Deep Scan';
+            button.dataset.scanStatus = 'idle';
+            clearDeepScanButtonState(ip);
+        }
     }
 }
 
@@ -1144,6 +1262,9 @@ function handleDeepScanUpdate(data) {
                 button.classList.add('bg-blue-600', 'cursor-wait');
                 button.disabled = true;
                 button.textContent = 'Scan started';
+                button.dataset.scanStatus = 'scanning';
+                // Save the updated state
+                saveDeepScanButtonState(ip);
             }
             break;
         
@@ -1161,6 +1282,9 @@ function handleDeepScanUpdate(data) {
                     const service = data.service;
                     button.textContent = `Port ${port} found`;
                 }
+                button.dataset.scanStatus = 'scanning';
+                // Save the updated state
+                saveDeepScanButtonState(ip);
             }
             break;
             
@@ -1182,13 +1306,21 @@ function handleDeepScanUpdate(data) {
                 button.classList.add('bg-green-600');
                 button.textContent = `✅ ${portCount} ports`;
                 button.disabled = true;
+                button.dataset.scanStatus = 'completed';
+                // Save the updated state
+                saveDeepScanButtonState(ip);
                 
                 // Reset button after 3 seconds
                 setTimeout(() => {
-                    button.classList.remove('bg-green-600');
-                    button.classList.add('bg-purple-600', 'hover:bg-purple-700');
-                    button.textContent = 'Deep Scan';
-                    button.disabled = false;
+                    if (document.getElementById(buttonId)) {
+                        button.classList.remove('bg-green-600');
+                        button.classList.add('bg-purple-600', 'hover:bg-purple-700');
+                        button.textContent = 'Deep Scan';
+                        button.disabled = false;
+                        button.dataset.scanStatus = 'idle';
+                        // Clear the saved state since it's back to default
+                        clearDeepScanButtonState(ip);
+                    }
                 }, 3000);
             }
             
@@ -1207,13 +1339,21 @@ function handleDeepScanUpdate(data) {
                 button.classList.add('bg-red-600');
                 button.textContent = '❌ Error';
                 button.disabled = true;
+                button.dataset.scanStatus = 'error';
+                // Save the updated state
+                saveDeepScanButtonState(ip);
                 
                 // Reset button after 3 seconds
                 setTimeout(() => {
-                    button.classList.remove('bg-red-600');
-                    button.classList.add('bg-purple-600', 'hover:bg-purple-700');
-                    button.textContent = 'Deep Scan';
-                    button.disabled = false;
+                    if (document.getElementById(buttonId)) {
+                        button.classList.remove('bg-red-600');
+                        button.classList.add('bg-purple-600', 'hover:bg-purple-700');
+                        button.textContent = 'Deep Scan';
+                        button.disabled = false;
+                        button.dataset.scanStatus = 'idle';
+                        // Clear the saved state since it's back to default
+                        clearDeepScanButtonState(ip);
+                    }
                 }, 3000);
             }
             break;
@@ -1681,10 +1821,19 @@ function renderHostRow(normalized) {
         <td class="py-3 px-4 text-sm">${formatVulnerabilityCell(normalized)}</td>
         <td class="py-3 px-4 text-sm">${formatLastScanCell(normalized.lastScan)}</td>
         <td class="py-3 px-4">
-            <button data-ip="${ip}" onclick="scanSingleHost(this.dataset.ip)"
-                    class="bg-blue-600 hover:bg-blue-700 px-2 py-1 rounded text-xs">
-                Rescan
-            </button>
+            <div class="flex space-x-2">
+                <button data-ip="${ip}" onclick="scanSingleHost(this.dataset.ip)"
+                        class="bg-blue-600 hover:bg-blue-700 px-2 py-1 rounded text-xs">
+                    Rescan
+                </button>
+                <button onclick="triggerDeepScan('${normalized.ip}')" 
+                        id="deep-scan-btn-${normalized.ip.replace(/\./g, '-')}"
+                        data-scan-status="idle"
+                        class="deep-scan-button bg-purple-600 hover:bg-purple-700 text-white text-xs px-3 py-1 rounded transition-all duration-300"
+                        title="Scan all 65535 ports with TCP connect (-sT). IP: ${normalized.ip}">
+                    Deep Scan
+                </button>
+            </div>
         </td>
     `;
 }
@@ -1718,6 +1867,12 @@ function updateHostInTable(hostData) {
 
     const selector = `tr[data-ip="${escapeSelector(normalized.ip)}"]`;
     let row = tableBody.querySelector(selector);
+    
+    // Save deep scan button state before updating row
+    if (row) {
+        saveDeepScanButtonState(normalized.ip);
+    }
+    
     if (!row) {
         row = document.createElement('tr');
         row.setAttribute('data-ip', normalized.ip);
@@ -1726,6 +1881,10 @@ function updateHostInTable(hostData) {
     }
 
     row.innerHTML = renderHostRow(normalized);
+    
+    // Restore deep scan button state after updating row
+    restoreDeepScanButtonState(normalized.ip);
+    
     updateHostCountDisplay();
 }
 
@@ -3914,6 +4073,15 @@ function displayNetworkTable(data) {
         return;
     }
 
+    // Save all existing deep scan button states before clearing table
+    const existingRows = tableBody.querySelectorAll('tr[data-ip]');
+    existingRows.forEach(row => {
+        const ip = row.getAttribute('data-ip');
+        if (ip) {
+            saveDeepScanButtonState(ip);
+        }
+    });
+
     tableBody.innerHTML = '';
 
     const entries = Array.isArray(data) ? data : (data && Array.isArray(data.hosts) ? data.hosts : []);
@@ -3941,9 +4109,15 @@ function displayNetworkTable(data) {
         row.className = 'border-b border-slate-700 hover:bg-slate-700/50 transition-colors';
         row.innerHTML = renderHostRow(normalized);
         tableBody.appendChild(row);
+        
+        // Restore deep scan button state after adding to DOM
+        restoreDeepScanButtonState(normalized.ip);
     });
 
     updateHostCountDisplay();
+    
+    // Cleanup old button states for removed hosts
+    cleanupOldDeepScanStates();
 }
 
 function displayCredentialsTable(data) {
@@ -5538,6 +5712,15 @@ window.exportNetkbEntry = exportNetkbEntry;
 window.researchEntry = researchEntry;
 window.researchVulnerability = researchVulnerability;
 window.exploitVulnerability = exploitVulnerability;
+
+// Deep Scan Functions
+window.triggerDeepScan = triggerDeepScan;
+window.testDeepScan = testDeepScan;
+
+// Debug Functions
+window.debugDeepScanStates = function() {
+    console.log('Current deep scan button states:', Object.fromEntries(deepScanButtonStates));
+};
 
 // Threat Intelligence Functions
 window.loadThreatIntelData = loadThreatIntelData;
