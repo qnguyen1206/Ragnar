@@ -286,6 +286,9 @@ def update_netkb_entry(ip, hostname, mac, is_alive):
                     row['Hostnames'] = ';'.join(sorted(set(existing_hostnames)))
 
                 row['Alive'] = alive_value
+                # CRITICAL: NEVER clear the Ports field here!
+                # Ports are managed by scanning.py - we only update Alive/MAC/Hostname
+                # Preserve existing ports to prevent data loss
                 updated_row = row
                 break
 
@@ -299,7 +302,10 @@ def update_netkb_entry(ip, hostname, mac, is_alive):
                 # Don't generate pseudo MAC - let ARP cache provide real MAC addresses
                 new_row['MAC Address'] = ''
             new_row['Alive'] = alive_value
-            new_row['Ports'] = ''
+            # CRITICAL: Don't set Ports to '' - preserve existing ports if they exist
+            # The Ports field should only be updated by scanning.py during actual port scans
+            # Leave it empty for new entries, but scanning.py will populate it
+            new_row['Ports'] = new_row.get('Ports', '')  # Preserve if exists, empty if new
             rows.append(new_row)
             updated_row = new_row
 
