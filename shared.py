@@ -923,13 +923,41 @@ class SharedData:
             return self.latest_scan_results
     
     def read_data(self):
-        """Read data from the CSV file."""
+        """Read data from the CSV file with robust error handling."""
         self.initialize_csv()  # Ensure CSV is initialized with correct headers
         data = []
-        with open(self.netkbfile, 'r') as file:
-            reader = csv.DictReader(file)
-            for row in reader:
-                data.append(row)
+        try:
+            with open(self.netkbfile, 'r', newline='', encoding='utf-8') as file:
+                reader = csv.DictReader(file)
+                expected_fieldnames = reader.fieldnames
+                
+                for line_num, row in enumerate(reader, start=2):  # Start at 2 (after header)
+                    try:
+                        # Check if row has extra fields (malformed)
+                        if len(row) > len(expected_fieldnames) if expected_fieldnames else False:
+                            logger.warning(f"Skipping malformed row {line_num} in netkb.csv: too many fields")
+                            continue
+                        
+                        # Only add rows with valid MAC address
+                        if row.get("MAC Address") and row["MAC Address"].strip():
+                            data.append(row)
+                    except Exception as row_error:
+                        logger.warning(f"Error reading row {line_num} in netkb.csv: {row_error}")
+                        continue
+                        
+        except Exception as e:
+            logger.error(f"Error reading netkb.csv: {e}")
+            # If file is corrupted, try to restore from backup
+            backup_file = f"{self.netkbfile}.backup"
+            if os.path.exists(backup_file):
+                logger.info(f"Attempting to restore from backup: {backup_file}")
+                try:
+                    import shutil
+                    shutil.copy2(backup_file, self.netkbfile)
+                    return self.read_data()  # Retry reading
+                except Exception as restore_error:
+                    logger.error(f"Could not restore from backup: {restore_error}")
+        
         return data
 
     def write_data(self, data):
@@ -938,15 +966,43 @@ class SharedData:
             actions = json.load(file)
         action_names = [action["b_class"] for action in actions if "b_class" in action]
 
-        # Read existing CSV file if it exists
+        # Read existing CSV file if it exists with error handling
+        existing_headers = []
+        existing_data = []
+        
         if os.path.exists(self.netkbfile):
-            with open(self.netkbfile, 'r') as file:
-                reader = csv.DictReader(file)
-                existing_headers = list(reader.fieldnames) if reader.fieldnames else []
-                existing_data = list(reader)
-        else:
-            existing_headers = []
-            existing_data = []
+            try:
+                with open(self.netkbfile, 'r', newline='', encoding='utf-8') as file:
+                    reader = csv.DictReader(file)
+                    existing_headers = list(reader.fieldnames) if reader.fieldnames else []
+                    
+                    for line_num, row in enumerate(reader, start=2):
+                        try:
+                            # Skip malformed rows
+                            if len(row) > len(existing_headers) if existing_headers else False:
+                                logger.warning(f"Skipping malformed row {line_num} during write_data")
+                                continue
+                            existing_data.append(row)
+                        except Exception as row_error:
+                            logger.warning(f"Error reading row {line_num}: {row_error}")
+                            continue
+                            
+            except Exception as read_error:
+                logger.error(f"Error reading netkbfile for write_data: {read_error}")
+                # Try backup if available
+                backup_file = f"{self.netkbfile}.backup"
+                if os.path.exists(backup_file):
+                    logger.info("Attempting to restore from backup before write")
+                    try:
+                        import shutil
+                        shutil.copy2(backup_file, self.netkbfile)
+                        # Retry read
+                        with open(self.netkbfile, 'r', newline='', encoding='utf-8') as file:
+                            reader = csv.DictReader(file)
+                            existing_headers = list(reader.fieldnames) if reader.fieldnames else []
+                            existing_data = list(reader)
+                    except Exception as restore_error:
+                        logger.error(f"Could not restore from backup: {restore_error}")
 
         # Check for missing action columns and add them
         new_headers = ["MAC Address", "IPs", "Hostnames", "Alive", "Ports", "Failed_Pings"] + action_names

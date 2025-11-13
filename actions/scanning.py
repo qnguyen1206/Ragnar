@@ -440,32 +440,59 @@ class NetworkScanner:
                 existing_action_columns = []
                 existing_headers = None
 
-                # Read existing CSV file
+                # Read existing CSV file with robust error handling
                 if os.path.exists(netkbfile):
-                    with open(netkbfile, 'r') as file:
-                        reader = csv.DictReader(file)
-                        existing_headers = list(reader.fieldnames) if reader.fieldnames else []
-                        # Preserve deep scan metadata columns alongside action columns
-                        existing_action_columns = [header for header in existing_headers if header not in ["MAC Address", "IPs", "Hostnames", "Alive", "Ports", "Failed_Pings", "Deep_Scanned", "Deep_Scan_Ports"]]
-                        for row in reader:
-                            mac = row["MAC Address"]
-                            ips = row["IPs"].split(';')
-                            hostnames = row["Hostnames"].split(';')
-                            alive = row["Alive"]
-                            ports = row["Ports"].split(';')
-                            failed_pings = int(row.get("Failed_Pings", "0"))  # Default to 0 if missing
-                            netkb_entries[mac] = {
-                                'IPs': set(ips) if ips[0] else set(),
-                                'Hostnames': set(hostnames) if hostnames[0] else set(),
-                                'Alive': alive,
-                                'Ports': set(ports) if ports[0] else set(),
-                                'Failed_Pings': failed_pings,
-                                # Preserve deep scan metadata
-                                'Deep_Scanned': row.get("Deep_Scanned", ""),
-                                'Deep_Scan_Ports': row.get("Deep_Scan_Ports", "")
-                            }
-                            for action in existing_action_columns:
-                                netkb_entries[mac][action] = row.get(action, "")
+                    try:
+                        with open(netkbfile, 'r', newline='', encoding='utf-8') as file:
+                            reader = csv.DictReader(file)
+                            existing_headers = list(reader.fieldnames) if reader.fieldnames else []
+                            # Preserve deep scan metadata columns alongside action columns
+                            existing_action_columns = [header for header in existing_headers if header not in ["MAC Address", "IPs", "Hostnames", "Alive", "Ports", "Failed_Pings", "Deep_Scanned", "Deep_Scan_Ports"]]
+                            
+                            for line_num, row in enumerate(reader, start=2):
+                                try:
+                                    # Skip malformed rows
+                                    if not row.get("MAC Address") or not row["MAC Address"].strip():
+                                        self.logger.warning(f"Skipping row {line_num} with empty MAC address")
+                                        continue
+                                    
+                                    mac = row["MAC Address"]
+                                    ips = row.get("IPs", "").split(';')
+                                    hostnames = row.get("Hostnames", "").split(';')
+                                    alive = row.get("Alive", "0")
+                                    ports = row.get("Ports", "").split(';')
+                                    failed_pings = int(row.get("Failed_Pings", "0"))  # Default to 0 if missing
+                                    
+                                    netkb_entries[mac] = {
+                                        'IPs': set(ips) if ips[0] else set(),
+                                        'Hostnames': set(hostnames) if hostnames[0] else set(),
+                                        'Alive': alive,
+                                        'Ports': set(ports) if ports[0] else set(),
+                                        'Failed_Pings': failed_pings,
+                                        # Preserve deep scan metadata
+                                        'Deep_Scanned': row.get("Deep_Scanned", ""),
+                                        'Deep_Scan_Ports': row.get("Deep_Scan_Ports", "")
+                                    }
+                                    for action in existing_action_columns:
+                                        netkb_entries[mac][action] = row.get(action, "")
+                                        
+                                except Exception as row_error:
+                                    self.logger.warning(f"Error parsing row {line_num} in netkb: {row_error}")
+                                    continue
+                                    
+                    except Exception as read_error:
+                        self.logger.error(f"Error reading netkb file: {read_error}")
+                        # Try to restore from backup
+                        backup_file = f"{netkbfile}.backup"
+                        if os.path.exists(backup_file):
+                            self.logger.info("Attempting to restore netkb from backup")
+                            try:
+                                import shutil
+                                shutil.copy2(backup_file, netkbfile)
+                                # Retry reading with recursive call
+                                return self.update_netkb(netkbfile, netkb_data, alive_macs)
+                            except Exception as restore_error:
+                                self.logger.error(f"Could not restore from backup: {restore_error}")
 
                 ip_to_mac = {}  # Dictionary to track IP to MAC associations
 
