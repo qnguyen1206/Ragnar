@@ -4269,6 +4269,15 @@ def reset_vulnerabilities():
             except Exception as e:
                 logger.error(f"Error clearing vulnerability scan files: {e}")
         
+        # CRITICAL: Clear scan history cache so all hosts will be rescanned
+        scanned_ports_history_file = os.path.join('data', 'output', 'vulnerabilities', 'scanned_ports_history.json')
+        if os.path.exists(scanned_ports_history_file):
+            try:
+                os.remove(scanned_ports_history_file)
+                logger.info("✅ Cleared scan history cache - all hosts will be rescanned on next vulnerability scan")
+            except Exception as e:
+                logger.error(f"Error clearing scan history cache: {e}")
+        
         # Reset vulnerability counter
         shared_data.vulnnbr = 0
         
