@@ -70,8 +70,11 @@ class WiFiManager:
         self.available_networks = []
         self.current_ssid = None
         # Failsafe cycle tracking (cycles with no WiFi and no AP clients)
+        # This counter tracks prolonged disconnections (>5 minutes each) to prevent endless loops
+        # It will only trigger a reboot after many consecutive long-term failures
         self.no_connection_cycles = 0
-        self.failsafe_cycle_limit = shared_data.config.get('wifi_failsafe_cycle_limit', 10)
+        self.failsafe_cycle_limit = shared_data.config.get('wifi_failsafe_cycle_limit', 20)  # Increased from 10 to 20 for safety
+        self.failsafe_disconnect_threshold = 300  # 5 minutes of disconnection before counting as a cycle
         
         # AP mode settings
         self.ap_ssid = shared_data.config.get('wifi_ap_ssid', 'Ragnar')
@@ -438,13 +441,28 @@ class WiFiManager:
                     self.logger.warning("Endless Loop: Wi-Fi connection lost!")
                     self._save_connection_state(None, False)
                     self.wifi_validation_failures = 0  # Reset validation failures
-                    # Increment failsafe cycle counter when connection is lost and AP not active yet
+                    
+                    # Only increment failsafe counter if we're in a problematic state:
+                    # - Not in AP mode (as AP mode is the normal recovery mechanism)
+                    # - Have been disconnected for an extended period (default: 5 minutes)
                     if not self.ap_mode_active:
-                        self.no_connection_cycles += 1
-                        self.logger.warning(f"Failsafe counter increment (loss): {self.no_connection_cycles}/{self.failsafe_cycle_limit}")
-                        if self.no_connection_cycles >= self.failsafe_cycle_limit:
-                            self.logger.error("Failsafe threshold reached during monitoring - initiating reboot")
-                            self._failsafe_reboot()
+                        # Only count this as a failure cycle if we've been disconnected for a while
+                        # This prevents momentary connection blips from triggering failsafe
+                        if not hasattr(self, '_disconnect_timestamp'):
+                            self._disconnect_timestamp = current_time
+                            self.logger.info("Endless Loop: Connection lost, starting disconnect timer")
+                        else:
+                            disconnect_duration = current_time - self._disconnect_timestamp
+                            # Only count as a cycle failure if disconnected for more than threshold (default 5 minutes)
+                            if disconnect_duration > self.failsafe_disconnect_threshold:
+                                self.no_connection_cycles += 1
+                                self.logger.warning(f"Failsafe counter increment (disconnected for {disconnect_duration:.0f}s): {self.no_connection_cycles}/{self.failsafe_cycle_limit}")
+                                self._disconnect_timestamp = current_time  # Reset for next cycle
+                                
+                                if self.no_connection_cycles >= self.failsafe_cycle_limit:
+                                    self.logger.error(f"Failsafe threshold reached ({self.failsafe_cycle_limit} cycles) - initiating reboot as last resort")
+                                    self._failsafe_reboot()
+                    
                     self._endless_loop_wifi_search()
                 elif not was_connected and self.wifi_connected:
                     self.logger.info("Endless Loop: Wi-Fi connection established!")
@@ -453,6 +471,11 @@ class WiFiManager:
                     self.last_wifi_validation = current_time
                     self.wifi_validation_failures = 0
                     self.no_connection_cycles = 0  # Reset failsafe counter on success
+                    
+                    # Clear disconnect timestamp when reconnected
+                    if hasattr(self, '_disconnect_timestamp'):
+                        delattr(self, '_disconnect_timestamp')
+                    
                     if self.ap_mode_active:
                         self.logger.info("Endless Loop: Stopping AP mode due to successful WiFi connection")
                         self.stop_ap_mode()
@@ -536,6 +559,43 @@ class WiFiManager:
         except Exception as e:
             self.logger.error(f"Strong check error: {e}")
             return False
+
+    def _failsafe_reboot(self):
+        """Reboot the system as a last resort failsafe mechanism"""
+        try:
+            self.logger.critical("FAILSAFE: Initiating system reboot due to persistent connectivity issues")
+            self.ap_logger.critical("FAILSAFE: System reboot triggered - persistent connectivity failures")
+            
+            # Save state before reboot
+            self._save_connection_state(None, False)
+            
+            # Log the failsafe trigger
+            try:
+                with open('/var/log/ragnar_failsafe.log', 'a') as f:
+                    timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+                    f.write(f"{timestamp} - Failsafe reboot triggered: {self.no_connection_cycles} consecutive connection failures\n")
+            except:
+                pass
+            
+            # Clean shutdown of services
+            self.should_exit = True
+            if self.ap_mode_active:
+                self.stop_ap_mode()
+            
+            # Wait a moment for cleanup
+            time.sleep(2)
+            
+            # Initiate reboot
+            self.logger.critical("FAILSAFE: Executing reboot command")
+            subprocess.run(['sudo', 'reboot'], timeout=5)
+            
+        except Exception as e:
+            self.logger.error(f"Error during failsafe reboot: {e}")
+            # Try alternative reboot method
+            try:
+                subprocess.run(['sudo', 'systemctl', 'reboot'], timeout=5)
+            except:
+                pass
 
 
     def _handle_ap_mode_monitoring(self, current_time):
