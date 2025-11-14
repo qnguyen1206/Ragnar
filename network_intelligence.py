@@ -4,12 +4,37 @@ Network-Based Intelligence System for Ragnar
 Tracks vulnerabilities and credentials based on WiFi network context
 Maintains active vs resolved states for smart persistence
 
+SYNCHRONIZED WITH SQLITE DATABASE:
+===================================
+This module now maintains bidirectional synchronization with the SQLite database:
+
+1. On Initialization:
+   - Loads previous findings from JSON files
+   - Syncs vulnerabilities from database via sync_vulnerabilities_from_database()
+   - Ensures database vulnerabilities are visible in dashboard
+
+2. During Runtime:
+   - Receives real-time vulnerability feeds from nmap_vuln_scanner
+   - Stores in active_vulnerabilities dict (in-memory)
+   - Persists to data/intelligence/active_findings.json
+
+3. On Dashboard Load:
+   - Calls get_active_findings_for_dashboard()
+   - Re-syncs from database to catch any new database entries
+   - Returns combined in-memory + database vulnerabilities
+
+Data Sources (Priority Order):
+1. In-memory active_vulnerabilities (fastest, real-time)
+2. SQLite database hosts.vulnerabilities (persistent, authoritative)
+3. JSON files active_findings.json (backup persistence)
+
 Features:
-- Network-aware vulnerability tracking
+- Network-aware vulnerability tracking (per SSID/network)
 - Active vs resolved credential management  
 - Dashboard shows current network findings
 - NetKB tracks historical and resolved items
 - Automatic state transitions based on network presence
+- Database synchronization for persistence across restarts
 """
 
 import os
@@ -21,6 +46,13 @@ from typing import Dict, List, Set, Optional, Tuple
 from logger import Logger
 import logging
 
+# Import database manager for syncing
+try:
+    from db_manager import get_db
+    DB_AVAILABLE = True
+except ImportError:
+    DB_AVAILABLE = False
+
 
 class NetworkIntelligence:
     """Manages network-based intelligence for vulnerabilities and credentials"""
@@ -28,6 +60,15 @@ class NetworkIntelligence:
     def __init__(self, shared_data):
         self.shared_data = shared_data
         self.logger = Logger(name="NetworkIntelligence", level=logging.INFO)
+        
+        # Initialize database connection for syncing
+        self.db = None
+        if DB_AVAILABLE:
+            try:
+                self.db = get_db(currentdir=shared_data.currentdir if hasattr(shared_data, 'currentdir') else None)
+                self.logger.info("Network Intelligence connected to SQLite database")
+            except Exception as e:
+                self.logger.warning(f"Could not connect to database: {e}")
         
         # Network context tracking
         self.current_network = None
@@ -66,7 +107,7 @@ class NetworkIntelligence:
             self.logger.error(f"Failed to create intelligence directory: {e}")
     
     def load_intelligence_data(self):
-        """Load existing intelligence data"""
+        """Load existing intelligence data from files and sync with database"""
         try:
             # Load network profiles
             if os.path.exists(self.network_profiles_file):
@@ -86,6 +127,9 @@ class NetworkIntelligence:
                     data = json.load(f)
                     self.resolved_vulnerabilities = data.get('vulnerabilities', {})
                     self.resolved_credentials = data.get('credentials', {})
+            
+            # SYNC: Load vulnerabilities from SQLite database
+            self.sync_vulnerabilities_from_database()
             
             self.logger.info("Intelligence data loaded successfully")
             
@@ -416,13 +460,100 @@ class NetworkIntelligence:
         except Exception as e:
             self.logger.error(f"Error resolving finding: {e}")
     
+    def sync_vulnerabilities_from_database(self):
+        """Sync vulnerabilities from SQLite database to network intelligence"""
+        try:
+            if not self.db:
+                self.logger.debug("Database not available for vulnerability sync")
+                return
+            
+            # Get all hosts with vulnerabilities from database
+            all_hosts = self.db.get_all_hosts()
+            network_id = self.get_current_network_id()
+            
+            synced_count = 0
+            for host in all_hosts:
+                vulnerabilities = host.get('vulnerabilities', '')
+                if not vulnerabilities or vulnerabilities.strip() == '':
+                    continue
+                
+                # Parse vulnerability string (format: "port/service: CVE-2024-1234; port/service: CVE-2024-5678")
+                ip = host.get('ip', 'unknown')
+                
+                # Split by semicolon to get individual vulnerabilities
+                vuln_entries = [v.strip() for v in vulnerabilities.split(';') if v.strip()]
+                
+                for vuln_entry in vuln_entries:
+                    # Parse format: "port/service: vulnerability_text"
+                    if ':' in vuln_entry:
+                        port_service_part, vuln_text = vuln_entry.split(':', 1)
+                        port_service_part = port_service_part.strip()
+                        vuln_text = vuln_text.strip()
+                        
+                        # Extract port and service
+                        if '/' in port_service_part:
+                            port_str, service = port_service_part.split('/', 1)
+                            try:
+                                port = int(port_str.strip())
+                            except ValueError:
+                                port = 0
+                            service = service.strip()
+                        else:
+                            port = 0
+                            service = 'unknown'
+                        
+                        # Add to network intelligence if not already present
+                        vuln_hash = hashlib.md5(f"{ip}:{port}:{service}:{vuln_text}".encode()).hexdigest()[:12]
+                        vuln_id = f"vuln_{vuln_hash}"
+                        
+                        # Check if already exists
+                        if network_id not in self.active_vulnerabilities:
+                            self.active_vulnerabilities[network_id] = {}
+                        
+                        if vuln_id not in self.active_vulnerabilities[network_id]:
+                            # Determine severity from CVE score or keywords
+                            severity = 'medium'
+                            if 'critical' in vuln_text.lower() or 'Score: 9' in vuln_text or 'Score: 10' in vuln_text:
+                                severity = 'critical'
+                            elif 'high' in vuln_text.lower() or 'Score: 7' in vuln_text or 'Score: 8' in vuln_text:
+                                severity = 'high'
+                            elif 'low' in vuln_text.lower() or 'Score: 1' in vuln_text or 'Score: 2' in vuln_text or 'Score: 3' in vuln_text:
+                                severity = 'low'
+                            
+                            self.active_vulnerabilities[network_id][vuln_id] = {
+                                'id': vuln_id,
+                                'host': ip,
+                                'port': port,
+                                'service': service,
+                                'vulnerability': vuln_text,
+                                'severity': severity,
+                                'details': {'source': 'database_sync'},
+                                'discovered': host.get('first_seen', datetime.now().isoformat()),
+                                'network_id': network_id,
+                                'status': 'active',
+                                'confirmation_count': 1,
+                                'last_confirmed': host.get('updated_at', datetime.now().isoformat())
+                            }
+                            synced_count += 1
+            
+            if synced_count > 0:
+                self.logger.info(f"Synced {synced_count} vulnerabilities from database")
+                self.save_intelligence_data()
+            
+        except Exception as e:
+            self.logger.error(f"Error syncing vulnerabilities from database: {e}")
+    
     def get_active_findings_for_dashboard(self) -> Dict:
         """Get active findings for current network (dashboard view)
         
         Checks both the current network ID and 'default_network' as fallback
         to ensure vulnerabilities are displayed even when network ID changes.
+        Includes vulnerabilities from SQLite database.
         """
         try:
+            # First, sync with database to get latest vulnerabilities
+            self.sync_vulnerabilities_from_database()
+            
             network_id = self.get_current_network_id()
             
             # Get findings from current network

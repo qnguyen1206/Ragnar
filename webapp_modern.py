@@ -5313,7 +5313,7 @@ def get_actions():
 
 @app.route('/api/vulnerabilities')
 def get_vulnerabilities():
-    """Get vulnerability scan results"""
+    """Get vulnerability scan results from network intelligence and database"""
     try:
         # Check if network intelligence is enabled
         if (hasattr(shared_data, 'network_intelligence') and 
@@ -5338,12 +5338,56 @@ def get_vulnerabilities():
                     'status': vuln_info['status']
                 })
             
+            # FALLBACK: If no vulnerabilities from network intelligence, read from database
+            if not vuln_data:
+                logger.info("No vulnerabilities from network intelligence, reading from database")
+                try:
+                    db_vulns = []
+                    all_hosts = shared_data.db.get_all_hosts()
+                    for host in all_hosts:
+                        vulnerabilities = host.get('vulnerabilities', '')
+                        if vulnerabilities and vulnerabilities.strip():
+                            ip = host.get('ip', 'unknown')
+                            # Parse vulnerability entries
+                            vuln_entries = [v.strip() for v in vulnerabilities.split(';') if v.strip()]
+                            for vuln_entry in vuln_entries:
+                                if ':' in vuln_entry:
+                                    port_service, vuln_text = vuln_entry.split(':', 1)
+                                    if '/' in port_service:
+                                        port_str, service = port_service.split('/', 1)
+                                        try:
+                                            port = int(port_str.strip())
+                                        except ValueError:
+                                            port = 0
+                                    else:
+                                        port = 0
+                                        service = 'unknown'
+                                    
+                                    db_vulns.append({
+                                        'id': f"db_{host.get('mac', 'unknown')}_{port}",
+                                        'host': ip,
+                                        'port': port,
+                                        'service': service.strip(),
+                                        'vulnerability': vuln_text.strip(),
+                                        'severity': 'medium',
+                                        'discovered': host.get('first_seen', ''),
+                                        'source': 'database',
+                                        'status': 'active'
+                                    })
+                    
+                    if db_vulns:
+                        logger.info(f"Found {len(db_vulns)} vulnerabilities from database")
+                        vuln_data = db_vulns
+                except Exception as db_error:
+                    logger.error(f"Error reading vulnerabilities from database: {db_error}")
+            
             return jsonify({
                 'vulnerabilities': vuln_data,
                 'network_context': {
                     'current_network': dashboard_findings['network_id'],
-                    'count': dashboard_findings['counts']['vulnerabilities']
-                }
+                    'count': len(vuln_data)
+                },
+                'source': 'network_intelligence' if vuln_data and 'network_id' in vuln_data[0] else 'database'
             })
         else:
             # Fallback to legacy vulnerability data
