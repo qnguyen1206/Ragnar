@@ -296,14 +296,14 @@ class WiFiManager:
         """Handle initial Wi-Fi connection with endless loop behavior"""
         self.logger.info("Starting Endless Loop Wi-Fi management...")
         
-        # Wait 2 minutes after boot before starting the endless loop
+        # Wait 30 seconds after boot before starting the endless loop (reduced from 2 minutes)
         if self.boot_completed_time:
-            boot_wait_time = 120  # 2 minutes
+            boot_wait_time = 30  # 30 seconds for faster startup
             elapsed_since_boot = time.time() - self.boot_completed_time
             remaining_wait = boot_wait_time - elapsed_since_boot
             
             if remaining_wait > 0:
-                self.logger.info(f"Waiting {remaining_wait:.1f}s more before starting endless loop (2 minutes after boot)")
+                self.logger.info(f"Waiting {remaining_wait:.1f}s more before starting endless loop (30 seconds after boot)")
                 time.sleep(remaining_wait)
         
         # Check if we're already connected before starting the loop
@@ -521,6 +521,23 @@ class WiFiManager:
             self.consecutive_validation_cycles_failed = 0
             self.logger.info(f"Endless Loop: WiFi validation completed - {self.wifi_validation_retries - validation_failures}/{self.wifi_validation_retries} passed")
 
+    def _strong_wifi_presence_check(self):
+        """Perform a strong connectivity check (ping external host) to verify real internet access"""
+        try:
+            self.logger.debug("Performing strong WiFi presence check (ping 8.8.8.8)")
+            result = subprocess.run(['ping', '-c', '2', '-W', '3', '8.8.8.8'], 
+                                  capture_output=True, timeout=8)
+            if result.returncode == 0:
+                self.logger.info("Strong check: Successfully pinged 8.8.8.8 - WiFi connected")
+                return True
+            else:
+                self.logger.warning("Strong check: Failed to ping 8.8.8.8")
+                return False
+        except Exception as e:
+            self.logger.error(f"Strong check error: {e}")
+            return False
+
+
     def _handle_ap_mode_monitoring(self, current_time):
         """Handle AP mode monitoring for endless loop with improved recovery"""
         if not self.ap_mode_active or not self.ap_mode_start_time:
@@ -734,7 +751,7 @@ class WiFiManager:
         try:
             # Method 1: Check using nmcli for active wireless connections
             result = subprocess.run(['nmcli', '-t', '-f', 'ACTIVE,TYPE', 'con', 'show'], 
-                                  capture_output=True, text=True, timeout=10)
+                                  capture_output=True, text=True, timeout=30)
             if result.returncode == 0:
                 for line in result.stdout.strip().split('\n'):
                     if line and 'yes:802-11-wireless' in line:
@@ -780,7 +797,7 @@ class WiFiManager:
         """Get the current connected SSID"""
         try:
             result = subprocess.run(['nmcli', '-t', '-f', 'ACTIVE,SSID', 'dev', 'wifi'], 
-                                  capture_output=True, text=True, timeout=10)
+                                  capture_output=True, text=True, timeout=30)
             if result.returncode == 0:
                 for line in result.stdout.strip().split('\n'):
                     if line.startswith('yes:'):

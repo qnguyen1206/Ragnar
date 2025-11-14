@@ -22,10 +22,12 @@ import csv
 import logging
 import subprocess
 import threading
+import traceback
 from datetime import datetime
 from PIL import Image, ImageFont 
 from logger import Logger
 from epd_helper import EPDHelper
+from db_manager import get_db
 
 
 logger = Logger(name="shared.py", level=logging.DEBUG) # Create a logger object 
@@ -42,6 +44,9 @@ class SharedData:
         # Load existing configuration first
         self.load_config()
 
+        # Initialize SQLite database manager
+        self.db = get_db(currentdir=self.currentdir)
+        
         # Update MAC blacklist without immediate save
         self.update_mac_blacklist()
         self.setup_environment(clear_console=False) # Setup the environment without clearing console
@@ -56,6 +61,9 @@ class SharedData:
         self.load_fonts() # Load the fonts used by the application
         self.load_images() # Load the images used by the application
         # self.create_initial_image() # Create the initial image displayed on the screen
+        
+        # Start background cleanup task for old hosts
+        self._start_cleanup_task()
         
     def initialize_network_intelligence(self):
         """Initialize the network intelligence system"""
@@ -923,154 +931,108 @@ class SharedData:
             return self.latest_scan_results
     
     def read_data(self):
-        """Read data from the CSV file with robust error handling."""
-        self.initialize_csv()  # Ensure CSV is initialized with correct headers
+        """
+        Read data from SQLite database.
+        Returns data in the same format as CSV for backward compatibility.
+        """
         data = []
-        try:
-            with open(self.netkbfile, 'r', newline='', encoding='utf-8') as file:
-                reader = csv.DictReader(file)
-                expected_fieldnames = reader.fieldnames
-                
-                for line_num, row in enumerate(reader, start=2):  # Start at 2 (after header)
-                    try:
-                        # Check if row has extra fields (malformed)
-                        if len(row) > len(expected_fieldnames) if expected_fieldnames else False:
-                            logger.warning(f"Skipping malformed row {line_num} in netkb.csv: too many fields")
-                            continue
-                        
-                        # Only add rows with valid MAC address
-                        if row.get("MAC Address") and row["MAC Address"].strip():
-                            data.append(row)
-                    except Exception as row_error:
-                        logger.warning(f"Error reading row {line_num} in netkb.csv: {row_error}")
-                        continue
-                        
-        except Exception as e:
-            logger.error(f"Error reading netkb.csv: {e}")
-            # If file is corrupted, try to restore from backup
-            backup_file = f"{self.netkbfile}.backup"
-            if os.path.exists(backup_file):
-                logger.info(f"Attempting to restore from backup: {backup_file}")
-                try:
-                    import shutil
-                    shutil.copy2(backup_file, self.netkbfile)
-                    return self.read_data()  # Retry reading
-                except Exception as restore_error:
-                    logger.error(f"Could not restore from backup: {restore_error}")
         
-        return data
+        try:
+            # Read from SQLite database (PRIMARY AND ONLY DATA SOURCE)
+            hosts = self.db.get_all_hosts()
+            
+            if not hosts:
+                logger.debug("No hosts found in database")
+                return []
+            
+            # Convert database format to CSV-compatible format
+            for host in hosts:
+                # Convert to format expected by orchestrator
+                row = {
+                    'MAC Address': host.get('mac', ''),
+                    'IPs': host.get('ip', ''),
+                    'Hostnames': host.get('hostname', ''),
+                    'Alive': '1' if host.get('status') == 'alive' else '0',
+                    'Ports': host.get('ports', ''),
+                    'Failed_Pings': str(host.get('failed_ping_count', 0)),
+                    'Services': host.get('services', ''),
+                    'Nmap Vulnerabilities': host.get('vulnerabilities', ''),
+                    'Alive Count': str(host.get('alive_count', 0)),
+                    'Network Profile': host.get('network_profile', ''),
+                    'Scanner': host.get('scanner_status', ''),
+                    'ssh_connector': host.get('ssh_connector', ''),
+                    'rdp_connector': host.get('rdp_connector', ''),
+                    'ftp_connector': host.get('ftp_connector', ''),
+                    'smb_connector': host.get('smb_connector', ''),
+                    'telnet_connector': host.get('telnet_connector', ''),
+                    'sql_connector': host.get('sql_connector', ''),
+                    'steal_files_ssh': host.get('steal_files_ssh', ''),
+                    'steal_files_rdp': host.get('steal_files_rdp', ''),
+                    'steal_files_ftp': host.get('steal_files_ftp', ''),
+                    'steal_files_smb': host.get('steal_files_smb', ''),
+                    'steal_files_telnet': host.get('steal_files_telnet', ''),
+                    'steal_data_sql': host.get('steal_data_sql', ''),
+                    'nmap_vuln_scanner': host.get('nmap_vuln_scanner', ''),
+                    'Notes': host.get('notes', ''),
+                    'Deep_Scanned': '',  # TODO: Add to database schema
+                    'Deep_Scan_Ports': '',  # TODO: Add to database schema
+                }
+                data.append(row)
+            
+            logger.debug(f"✅ Read {len(data)} hosts from SQLite database")
+            return data
+            
+        except Exception as e:
+            logger.error(f"Error reading from database: {e}")
+            logger.debug(f"Traceback: {traceback.format_exc()}")
+            return []  # Return empty list on database error
+    
+
+    def _start_cleanup_task(self):
+        """Start background task to cleanup old hosts (not seen in 24 hours)."""
+        def cleanup_worker():
+            import time
+            while True:
+                try:
+                    # Run cleanup every hour
+                    time.sleep(3600)
+                    removed = self.db.cleanup_old_hosts(hours=24)
+                    if removed > 0:
+                        logger.info(f"🧹 Cleanup: Removed {removed} hosts not seen in 24 hours")
+                except Exception as e:
+                    logger.error(f"Error in cleanup task: {e}")
+        
+        cleanup_thread = threading.Thread(target=cleanup_worker, daemon=True, name="HostCleanup")
+        cleanup_thread.start()
+        logger.info("Started background host cleanup task (runs hourly)")
 
     def write_data(self, data):
-        """Write data to the CSV file."""
-        with open(self.actions_file, 'r') as file:
-            actions = json.load(file)
-        action_names = [action["b_class"] for action in actions if "b_class" in action]
-
-        # Read existing CSV file if it exists with error handling
-        existing_headers = []
-        existing_data = []
-        
-        if os.path.exists(self.netkbfile):
-            try:
-                with open(self.netkbfile, 'r', newline='', encoding='utf-8') as file:
-                    reader = csv.DictReader(file)
-                    existing_headers = list(reader.fieldnames) if reader.fieldnames else []
-                    
-                    for line_num, row in enumerate(reader, start=2):
-                        try:
-                            # Skip malformed rows
-                            if len(row) > len(existing_headers) if existing_headers else False:
-                                logger.warning(f"Skipping malformed row {line_num} during write_data")
-                                continue
-                            existing_data.append(row)
-                        except Exception as row_error:
-                            logger.warning(f"Error reading row {line_num}: {row_error}")
-                            continue
-                            
-            except Exception as read_error:
-                logger.error(f"Error reading netkbfile for write_data: {read_error}")
-                # Try backup if available
-                backup_file = f"{self.netkbfile}.backup"
-                if os.path.exists(backup_file):
-                    logger.info("Attempting to restore from backup before write")
-                    try:
-                        import shutil
-                        shutil.copy2(backup_file, self.netkbfile)
-                        # Retry read
-                        with open(self.netkbfile, 'r', newline='', encoding='utf-8') as file:
-                            reader = csv.DictReader(file)
-                            existing_headers = list(reader.fieldnames) if reader.fieldnames else []
-                            existing_data = list(reader)
-                    except Exception as restore_error:
-                        logger.error(f"Could not restore from backup: {restore_error}")
-
-        # Check for missing action columns and add them
-        new_headers = ["MAC Address", "IPs", "Hostnames", "Alive", "Ports", "Failed_Pings"] + action_names
-        missing_headers = [header for header in new_headers if header not in existing_headers]
-
-        # Update headers
-        headers = existing_headers + missing_headers
-
-        # Merge new data with existing data
-        mac_to_existing_row = {row["MAC Address"]: row for row in existing_data}
-
-        for new_row in data:
-            mac_address = new_row["MAC Address"]
-            if mac_address in mac_to_existing_row:
-                # Update the existing row with new data
-                existing_row = mac_to_existing_row[mac_address]
-                for key, value in new_row.items():
-                    if value:
-                        existing_row[key] = value
-            else:
-                # Add new row
-                mac_to_existing_row[mac_address] = new_row
-
-        # Write updated data back to CSV with backup protection
-        import tempfile
-        import shutil
-        
-        # Only write if we have data to write
-        if not mac_to_existing_row:
-            self.print("Warning: No data to write to netkb.csv - skipping write")
-            return
-        
-        # Create backup of existing file if it exists and has content
-        if os.path.exists(self.netkbfile) and os.path.getsize(self.netkbfile) > 100:
-            backup_file = f"{self.netkbfile}.backup"
-            try:
-                shutil.copy2(self.netkbfile, backup_file)
-                self.print(f"Created backup: {backup_file}")
-            except Exception as backup_error:
-                logger.warning(f"Could not create backup: {backup_error}")
-        
-        # Write to temporary file first (atomic operation)
-        temp_fd, temp_path = tempfile.mkstemp(dir=os.path.dirname(self.netkbfile), suffix='.tmp')
-        try:
-            with os.fdopen(temp_fd, 'w', newline='') as file:
-                writer = csv.DictWriter(file, fieldnames=headers)
-                writer.writeheader()
-                
-                # Write all data
-                for row in mac_to_existing_row.values():
-                    writer.writerow(row)
-            
-            # Verify temp file has content before replacing original
-            if os.path.getsize(temp_path) > 50:  # At least headers
-                shutil.move(temp_path, self.netkbfile)
-                self.print(f"Successfully wrote {len(mac_to_existing_row)} entries to netkb.csv")
-            else:
-                logger.error("Temp file is too small - aborting write to prevent data loss")
-                os.unlink(temp_path)
-        except Exception as write_error:
-            logger.error(f"Error writing netkb.csv: {write_error}")
-            if os.path.exists(temp_path):
-                os.unlink(temp_path)
-            raise
+        """
+        DEPRECATED: CSV write operations no longer supported.
+        All data is now stored in SQLite database.
+        Use db.upsert_host() to write host data.
+        This method is kept for backward compatibility but does nothing.
+        """
+        logger.warning("write_data() is deprecated - all data is now stored in SQLite database")
+        logger.debug(f"Ignoring write_data call with {len(data) if data else 0} entries")
+        pass
 
     def update_stats(self, persist=True):
-        """Update gamification stats using lifetime achievements rather than volatile counts."""
+        """Update gamification stats using lifetime achievements and SQLite database statistics."""
         with self._stats_lock:
+            # Get current statistics from SQLite database
+            try:
+                db_stats = self.db.get_stats()
+                # NOTE: Do NOT update vulnnbr here - it's managed by sync_vulnerability_count()
+                # which uses network intelligence (114 vulns) instead of just database hosts_with_vulns (3)
+                
+                # Update zombie count from database (could be hosts with successful attacks)
+                if 'total_hosts' in db_stats:
+                    # This is a placeholder - adjust based on actual zombie logic
+                    pass
+            except Exception as e:
+                logger.error(f"Failed to get stats from database: {e}")
+            
             lifetime_counts = self.gamification_data.setdefault("lifetime_counts", {})
             total_added = 0
             awarded_breakdown = {}
