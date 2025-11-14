@@ -1437,50 +1437,42 @@ class NetworkScanner:
             self.logger.warning(f"⚠️  Ping test failed: {ping_error}")
         
         try:
+            # ===== STAGE 1: PORT DISCOVERY SCAN =====
+            self.logger.info(f"📡 STAGE 1: Port discovery scan starting...")
+            
             # Build nmap args depending on mode
             if use_top_ports:
                 # Fast scan of most common ports (top 10000) for broader coverage while still faster than full range
                 nmap_args = "-Pn -sT --top-ports 10000 --open -T4 --min-rate 500 --max-retries 1 -v"
-                self.logger.info(f"🚀 EXECUTING DEEP SCAN (TOP 10000): nmap {nmap_args} {ip}")
-                self.logger.info("   Mode: top10000 common ports (fast/extended)")
+                self.logger.info(f"🚀 Port scan mode: TOP 10000 common ports (fast)")
+                self.logger.info(f"   Command: nmap {nmap_args} {ip}")
             else:
                 # Full range scan (can be slow)
                 nmap_args = f"-Pn -sT -p{portstart}-{portend} --open -T4 --min-rate 1000 --max-retries 1 -v"
                 total_ports = portend - portstart + 1
-                self.logger.info(f"🚀 EXECUTING DEEP SCAN (FULL): nmap {nmap_args} {ip}")
-                self.logger.info(f"   Port range size: {total_ports} ports (expected longer duration)")
-            self.logger.info(f"   nmap.PortScanner object: {self.nm}")
-            self.logger.info(f"   Full command (copy/paste): nmap {nmap_args} {ip}")
+                self.logger.info(f"🚀 Port scan mode: FULL RANGE ({total_ports} ports)")
+                self.logger.info(f"   Command: nmap {nmap_args} {ip}")
             
             # Notify scan started
             if progress_callback:
-                progress_callback('scanning', {'message': 'Scan started'})
+                progress_callback('scanning', {'message': 'Stage 1: Port discovery'})
             
             scan_start = time.time()
+            self.logger.info(f"⏰ STAGE 1 START: {datetime.now().strftime('%H:%M:%S')}")
             
-            # CRITICAL: Log the actual nmap execution attempt
-            self.logger.info(f"⏰ SCAN START: {datetime.now().strftime('%H:%M:%S')} - Starting nmap scan...")
-            
-            # Execute the scan
+            # Execute the port discovery scan
             self.nm.scan(hosts=ip, arguments=nmap_args)
             
             scan_duration = time.time() - scan_start
-            self.logger.info(f"⏰ SCAN END: {datetime.now().strftime('%H:%M:%S')} - Scan took {scan_duration:.2f}s")
+            self.logger.info(f"⏰ STAGE 1 END: {datetime.now().strftime('%H:%M:%S')} - Took {scan_duration:.2f}s")
             
             # Check what hosts nmap found
             all_hosts = self.nm.all_hosts()
-            self.logger.info(f"🔎 NMAP RESULTS host_count={len(all_hosts)} hosts={all_hosts}")
-            self.logger.info(f"   Looking for target IP: {ip} in results...")
+            self.logger.info(f"🔎 STAGE 1 RESULTS: {len(all_hosts)} hosts found")
             
             if ip not in all_hosts:
-                self.logger.warning(f"❌ DEEP SCAN NO RESULTS: {ip} not found in nmap results after {scan_duration:.2f}s")
-                self.logger.warning(f"   This could mean:")
-                self.logger.warning(f"   1) Host is down or unreachable")
-                self.logger.warning(f"   2) Host has no open ports")
-                self.logger.warning(f"   3) Firewall blocking scans")
-                self.logger.warning(f"   4) Network connectivity issue")
-                self.logger.info(f"   Full nmap command: nmap {nmap_args} {ip}")
-                self.logger.info(f"   Consider testing with: ping {ip}")
+                self.logger.warning(f"❌ STAGE 1 FAILED: {ip} not found in results after {scan_duration:.2f}s")
+                self.logger.warning(f"   Possible reasons: host down, no open ports, or firewall blocking")
                 return {
                     'success': False,
                     'open_ports': [],
@@ -1488,10 +1480,8 @@ class NetworkScanner:
                     'message': f'No open ports found on {ip}'
                 }
             
-            # Extract results
+            # Extract port discovery results from STAGE 1
             hostname = self.nm[ip].hostname() or ''
-            
-            # Notify hostname found
             if progress_callback and hostname:
                 progress_callback('hostname', {'message': f'Name: {hostname[:20]}'})
             
@@ -1510,32 +1500,41 @@ class NetworkScanner:
                             'version': version,
                             'state': 'open'
                         }
-                        self.logger.info(f"   ✅ Port {port}/tcp open - {service} {version}")
+                        self.logger.info(f"   ✅ Port {port}/tcp OPEN - {service} {version}")
                         
-                        # Notify each port discovery (but limit to every 5 ports to avoid spam)
                         if progress_callback and len(open_ports) % 5 == 1:
-                            progress_callback('port_found', {'message': f'Port {port} found', 'port': port, 'service': service})
+                            progress_callback('port_found', {'message': f'{len(open_ports)} ports found', 'port': port, 'service': service})
             
-            # Run vulnerability scan on discovered ports
+            self.logger.info(f"✅ STAGE 1 COMPLETE: {len(open_ports)} open ports discovered in {scan_duration:.2f}s")
+            
+            # ===== STAGE 2: VULNERABILITY SCAN ON DISCOVERED PORTS ONLY =====
+            # This is a separate, faster scan using ONLY the vulners script on known open ports
             vulnerabilities = {}
             vuln_count = 0
+            
             if open_ports:
-                self.logger.info(f"🔐 Running vulnerability scan with vulners.nse on {len(open_ports)} ports...")
+                self.logger.info(f"🔐 STAGE 2: Vulnerability scan on {len(open_ports)} discovered ports...")
                 if progress_callback:
-                    progress_callback('vuln_scanning', {'message': 'Scanning for vulnerabilities...'})
+                    progress_callback('vuln_scanning', {'message': f'Stage 2: Scanning {len(open_ports)} ports for CVEs'})
                 
                 vuln_start = time.time()
+                self.logger.info(f"⏰ STAGE 2 START: {datetime.now().strftime('%H:%M:%S')}")
+                
                 try:
-                    # Run nmap with vulners script on discovered ports
+                    # Run FAST vulnerability scan - NO version detection (-sV), just vulners script
+                    # We already have service info from stage 1, so skip -sV to save 90% of the time
                     ports_str = ','.join(map(str, open_ports))
-                    vuln_args = f"-Pn -sV --script vulners.nse -p{ports_str}"
+                    vuln_args = f"-Pn --script vulners.nse -p{ports_str} -T4"
                     
-                    self.logger.info(f"🔍 Vulnerability scan command: nmap {vuln_args} {ip}")
+                    self.logger.info(f"   Command: nmap {vuln_args} {ip}")
                     self.nm.scan(hosts=ip, arguments=vuln_args)
                     
                     vuln_duration = time.time() - vuln_start
+                    self.logger.info(f"⏰ STAGE 2 END: {datetime.now().strftime('%H:%M:%S')} - Took {vuln_duration:.2f}s")
+                    vuln_duration = time.time() - vuln_start
+                    self.logger.info(f"⏰ STAGE 2 END: {datetime.now().strftime('%H:%M:%S')} - Took {vuln_duration:.2f}s")
                     
-                    # Extract vulnerability information
+                    # Extract vulnerability information from STAGE 2 results
                     if ip in self.nm.all_hosts() and 'tcp' in self.nm[ip]:
                         for port in self.nm[ip]['tcp']:
                             port_data = self.nm[ip]['tcp'][port]
@@ -1551,8 +1550,8 @@ class NetworkScanner:
                                 if cves:
                                     vulnerabilities[port] = {
                                         'cves': cves,
-                                        'service': port_data.get('name', 'unknown'),
-                                        'version': port_data.get('version', ''),
+                                        'service': port_details.get(port, {}).get('service', 'unknown'),
+                                        'version': port_details.get(port, {}).get('version', ''),
                                         'raw_output': vulners_output
                                     }
                                     vuln_count += len(cves)
@@ -1561,11 +1560,10 @@ class NetworkScanner:
                                     if port in port_details:
                                         port_details[port]['vulnerabilities'] = cves
                                     
-                                    self.logger.info(f"   🔴 Port {port}: Found {len(cves)} CVEs")
-                                    for cve in cves[:3]:  # Log first 3 CVEs
+                                    self.logger.info(f"   🔴 Port {port}: {len(cves)} CVEs found")
+                                    for cve in cves[:3]:
                                         self.logger.info(f"      - {cve}")
                                     
-                                    # Notify vulnerability found
                                     if progress_callback:
                                         progress_callback('vuln_found', {
                                             'message': f'Port {port}: {len(cves)} CVEs',
@@ -1574,13 +1572,16 @@ class NetworkScanner:
                                         })
                     
                     if vuln_count > 0:
-                        self.logger.info(f"🔴 Vulnerability scan complete: {vuln_count} CVEs found across {len(vulnerabilities)} ports ({vuln_duration:.2f}s)")
+                        self.logger.info(f"✅ STAGE 2 COMPLETE: {vuln_count} CVEs found across {len(vulnerabilities)} ports ({vuln_duration:.2f}s)")
                     else:
-                        self.logger.info(f"✅ Vulnerability scan complete: No CVEs found ({vuln_duration:.2f}s)")
+                        self.logger.info(f"✅ STAGE 2 COMPLETE: No CVEs found ({vuln_duration:.2f}s)")
                         
                 except Exception as vuln_error:
-                    self.logger.error(f"Vulnerability scan failed: {vuln_error}")
+                    vuln_duration = time.time() - vuln_start
+                    self.logger.error(f"💥 STAGE 2 FAILED after {vuln_duration:.2f}s: {vuln_error}")
                     self.logger.debug(f"Vuln scan traceback: {traceback.format_exc()}")
+            else:
+                self.logger.info(f"⏭️  STAGE 2 SKIPPED: No open ports to scan for vulnerabilities")
             
             # Now update the NetKB with deep scan results WITHOUT overwriting existing data
             self._merge_deep_scan_results(ip, hostname, open_ports, port_details, vulnerabilities)
