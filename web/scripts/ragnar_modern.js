@@ -4822,9 +4822,12 @@ function displayFiles(files, path) {
         const size = file.is_directory ? '' : formatBytes(file.size);
         const date = file.modified ? new Date(file.modified * 1000).toLocaleDateString() : '';
         
+        const isTextFile = !file.is_directory && file.name.match(/\.(txt|log|csv|json|xml|md|py|js|html|css|sh|conf|cfg|ini|yaml|yml)$/i);
+        const fileClickHandler = file.is_directory ? `loadFiles('${file.path}')` : (isTextFile ? `previewTextFile('${file.path}', '${file.name}')` : '');
+        
         html += `
             <div class="flex items-center justify-between p-3 hover:bg-slate-700 rounded-lg transition-colors">
-                <div class="flex items-center cursor-pointer flex-1" onclick="${file.is_directory ? `loadFiles('${file.path}')` : ''}">
+                <div class="flex items-center ${fileClickHandler ? 'cursor-pointer' : ''} flex-1" onclick="${fileClickHandler}">
                     ${icon}
                     <div class="flex-1">
                         <div class="font-medium">${file.name}</div>
@@ -4833,6 +4836,14 @@ function displayFiles(files, path) {
                 </div>
                 ${!file.is_directory ? `
                     <div class="flex space-x-2">
+                        ${isTextFile ? `
+                        <button onclick="previewTextFile('${file.path}', '${file.name}')" class="p-2 text-green-400 hover:bg-slate-600 rounded" title="Preview">
+                            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"></path>
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z"></path>
+                            </svg>
+                        </button>
+                        ` : ''}
                         <button onclick="downloadFile('${file.path}')" class="p-2 text-blue-400 hover:bg-slate-600 rounded" title="Download">
                             <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                                 <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 10v6m0 0l-4-4m4 4l4-4m6 4H6"></path>
@@ -5082,6 +5093,98 @@ function closeFileModal() {
     if (modal) {
         modal.classList.add('hidden');
         modal.classList.remove('flex');
+    }
+}
+
+let currentPreviewFilePath = null;
+
+function previewTextFile(filePath, fileName) {
+    currentPreviewFilePath = filePath;
+    
+    fetch(`/api/files/read?path=${encodeURIComponent(filePath)}`)
+        .then(response => response.json())
+        .then(data => {
+            if (data.error) {
+                showNotification(data.error, 'error');
+                return;
+            }
+            
+            const modal = document.getElementById('text-preview-modal');
+            const title = document.getElementById('text-preview-title');
+            const content = document.getElementById('text-preview-content');
+            
+            if (!modal || !title || !content) return;
+            
+            title.textContent = fileName;
+            content.textContent = data.content;
+            
+            modal.classList.remove('hidden');
+            modal.classList.add('flex');
+        })
+        .catch(error => {
+            console.error('Error reading file:', error);
+            showNotification('Failed to read file: ' + error.message, 'error');
+        });
+}
+
+function closeTextPreview() {
+    const modal = document.getElementById('text-preview-modal');
+    if (modal) {
+        modal.classList.add('hidden');
+        modal.classList.remove('flex');
+    }
+    currentPreviewFilePath = null;
+}
+
+function downloadCurrentFile() {
+    if (currentPreviewFilePath) {
+        downloadFile(currentPreviewFilePath);
+    }
+}
+
+let currentPreviewFilePath = null;
+
+function previewTextFile(filePath, fileName) {
+    currentPreviewFilePath = filePath;
+    
+    fetch(`/api/files/read?path=${encodeURIComponent(filePath)}`)
+        .then(response => response.json())
+        .then(data => {
+            if (data.error) {
+                showNotification(data.error, 'error');
+                return;
+            }
+            
+            const modal = document.getElementById('text-preview-modal');
+            const title = document.getElementById('text-preview-title');
+            const content = document.getElementById('text-preview-content');
+            
+            if (!modal || !title || !content) return;
+            
+            title.textContent = fileName;
+            content.textContent = data.content;
+            
+            modal.classList.remove('hidden');
+            modal.classList.add('flex');
+        })
+        .catch(error => {
+            console.error('Error reading file:', error);
+            showNotification('Failed to read file: ' + error.message, 'error');
+        });
+}
+
+function closeTextPreview() {
+    const modal = document.getElementById('text-preview-modal');
+    if (modal) {
+        modal.classList.add('hidden');
+        modal.classList.remove('flex');
+    }
+    currentPreviewFilePath = null;
+}
+
+function downloadCurrentFile() {
+    if (currentPreviewFilePath) {
+        downloadFile(currentPreviewFilePath);
     }
 }
 

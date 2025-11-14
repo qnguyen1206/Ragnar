@@ -7649,6 +7649,69 @@ def download_file_api():
         return jsonify({'error': str(e)}), 500
 
 
+@app.route('/api/files/read')
+def read_text_file_api():
+    """Read text file contents for preview"""
+    try:
+        file_path = request.args.get('path')
+        if not file_path:
+            return jsonify({'error': 'File path required'}), 400
+        
+        # Map virtual path to actual path
+        actual_path = ""
+        if file_path.startswith('/data_stolen'):
+            actual_path = shared_data.datastolendir + file_path[12:]
+        elif file_path.startswith('/scan_results'):
+            actual_path = shared_data.scan_results_dir + file_path[13:]
+        elif file_path.startswith('/crackedpwd'):
+            actual_path = shared_data.crackedpwddir + file_path[11:]
+        elif file_path.startswith('/vulnerabilities'):
+            actual_path = shared_data.vulnerabilities_dir + file_path[16:]
+        elif file_path.startswith('/logs'):
+            actual_path = shared_data.datadir + '/logs' + file_path[5:]
+        elif file_path.startswith('/backups'):
+            actual_path = shared_data.backupdir + file_path[8:]
+        elif file_path.startswith('/uploads'):
+            actual_path = shared_data.upload_dir + file_path[8:]
+        else:
+            return jsonify({'error': 'Invalid file path'}), 400
+        
+        if not os.path.isfile(actual_path):
+            return jsonify({'error': 'File not found'}), 404
+        
+        # Read file content (limit to 1MB for safety)
+        max_size = 1024 * 1024  # 1MB
+        file_size = os.path.getsize(actual_path)
+        
+        if file_size > max_size:
+            return jsonify({'error': f'File too large to preview ({formatBytes(file_size)}). Maximum size is 1MB.'}), 400
+        
+        try:
+            with open(actual_path, 'r', encoding='utf-8') as f:
+                content = f.read()
+            return jsonify({
+                'content': content,
+                'filename': os.path.basename(actual_path),
+                'size': file_size
+            })
+        except UnicodeDecodeError:
+            # Try with different encoding
+            try:
+                with open(actual_path, 'r', encoding='latin-1') as f:
+                    content = f.read()
+                return jsonify({
+                    'content': content,
+                    'filename': os.path.basename(actual_path),
+                    'size': file_size
+                })
+            except:
+                return jsonify({'error': 'File is not a text file or uses unsupported encoding'}), 400
+        
+    except Exception as e:
+        logger.error(f"Error reading file: {e}")
+        return jsonify({'error': str(e)}), 500
+
+
 @app.route('/api/files/delete', methods=['POST'])
 def delete_file_api():
     """Delete a file or directory"""
