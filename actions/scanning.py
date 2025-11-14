@@ -1516,19 +1516,87 @@ class NetworkScanner:
                         if progress_callback and len(open_ports) % 5 == 1:
                             progress_callback('port_found', {'message': f'Port {port} found', 'port': port, 'service': service})
             
-            # Now update the NetKB with deep scan results WITHOUT overwriting existing data
-            self._merge_deep_scan_results(ip, hostname, open_ports, port_details)
+            # Run vulnerability scan on discovered ports
+            vulnerabilities = {}
+            vuln_count = 0
+            if open_ports:
+                self.logger.info(f"🔐 Running vulnerability scan with vulners.nse on {len(open_ports)} ports...")
+                if progress_callback:
+                    progress_callback('vuln_scanning', {'message': 'Scanning for vulnerabilities...'})
+                
+                vuln_start = time.time()
+                try:
+                    # Run nmap with vulners script on discovered ports
+                    ports_str = ','.join(map(str, open_ports))
+                    vuln_args = f"-Pn -sV --script vulners.nse -p{ports_str}"
+                    
+                    self.logger.info(f"🔍 Vulnerability scan command: nmap {vuln_args} {ip}")
+                    self.nm.scan(hosts=ip, arguments=vuln_args)
+                    
+                    vuln_duration = time.time() - vuln_start
+                    
+                    # Extract vulnerability information
+                    if ip in self.nm.all_hosts() and 'tcp' in self.nm[ip]:
+                        for port in self.nm[ip]['tcp']:
+                            port_data = self.nm[ip]['tcp'][port]
+                            
+                            # Check if vulners script found anything
+                            if 'script' in port_data and 'vulners' in port_data['script']:
+                                vulners_output = port_data['script']['vulners']
+                                
+                                # Parse CVEs from vulners output
+                                cve_pattern = r'(CVE-\d{4}-\d+)'
+                                cves = re.findall(cve_pattern, vulners_output)
+                                
+                                if cves:
+                                    vulnerabilities[port] = {
+                                        'cves': cves,
+                                        'service': port_data.get('name', 'unknown'),
+                                        'version': port_data.get('version', ''),
+                                        'raw_output': vulners_output
+                                    }
+                                    vuln_count += len(cves)
+                                    
+                                    # Add vulnerabilities to port_details
+                                    if port in port_details:
+                                        port_details[port]['vulnerabilities'] = cves
+                                    
+                                    self.logger.info(f"   🔴 Port {port}: Found {len(cves)} CVEs")
+                                    for cve in cves[:3]:  # Log first 3 CVEs
+                                        self.logger.info(f"      - {cve}")
+                                    
+                                    # Notify vulnerability found
+                                    if progress_callback:
+                                        progress_callback('vuln_found', {
+                                            'message': f'Port {port}: {len(cves)} CVEs',
+                                            'port': port,
+                                            'cve_count': len(cves)
+                                        })
+                    
+                    if vuln_count > 0:
+                        self.logger.info(f"🔴 Vulnerability scan complete: {vuln_count} CVEs found across {len(vulnerabilities)} ports ({vuln_duration:.2f}s)")
+                    else:
+                        self.logger.info(f"✅ Vulnerability scan complete: No CVEs found ({vuln_duration:.2f}s)")
+                        
+                except Exception as vuln_error:
+                    self.logger.error(f"Vulnerability scan failed: {vuln_error}")
+                    self.logger.debug(f"Vuln scan traceback: {traceback.format_exc()}")
             
-            self.logger.info(f"✅ DEEP SCAN COMPLETE ip={ip} mode={scan_mode} open_ports={len(open_ports)} duration={scan_duration:.2f}s")
+            # Now update the NetKB with deep scan results WITHOUT overwriting existing data
+            self._merge_deep_scan_results(ip, hostname, open_ports, port_details, vulnerabilities)
+            
+            self.logger.info(f"✅ DEEP SCAN COMPLETE ip={ip} mode={scan_mode} open_ports={len(open_ports)} vulnerabilities={vuln_count} duration={scan_duration:.2f}s")
             
             return {
                 'success': True,
                 'open_ports': open_ports,
                 'hostname': hostname,
                 'port_details': port_details,
+                'vulnerabilities': vulnerabilities,
+                'vulnerability_count': vuln_count,
                 'scan_duration': scan_duration,
                 'mode': scan_mode,
-                'message': f'Deep scan complete ({scan_mode}): {len(open_ports)} open ports discovered'
+                'message': f'Deep scan complete ({scan_mode}): {len(open_ports)} open ports, {vuln_count} vulnerabilities discovered'
             }
             
         except Exception as e:
@@ -1541,15 +1609,19 @@ class NetworkScanner:
                 'message': f'Deep scan error: {str(e)}'
             }
     
-    def _merge_deep_scan_results(self, ip, hostname, open_ports, port_details):
+    def _merge_deep_scan_results(self, ip, hostname, open_ports, port_details, vulnerabilities=None):
         """
         Merge deep scan results into SQLite database (primary) and legacy CSV files.
         Adds new ports while preserving all existing information.
+        Includes vulnerability data from vulners.nse script.
         """
         # Local import to satisfy static analysis complaining about 'os' being unbound.
         # (Global import exists at module top; this is a defensive redundancy.)
         import os  # noqa: F401
         netkbfile = self.shared_data.netkbfile
+        
+        if vulnerabilities is None:
+            vulnerabilities = {}
         
         try:
             # ===== PART 0: Update SQLite Database (PRIMARY DATA STORE) =====
@@ -1574,17 +1646,30 @@ class NetworkScanner:
                     sorted_ports = sorted(merged_ports, key=lambda x: int(x) if x.isdigit() else 0)
                     ports_str = ','.join(sorted_ports)
                     
+                    # Build vulnerability summary
+                    vuln_summary = ""
+                    if vulnerabilities:
+                        vuln_entries = []
+                        for port, vuln_data in vulnerabilities.items():
+                            cves = vuln_data.get('cves', [])
+                            service = vuln_data.get('service', 'unknown')
+                            for cve in cves[:5]:  # Limit to first 5 CVEs per port
+                                vuln_entries.append(f"{port}/{service}: {cve}")
+                        vuln_summary = "; ".join(vuln_entries)
+                    
                     # Update the database
                     self.db.upsert_host(
-                        mac=host['mac'],
+                        mac=host['mac_address'],
                         ip=ip,
-                        hostname=hostname if hostname else host.get('hostname'),
+                        hostname=hostname if hostname else host.get('hostname', ''),
                         ports=ports_str,
+                        vulnerabilities=vuln_summary if vuln_summary else host.get('vulnerabilities', ''),
                         # Mark that this was a deep scan
-                        notes=f"Deep scan: {len(open_ports)} ports found on {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
+                        notes=f"Deep scan: {len(open_ports)} ports, {len(vulnerabilities)} vulns found on {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
                     )
                     
-                    self.logger.info(f"✅ Updated SQLite database for {ip}: {len(merged_ports)} total ports ({len(new_ports)} from deep scan)")
+                    vuln_msg = f", {len(vulnerabilities)} vulnerable ports" if vulnerabilities else ""
+                    self.logger.info(f"✅ Updated SQLite database for {ip}: {len(merged_ports)} total ports ({len(new_ports)} from deep scan{vuln_msg})")
                 else:
                     self.logger.warning(f"IP {ip} not found in database - creating new entry")
                     # Create new entry with pseudo-MAC if no existing record
