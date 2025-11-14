@@ -9,6 +9,8 @@ from ftplib import FTP
 from queue import Queue
 from shared import SharedData
 from logger import Logger
+from db_manager import DatabaseManager
+from datetime import datetime
 
 logger = Logger(name="ftp_connector.py", level=logging.DEBUG)
 
@@ -42,6 +44,21 @@ class FTPBruteforce:
         time.sleep(5)
         logger.info(f"Brute forcing FTP on {ip}:{port}...")
         success, results = self.bruteforce_ftp(ip, port)
+        
+        # Update database with action status
+        try:
+            db = DatabaseManager()
+            mac_address = row.get('MAC Address', '')
+            if mac_address:
+                db.upsert_host(
+                    mac_address=mac_address,
+                    ip_address=ip,
+                    ftp_connector=datetime.now().isoformat()
+                )
+                logger.info(f"Updated database: ftp_connector status for {mac_address}")
+        except Exception as e:
+            logger.error(f"Failed to update database: {e}")
+        
         return 'success' if success else 'failed'
 
 class FTPConnector:

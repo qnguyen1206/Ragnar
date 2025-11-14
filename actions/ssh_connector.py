@@ -13,6 +13,8 @@ from rich.console import Console
 from rich.progress import Progress, BarColumn, TextColumn, SpinnerColumn
 from shared import SharedData
 from logger import Logger
+from db_manager import DatabaseManager
+from datetime import datetime
 
 # Configure the logger
 logger = Logger(name="ssh_connector.py", level=logging.DEBUG)
@@ -47,6 +49,21 @@ class SSHBruteforce:
         logger.info(f"Executing SSHBruteforce on {ip}:{port}...")
         self.shared_data.ragnarorch_status = "SSHBruteforce"
         success, results = self.bruteforce_ssh(ip, port)
+        
+        # Update database with action status
+        try:
+            db = DatabaseManager()
+            mac_address = row.get('MAC Address', '')
+            if mac_address:
+                db.upsert_host(
+                    mac_address=mac_address,
+                    ip_address=ip,
+                    ssh_connector=datetime.now().isoformat()
+                )
+                logger.info(f"Updated database: ssh_connector status for {mac_address}")
+        except Exception as e:
+            logger.error(f"Failed to update database: {e}")
+        
         return 'success' if success else 'failed'
 
 class SSHConnector:

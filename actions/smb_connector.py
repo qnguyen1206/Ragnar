@@ -13,6 +13,8 @@ from smb.SMBConnection import SMBConnection
 from queue import Queue
 from shared import SharedData
 from logger import Logger
+from db_manager import DatabaseManager
+from datetime import datetime
 
 # Configure the logger
 logger = Logger(name="smb_connector.py", level=logging.DEBUG)
@@ -48,6 +50,20 @@ class SMBBruteforce:
         """
         self.shared_data.ragnarorch_status = "SMBBruteforce"
         success, results = self.bruteforce_smb(ip, port)
+        
+        # Update database with action status
+        try:
+            db = DatabaseManager()
+            mac_address = row.get('MAC Address', '')
+            if mac_address:
+                db.upsert_host(
+                    mac_address=mac_address,
+                    ip_address=ip,
+                    smb_connector=datetime.now().isoformat()
+                )
+                logger.info(f"Updated database: smb_connector status for {mac_address}")
+        except Exception as e:
+            logger.error(f"Failed to update database: {e}")
         return 'success' if success else 'failed'
 
 class SMBConnector:
