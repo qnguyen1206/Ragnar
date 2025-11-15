@@ -128,12 +128,14 @@ class WebUtils:
             self.logger.info(f"Executing {action_key} on {ip}:{port}")
             result = action_instance.execute(ip, port, row, action_key)
 
-            # Action modules now update SQLite database directly in their execute() methods
-            # No need to write to CSV - database is the single source of truth
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
             if result == 'success':
+                row[action_key] = f'success_{timestamp}'
                 self.logger.info(f"Action {action_key} executed successfully on {ip}:{port}")
             else:
+                row[action_key] = f'failed_{timestamp}'
                 self.logger.error(f"Action {action_key} failed on {ip}:{port}")
+            self.shared_data.write_data(current_data)
 
             handler.send_response(200)
             handler.send_header("Content-type", "application/json")

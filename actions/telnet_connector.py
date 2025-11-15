@@ -47,25 +47,10 @@ class TelnetBruteforce:
     
     def execute(self, ip, port, row, status_key):
         """
-        Execute the brute force attack and update status.
+        Execute the brute-force attack.
         """
         self.shared_data.ragnarorch_status = "TelnetBruteforce"
         success, results = self.bruteforce_telnet(ip, port)
-        
-        # Update database with action status
-        try:
-            db = DatabaseManager()
-            mac_address = row.get('MAC Address', '')
-            if mac_address:
-                db.upsert_host(
-                    mac_address=mac_address,
-                    ip_address=ip,
-                    telnet_connector=datetime.now().isoformat()
-                )
-                logger.info(f"Updated database: telnet_connector status for {mac_address}")
-        except Exception as e:
-            logger.error(f"Failed to update database: {e}")
-        
         return 'success' if success else 'failed'
 
 class TelnetConnector:

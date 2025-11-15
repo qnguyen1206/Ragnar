@@ -662,14 +662,37 @@ class SharedData:
 
 
     def initialize_csv(self):
-        """
-        DEPRECATED: CSV files are no longer used.
-        All data is now stored in SQLite database (db_manager.py).
-        This method is kept for backward compatibility but does nothing.
-        """
+        """Initialize the network knowledge base CSV file with headers."""
+        logger.info("Initializing the network knowledge base CSV file with headers")
         try:
-            logger.info("CSV initialization skipped - using SQLite database")
-            logger.debug(f"Database path: {self.db.db_path if hasattr(self, 'db') else 'unknown'}")
+            if not os.path.exists(self.netkbfile):
+                try:
+                    with open(self.actions_file, 'r') as file:
+                        actions = json.load(file)
+                    action_names = [action["b_class"] for action in actions if "b_class" in action]
+                except FileNotFoundError as e:
+                    logger.error(f"Actions file not found: {e}")
+                    return
+                except json.JSONDecodeError as e:
+                    logger.error(f"Error decoding JSON from actions file: {e}")
+                    return
+                except Exception as e:
+                    logger.error(f"Unexpected error reading actions file: {e}")
+                    return
+
+                headers = ["MAC Address", "IPs", "Hostnames", "Alive", "Ports", "Failed_Pings"] + action_names
+
+                try:
+                    with open(self.netkbfile, 'w', newline='') as file:
+                        writer = csv.writer(file)
+                        writer.writerow(headers)
+                    logger.info(f"Network knowledge base CSV file created at {self.netkbfile}")
+                except IOError as e:
+                    logger.error(f"Error writing to netkbfile: {e}")
+                except Exception as e:
+                    logger.error(f"Unexpected error while writing to netkbfile: {e}")
+            else:
+                logger.info(f"Network knowledge base CSV file already exists at {self.netkbfile}")
         except Exception as e:
             logger.error(f"Unexpected error in initialize_csv: {e}")
 

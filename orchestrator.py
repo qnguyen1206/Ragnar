@@ -268,10 +268,13 @@ class Orchestrator:
             action_instance.action_name = b_class
             action_instance.port = action.get("b_port")
             action_instance.b_parent_action = action.get("b_parent")
-            if action_instance.port == 0:
+            # Standalone actions have port == 0, None, or empty string
+            if action_instance.port in (0, None, '', '0'):
                 self.standalone_actions.append(action_instance)
+                logger.debug(f"Loaded {b_class} as standalone action (port={action_instance.port})")
             else:
                 self.actions.append(action_instance)
+                logger.debug(f"Loaded {b_class} as regular action (port={action_instance.port})")
         except AttributeError as e:
             logger.error(f"Module {module_name} is missing required attributes: {e}")
 
@@ -445,11 +448,7 @@ class Orchestrator:
     def _extract_ports(row):
         """Return a sanitized list of ports extracted from a data row."""
         ports_field = row.get("Ports", "") or ""
-        # Support both comma and semicolon delimiters (SQLite uses comma, CSV uses semicolon)
-        if ',' in ports_field:
-            return [port.strip() for port in ports_field.split(',') if port and port.strip()]
-        else:
-            return [port.strip() for port in ports_field.split(';') if port and port.strip()]
+        return [port.strip() for port in ports_field.split(';') if port and port.strip()]
 
     def execute_standalone_action(self, action, current_data):
         """Execute a standalone action with timeout protection"""

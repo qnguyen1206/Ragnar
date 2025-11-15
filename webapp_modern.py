@@ -86,7 +86,7 @@ clients_connected = 0
 # Synchronization helpers for keeping dashboard and e-paper data fresh
 sync_lock = threading.Lock()
 last_sync_time = 0.0
-SYNC_BACKGROUND_INTERVAL = 5  # seconds between automatic synchronizations
+SYNC_BACKGROUND_INTERVAL = 15  # seconds between automatic synchronizations (increased from 5s to reduce CPU load)
 
 # Scan results caching to avoid reprocessing files every sync
 scan_results_cache = {}
@@ -255,59 +255,82 @@ def update_vulnerability_output(ip, hostname, mac, is_alive):
                 f.write(f"Host {ip} is not responding\n")
                 f.write(f"Status: INACTIVE\n")
         
-        logger.debug(f"Updated vulnerability output for {ip}")
-        
     except Exception as e:
         logger.error(f"Error updating vulnerability output for {ip}: {e}")
 
 
 def update_netkb_entry(ip, hostname, mac, is_alive):
-    """
-    Update host entry in SQLite database.
-    CSV operations removed - database is the single source of truth.
-    """
     try:
         # Update vulnerability output files
         update_vulnerability_output(ip, hostname, mac, is_alive)
         
-        # Update SQLite database instead of CSV
-        from db_manager import get_db
-        db = get_db(currentdir=shared_data.currentdir)
-        
+        netkb_path = shared_data.netkbfile
+        os.makedirs(os.path.dirname(netkb_path), exist_ok=True)
+
+        rows = []
+        headers: list[str] = []
+        updated_row = None
+
+        if os.path.exists(netkb_path) and os.path.getsize(netkb_path) > 0:
+            with open(netkb_path, 'r', encoding='utf-8', errors='ignore') as f:
+                reader = csv.DictReader(f)
+                headers = list(reader.fieldnames) if reader.fieldnames else []
+                for row in reader:
+                    rows.append(row)
+        else:
+            headers = ['MAC Address', 'IPs', 'Hostnames', 'Alive', 'Ports']
+
+        for column in ['MAC Address', 'IPs', 'Hostnames', 'Alive', 'Ports']:
+            if column not in headers:
+                headers.append(column)
+
         alive_value = '1' if is_alive else '0'
         mac_to_store = _normalize_mac(mac) if mac else ''
-        
-        if not mac_to_store:
-            # If no MAC provided, try to find existing entry by IP
-            hosts = db.get_all_hosts()
-            for host in hosts:
-                if host.get('ip_address') == ip:
-                    mac_to_store = host['mac_address']
-                    logger.debug(f"Found existing MAC {mac_to_store} for IP {ip}")
-                    break
-        
-        if mac_to_store:
-            # Update or insert host in database
-            db.upsert_host(
-                mac=mac_to_store,
-                ip=ip,
-                hostname=hostname or '',
-                status='alive' if alive_value == '1' else 'offline'
-            )
-            logger.debug(f"Updated database entry for {ip} (MAC: {mac_to_store})")
-            
-            return {
-                'MAC Address': mac_to_store,
-                'IPs': ip,
-                'Hostnames': hostname or '',
-                'Alive': alive_value
-            }
-        else:
-            logger.warning(f"No MAC address available for {ip}, skipping database update")
-            return None
-            
+
+        for row in rows:
+            existing_ips = [entry.strip() for entry in row.get('IPs', '').split(';') if entry.strip()]
+            if ip in existing_ips:
+                if mac_to_store:
+                    row['MAC Address'] = mac_to_store
+                # Don't generate pseudo MAC - let ARP cache provide real MAC addresses
+
+                if hostname:
+                    existing_hostnames = [h.strip() for h in row.get('Hostnames', '').split(';') if h.strip()]
+                    existing_hostnames.append(hostname)
+                    row['Hostnames'] = ';'.join(sorted(set(existing_hostnames)))
+
+                row['Alive'] = alive_value
+                # CRITICAL: NEVER clear the Ports field here!
+                # Ports are managed by scanning.py - we only update Alive/MAC/Hostname
+                # Preserve existing ports to prevent data loss
+                updated_row = row
+                break
+
+        if updated_row is None:
+            new_row = {header: '' for header in headers}
+            new_row['IPs'] = ip
+            new_row['Hostnames'] = hostname or ''
+            if mac_to_store:
+                new_row['MAC Address'] = mac_to_store
+            else:
+                # Don't generate pseudo MAC - let ARP cache provide real MAC addresses
+                new_row['MAC Address'] = ''
+            new_row['Alive'] = alive_value
+            # CRITICAL: Don't set Ports to '' - preserve existing ports if they exist
+            # The Ports field should only be updated by scanning.py during actual port scans
+            # Leave it empty for new entries, but scanning.py will populate it
+            new_row['Ports'] = new_row.get('Ports', '')  # Preserve if exists, empty if new
+            rows.append(new_row)
+            updated_row = new_row
+
+        with open(netkb_path, 'w', newline='', encoding='utf-8') as f:
+            writer = csv.DictWriter(f, fieldnames=headers)
+            writer.writeheader()
+            writer.writerows(rows)
+
+        return updated_row
     except Exception as e:
-        logger.error(f"Error updating database entry for {ip}: {e}")
+        logger.error(f"Error updating netkb entry for {ip}: {e}")
         return None
 
 def broadcast_status_update():
@@ -443,20 +466,7 @@ def sync_vulnerability_count():
         shared_data.vulnerable_host_count = len(vulnerable_hosts)
         logger.debug(f"Updated vulnerable host count: {old_host_count} -> {shared_data.vulnerable_host_count}")
 
-        # Also update livestatus file if it exists
-        if os.path.exists(shared_data.livestatusfile):
-            try:
-                if pandas_available:
-                    df = pd.read_csv(shared_data.livestatusfile)
-                    if not df.empty:
-                        df.loc[0, 'Vulnerabilities Count'] = vuln_count
-                        df.to_csv(shared_data.livestatusfile, index=False)
-                        logger.debug(f"Updated livestatus file with vuln count: {vuln_count}")
-                else:
-                    logger.warning("Pandas not available, skipping livestatus update")
-            except Exception as e:
-                logger.warning(f"Could not update livestatus with sync vulnerability count: {e}")
-        
+        # SQLite is the primary source of truth - CSV livestatus file is deprecated
         logger.debug(f"Synchronized vulnerability count: {vuln_count}")
         return vuln_count
         
@@ -486,11 +496,12 @@ def sync_all_counts():
             # ==============================================================================
             
             aggregated_targets = 0
-            aggregated_ports = 0
+            aggregated_ports = 0  # Count total port instances across all hosts
             total_target_count = 0
             inactive_target_count = 0
             current_snapshot = {}
             discovered_macs = set()
+            port_debug_info = []  # Track which hosts contribute to port count
             
             # Read from SQLite database
             try:
@@ -526,11 +537,24 @@ def sync_all_counts():
                     if is_active:
                         aggregated_targets += 1
                         
-                        # Count ports
+                        # Count all port instances - support both comma (SQLite) and semicolon (CSV) delimiters
                         ports_str = host.get('ports', '')
                         if ports_str and ports_str != '0':
-                            port_list = [p.strip() for p in ports_str.split(';') if p.strip() and p.strip() != '0']
-                            aggregated_ports += len(port_list)
+                            # Check for comma first (SQLite format), else semicolon (CSV format)
+                            if ',' in ports_str:
+                                port_list = [p.strip() for p in ports_str.split(',') if p.strip() and p.strip() != '0']
+                            else:
+                                port_list = [p.strip() for p in ports_str.split(';') if p.strip() and p.strip() != '0']
+                            
+                            # Count valid numeric ports
+                            valid_ports = [p for p in port_list if p.isdigit()]
+                            aggregated_ports += len(valid_ports)
+                            port_list = valid_ports  # Use only valid ports for snapshot
+                            
+                            # Track for debugging
+                            if len(valid_ports) > 0:
+                                hostname = host.get('hostname', '')
+                                port_debug_info.append(f"{ip} ({hostname}): {len(valid_ports)} ports [{','.join(valid_ports)}]")
                         else:
                             port_list = []
                         
@@ -542,8 +566,6 @@ def sync_all_counts():
                             'source': 'sqlite',
                             'mac': mac
                         }
-                        
-                        logger.debug(f"[SYNC] {ip}: ACTIVE from sqlite (status={status}, Failed_Pings={failed_pings})")
                     else:
                         inactive_target_count += 1
                         current_snapshot[ip] = {
@@ -553,13 +575,18 @@ def sync_all_counts():
                             'source': 'sqlite',
                             'mac': mac
                         }
-                        logger.debug(f"[SYNC] {ip}: INACTIVE from sqlite (status={status}, Failed_Pings={failed_pings})")
                 
                 logger.info(f"[SYNC] ✅ Read data from SQLite database:")
                 logger.info(f"  - Total unique IPs: {total_target_count}")
                 logger.info(f"  - Active (alive): {aggregated_targets}")
                 logger.info(f"  - Inactive (degraded): {inactive_target_count}")
-                logger.info(f"  - Ports: {aggregated_ports}")
+                logger.info(f"  - Total open ports: {aggregated_ports}")
+                
+                # Log detailed port breakdown for debugging
+                if port_debug_info:
+                    logger.info(f"[PORT COUNT BREAKDOWN] Counting ports from {len(port_debug_info)} alive hosts with open ports:")
+                    for info in port_debug_info:
+                        logger.info(f"    {info}")
                 
             except Exception as e:
                 logger.error(f"[SQLITE SYNC] ❌ Error reading from SQLite database: {e}")
@@ -626,19 +653,15 @@ def sync_all_counts():
                                 with open(filepath, 'r', encoding='utf-8', errors='ignore') as f:
                                     content = f.read()
                                     # Count lines with credential format (user:pass)
-                                    file_creds = 0
                                     for line in content.split('\n'):
                                         if ':' in line and line.strip():
                                             cred_count += 1
-                                            file_creds += 1
-                                    if file_creds > 0:
-                                        logger.debug(f"Found {file_creds} credentials in {filename}")
                             except Exception as e:
                                 logger.debug(f"Could not read credential file {filepath}: {e}")
                                 continue
 
-                    logger.debug(f"Credential files found: {cred_files_found}")
-                    logger.debug(f"Total credential count: {cred_count}")
+                    if cred_count > 0:
+                        logger.debug(f"Total credential count: {cred_count} from {len(cred_files_found)} files")
                 except Exception as e:
                     logger.warning(f"Could not list crackedpwd directory: {e}")
 
@@ -682,28 +705,9 @@ def sync_all_counts():
                 except Exception as e:
                     logger.debug(f"Could not count attack modules: {e}")
 
-            # Update livestatus file with all synchronized counts
-            try:
-                if pandas_available:
-                    # Create livestatus file if it doesn't exist
-                    if not os.path.exists(shared_data.livestatusfile):
-                        logger.info(f"Creating missing livestatus file: {shared_data.livestatusfile}")
-                        shared_data.create_livestatusfile()
-                    
-                    # Update the file with current counts
-                    df = pd.read_csv(shared_data.livestatusfile)
-                    if not df.empty:
-                        df.loc[0, 'Alive Hosts Count'] = safe_int(shared_data.targetnbr)
-                        df.loc[0, 'Total Open Ports'] = safe_int(shared_data.portnbr)
-                        df.loc[0, 'All Known Hosts Count'] = safe_int(getattr(shared_data, 'total_targetnbr', shared_data.targetnbr))
-                        df.loc[0, 'Vulnerabilities Count'] = safe_int(shared_data.vulnnbr)
-                        df.to_csv(shared_data.livestatusfile, index=False)
-                        logger.debug("Updated livestatus file with synchronized counts")
-                else:
-                    logger.warning("Pandas not available, skipping livestatus update")
-            except Exception as e:
-                logger.warning(f"Could not update livestatus with all sync counts: {e}")
-
+            # SQLite is the primary source of truth - CSV livestatus file is deprecated
+            # All counts are synchronized from SQLite database above
+            
             try:
                 shared_data.update_stats()
                 logger.debug(f"Updated gamification stats - Level: {shared_data.levelnbr}, Coins: {shared_data.coinnbr}")
@@ -761,8 +765,19 @@ def ensure_recent_sync(max_age=SYNC_BACKGROUND_INTERVAL):
         sync_all_counts()
 
 
+# WiFi SSID cache to avoid frequent nmcli calls
+_wifi_ssid_cache = {'ssid': None, 'timestamp': 0}
+_WIFI_SSID_CACHE_TTL = 60  # Cache for 60 seconds
+
 def get_current_wifi_ssid():
     """Get the current WiFi SSID for file naming"""
+    global _wifi_ssid_cache
+    
+    # Return cached value if still valid
+    current_timestamp = time.time()
+    if _wifi_ssid_cache['ssid'] and (current_timestamp - _wifi_ssid_cache['timestamp']) < _WIFI_SSID_CACHE_TTL:
+        return _wifi_ssid_cache['ssid']
+    
     try:
         # Try to get SSID from wifi_manager if available
         if hasattr(shared_data, 'wifi_manager') and getattr(shared_data, 'wifi_manager', None):
@@ -771,6 +786,8 @@ def get_current_wifi_ssid():
             if ssid:
                 # Sanitize SSID for filename
                 sanitized = re.sub(r'[^\w\-_]', '_', ssid)
+                _wifi_ssid_cache['ssid'] = sanitized
+                _wifi_ssid_cache['timestamp'] = current_timestamp
                 return sanitized
         
         # Fallback to direct system command
@@ -783,11 +800,19 @@ def get_current_wifi_ssid():
                     if ssid:
                         # Sanitize SSID for filename
                         sanitized = re.sub(r'[^\w\-_]', '_', ssid)
+                        _wifi_ssid_cache['ssid'] = sanitized
+                        _wifi_ssid_cache['timestamp'] = current_timestamp
                         return sanitized
         
+        # Cache the default value too
+        _wifi_ssid_cache['ssid'] = "unknown_network"
+        _wifi_ssid_cache['timestamp'] = current_timestamp
         return "unknown_network"
     except Exception as e:
         logger.debug(f"Error getting current WiFi SSID: {e}")
+        # Cache the error result
+        _wifi_ssid_cache['ssid'] = "unknown_network"
+        _wifi_ssid_cache['timestamp'] = current_timestamp
         return "unknown_network"
 
 
@@ -2043,23 +2068,34 @@ def get_stable_network_data():
 
 @app.route('/api/network')
 def get_network():
-    """Get network scan data from SQLite database (real-time)."""
+    """Get network scan data from SQLite database - returns ALL hosts (alive and degraded)."""
     try:
         # Get all hosts from SQLite database
         hosts = shared_data.db.get_all_hosts()
         
+        logger.debug(f"[API /api/network] Retrieved {len(hosts)} total hosts from database")
+        
         # Convert to format expected by frontend
         network_data = []
+        alive_count = 0
+        degraded_count = 0
+        
         for host in hosts:
             # Parse ports from comma-separated string to list
             ports_str = host.get('ports', '')
             ports = [p.strip() for p in ports_str.split(',') if p.strip()] if ports_str else []
             
+            status = host.get('status', 'unknown')
+            if status == 'alive':
+                alive_count += 1
+            elif status == 'degraded':
+                degraded_count += 1
+            
             network_data.append({
                 'mac': host.get('mac', ''),
                 'ip': host.get('ip', ''),
                 'hostname': host.get('hostname', ''),
-                'status': host.get('status', 'unknown'),
+                'status': status,
                 'ports': ports,
                 'failed_pings': host.get('failed_ping_count', 0),
                 'last_seen': host.get('last_seen', ''),
@@ -2081,6 +2117,8 @@ def get_network():
                 'nmap_vuln_scanner': host.get('nmap_vuln_scanner', ''),
                 'notes': host.get('notes', '')
             })
+        
+        logger.info(f"[API /api/network] Returning {len(network_data)} hosts (alive: {alive_count}, degraded: {degraded_count})")
         
         response = jsonify(network_data)
         response.headers['Cache-Control'] = 'no-cache, no-store, must-revalidate'
@@ -5288,7 +5326,7 @@ def get_actions():
 
 @app.route('/api/vulnerabilities')
 def get_vulnerabilities():
-    """Get vulnerability scan results from network intelligence and database"""
+    """Get vulnerability scan results"""
     try:
         # Check if network intelligence is enabled
         if (hasattr(shared_data, 'network_intelligence') and 
@@ -5313,56 +5351,12 @@ def get_vulnerabilities():
                     'status': vuln_info['status']
                 })
             
-            # FALLBACK: If no vulnerabilities from network intelligence, read from database
-            if not vuln_data:
-                logger.info("No vulnerabilities from network intelligence, reading from database")
-                try:
-                    db_vulns = []
-                    all_hosts = shared_data.db.get_all_hosts()
-                    for host in all_hosts:
-                        vulnerabilities = host.get('vulnerabilities', '')
-                        if vulnerabilities and vulnerabilities.strip():
-                            ip = host.get('ip', 'unknown')
-                            # Parse vulnerability entries
-                            vuln_entries = [v.strip() for v in vulnerabilities.split(';') if v.strip()]
-                            for vuln_entry in vuln_entries:
-                                if ':' in vuln_entry:
-                                    port_service, vuln_text = vuln_entry.split(':', 1)
-                                    if '/' in port_service:
-                                        port_str, service = port_service.split('/', 1)
-                                        try:
-                                            port = int(port_str.strip())
-                                        except ValueError:
-                                            port = 0
-                                    else:
-                                        port = 0
-                                        service = 'unknown'
-                                    
-                                    db_vulns.append({
-                                        'id': f"db_{host.get('mac', 'unknown')}_{port}",
-                                        'host': ip,
-                                        'port': port,
-                                        'service': service.strip(),
-                                        'vulnerability': vuln_text.strip(),
-                                        'severity': 'medium',
-                                        'discovered': host.get('first_seen', ''),
-                                        'source': 'database',
-                                        'status': 'active'
-                                    })
-                    
-                    if db_vulns:
-                        logger.info(f"Found {len(db_vulns)} vulnerabilities from database")
-                        vuln_data = db_vulns
-                except Exception as db_error:
-                    logger.error(f"Error reading vulnerabilities from database: {db_error}")
-            
             return jsonify({
                 'vulnerabilities': vuln_data,
                 'network_context': {
                     'current_network': dashboard_findings['network_id'],
-                    'count': len(vuln_data)
-                },
-                'source': 'network_intelligence' if vuln_data and 'network_id' in vuln_data[0] else 'database'
+                    'count': dashboard_findings['counts']['vulnerabilities']
+                }
             })
         else:
             # Fallback to legacy vulnerability data
@@ -6991,10 +6985,10 @@ def background_sync_loop(interval=SYNC_BACKGROUND_INTERVAL):
             import threading
             sync_thread = threading.Thread(target=sync_all_counts, daemon=True)
             sync_thread.start()
-            sync_thread.join(timeout=120)  # 120 second timeout (increased from 30s to handle large networks)
+            sync_thread.join(timeout=60)  # 60 second timeout (reduced from 120s)
             
             if sync_thread.is_alive():
-                logger.error("Background sync thread timed out after 120 seconds! Skipping this cycle.")
+                logger.error("Background sync thread timed out after 60 seconds! Skipping this cycle.")
                 consecutive_errors += 1
             else:
                 consecutive_errors = 0  # Reset on success
@@ -7107,10 +7101,10 @@ def background_health_monitor():
         try:
             current_time = time.time()
             
-            # Check sync thread - should run every 5 seconds but may take up to 60s for large networks
+            # Check sync thread - should run every 15 seconds but may take up to 60s for large networks
             if background_thread_health['sync_last_run'] > 0:
                 time_since_sync = current_time - background_thread_health['sync_last_run']
-                if time_since_sync > 150:  # Increased from 30s to 150s to accommodate 120s timeout + buffer
+                if time_since_sync > 90:  # 60s timeout + 30s buffer
                     logger.warning(f"⚠️ Background sync thread appears stuck! Last run was {time_since_sync:.0f}s ago")
                     background_thread_health['sync_alive'] = False
                 else:
@@ -7153,29 +7147,67 @@ def _collect_manual_targets():
     targets = []
     target_ips = set()  # Track unique IPs to avoid duplicates
 
-    # Read from the live status file first
-    if os.path.exists(shared_data.livestatusfile):
-        with open(shared_data.livestatusfile, 'r') as file:
-            reader = csv.DictReader(file)
-            for row in reader:
-                if row.get('Alive') == '1':  # Only alive targets
-                    ip = row.get('IP', '')
-                    hostname = row.get('Hostname', ip)
+    # Read from SQLite database (primary source)
+    try:
+        from db_manager import DatabaseManager
+        db = DatabaseManager()
+        all_hosts = db.get_all_hosts()
+        
+        for host in all_hosts:
+            # Only include alive/up hosts
+            if host.get('status') in ['alive', 'up']:
+                ip = host.get('ip_address', '')
+                hostname = host.get('hostname', ip) or ip
+                
+                # Parse ports from comma or semicolon-separated string
+                ports_str = host.get('ports', '')
+                ports = []
+                if ports_str:
+                    if ',' in ports_str:
+                        ports = [p.strip() for p in ports_str.split(',') if p.strip()]
+                    else:
+                        ports = [p.strip() for p in ports_str.split(';') if p.strip()]
+                
+                if ip and ip not in target_ips:
+                    targets.append({
+                        'ip': ip,
+                        'hostname': hostname,
+                        'ports': ports,
+                        'source': 'Database'
+                    })
+                    target_ips.add(ip)
+        
+        logger.debug(f"Loaded {len(targets)} targets from SQLite database for manual attacks")
+    except Exception as e:
+        logger.error(f"Error reading targets from database: {e}")
+    
+    # Fallback: Read from CSV livestatus file if database is empty
+    if not targets and os.path.exists(shared_data.livestatusfile):
+        try:
+            with open(shared_data.livestatusfile, 'r') as file:
+                reader = csv.DictReader(file)
+                for row in reader:
+                    if row.get('Alive') == '1':  # Only alive targets
+                        ip = row.get('IP', '')
+                        hostname = row.get('Hostname', ip)
 
-                    # Get open ports
-                    ports = []
-                    for key, value in row.items():
-                        if key.isdigit() and value:  # Port columns with values
-                            ports.append(key)
+                        # Get open ports
+                        ports = []
+                        for key, value in row.items():
+                            if key.isdigit() and value:  # Port columns with values
+                                ports.append(key)
 
-                    if ip and ip not in target_ips:
-                        targets.append({
-                            'ip': ip,
-                            'hostname': hostname,
-                            'ports': ports,
-                            'source': 'Network Scan'
-                        })
-                        target_ips.add(ip)
+                        if ip and ip not in target_ips:
+                            targets.append({
+                                'ip': ip,
+                                'hostname': hostname,
+                                'ports': ports,
+                                'source': 'CSV Fallback'
+                            })
+                            target_ips.add(ip)
+            logger.debug(f"Loaded {len(targets)} targets from CSV fallback for manual attacks")
+        except Exception as e:
+            logger.error(f"Error reading CSV fallback: {e}")
 
     # Also include hosts from NetKB data
     try:

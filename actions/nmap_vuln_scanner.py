@@ -1,56 +1,30 @@
 # nmap_vuln_scanner.py
 # Vulnerability Scanner for Ragnar - Uses Nmap with vulners.nse script
 #
-# DATA ARCHITECTURE - DUAL STORAGE WITH SYNC:
+# DATA ARCHITECTURE - SINGLE SOURCE OF TRUTH:
 # ============================================
-# This scanner stores vulnerability data in TWO synchronized locations:
+# This scanner feeds vulnerability data to Network Intelligence, which is the 
+# AUTHORITATIVE SOURCE for all vulnerability information in Ragnar.
 #
-# 1. SQLite Database (db_manager.py) - PERSISTENT STORAGE
-#    - hosts.vulnerabilities column stores summary text
-#    - Used for: Long-term persistence, cross-session data retention
-#    - Format: "port/service: CVE-2024-1234; port/service: CVE-2024-5678"
+# Data Flow:
+# 1. Nmap scans hosts → parses vulnerability output
+# 2. Vulnerabilities fed to Network Intelligence (network_intelligence.py)
+# 3. Network Intelligence stores in:
+#    - In-memory: active_vulnerabilities dict (by network_id)
+#    - Persistent: data/intelligence/active_findings.json
+# 4. Web UI reads ONLY from Network Intelligence
 #
-# 2. Network Intelligence (network_intelligence.py) - IN-MEMORY + JSON
-#    - active_vulnerabilities dict stores detailed vulnerability objects
-#    - Used for: Real-time dashboard, network-aware context, severity tracking
-#    - Storage: In-memory + data/intelligence/active_findings.json
-#
-# Data Flow (Complete Cycle):
-# ===========================
-# SCAN → DATABASE → NETWORK INTELLIGENCE → WEB UI
-#
-# 1. Nmap Scan Execution (this file):
-#    - scan_vulnerabilities() runs nmap with vulners.nse
-#    - parse_vulnerabilities() extracts CVEs, services, ports
-#
-# 2. Database Storage:
-#    - update_database_vulnerabilities() → writes summary to hosts.vulnerabilities
-#    - update_database_detailed_vulnerabilities() → writes port-specific data
-#    - Database is the PERSISTENT source of truth
-#
-# 3. Network Intelligence Feed:
-#    - feed_to_network_intelligence() → creates detailed vuln objects
-#    - Includes severity scoring, service info, confirmation tracking
-#    - Network Intelligence is the ACTIVE/DASHBOARD source
-#
-# 4. Synchronization:
-#    - network_intelligence.sync_vulnerabilities_from_database()
-#    - Runs on startup and when get_active_findings_for_dashboard() is called
-#    - Ensures database vulnerabilities appear in dashboard even if scanner didn't feed them
-#
-# 5. Web UI Display (webapp_modern.py):
-#    - /api/vulnerabilities → reads from Network Intelligence
-#    - Fallback: If NI empty, reads directly from database
-#    - /api/vulnerabilities/grouped → groups by host IP with stats
-#
-# Auto-Recovery:
-# - If vulnerabilities are deleted via web UI and still present in database,
-#   they will be automatically re-synced on next dashboard load
+# Auto-Repopulation:
+# - If vulnerabilities are deleted via web UI and still present in scans,
+#   they will be automatically re-added on next scan cycle
 # - This ensures the system reflects current reality (not stale data)
 #
-# CSV Files (REMOVED):
-# - All CSV-based storage has been eliminated
-# - Database is now the only persistent storage mechanism
+# Legacy Files (DEPRECATED):
+# - vulnerability_summary.csv - Kept for backward compatibility only
+# - netkb.csv "Nmap Vulnerabilities" column - Will be removed
+# - final_vulnerability_summary.csv - Will be removed
+#
+# TODO: Remove all CSV-based vulnerability storage once fully migrated
 
 import os
 import sys
