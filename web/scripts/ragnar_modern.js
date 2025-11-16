@@ -2196,7 +2196,7 @@ async function loadVulnerabilityIntel() {
                 <svg class="w-8 h-8 inline animate-spin mb-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                     <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"></path>
                 </svg>
-                <p>Loading vulnerability intelligence...</p>
+                <p>Loading service intelligence...</p>
             </div>
         `;
         
@@ -2205,18 +2205,17 @@ async function loadVulnerabilityIntel() {
         if (!data) {
             container.innerHTML = `
                 <div class="text-center text-red-400 py-8">
-                    <p>Error loading vulnerability intelligence</p>
+                    <p>Error loading service intelligence</p>
                 </div>
             `;
             return;
         }
         
         // Update statistics
-        document.getElementById('intel-stat-hosts').textContent = data.statistics.total_hosts || 0;
-        document.getElementById('intel-stat-critical').textContent = data.statistics.critical || 0;
-        document.getElementById('intel-stat-high').textContent = data.statistics.high || 0;
-        document.getElementById('intel-stat-medium').textContent = data.statistics.medium || 0;
-        document.getElementById('intel-stat-exploits').textContent = data.statistics.exploits || 0;
+        document.getElementById('intel-stat-scanned').textContent = data.statistics.total_scanned || 0;
+        document.getElementById('intel-stat-interesting').textContent = data.statistics.interesting_hosts || 0;
+        document.getElementById('intel-stat-services').textContent = data.statistics.services_with_intel || 0;
+        document.getElementById('intel-stat-scripts').textContent = data.statistics.script_outputs || 0;
         
         displayVulnerabilityIntel(data.scans);
     } catch (error) {
@@ -2227,7 +2226,7 @@ async function loadVulnerabilityIntel() {
                 <svg class="w-12 h-12 mx-auto mb-3 opacity-50" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                     <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path>
                 </svg>
-                <p>Error loading vulnerability intelligence</p>
+                <p>Error loading service intelligence</p>
                 <p class="text-sm text-gray-500 mt-2">${error.message}</p>
             </div>
         `;
@@ -2243,8 +2242,8 @@ function displayVulnerabilityIntel(scans) {
                 <svg class="w-12 h-12 mx-auto mb-3 opacity-50" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                     <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z"></path>
                 </svg>
-                <p>No vulnerability scans found</p>
-                <p class="text-sm text-gray-500 mt-2">Run vulnerability scans on discovered hosts to see results here</p>
+                <p>No interesting intelligence found</p>
+                <p class="text-sm text-gray-500 mt-2">Scanned hosts without interesting data are filtered out</p>
             </div>
         `;
         return;
@@ -2253,19 +2252,15 @@ function displayVulnerabilityIntel(scans) {
     let html = '<div class="space-y-4">';
     
     scans.forEach(scan => {
-        const hasVulns = scan.total_vulnerabilities > 0;
-        const criticalCount = scan.summary.critical || 0;
-        const highCount = scan.summary.high || 0;
-        const mediumCount = scan.summary.medium || 0;
-        const lowCount = scan.summary.low || 0;
-        const exploitCount = scan.summary.exploits || 0;
+        const serviceCount = scan.total_services || 0;
+        const scriptCount = scan.services.reduce((sum, svc) => sum + (svc.scripts?.length || 0), 0);
         
         html += `
             <div class="bg-slate-800 bg-opacity-50 rounded-lg border border-slate-700 overflow-hidden">
                 <div class="px-4 py-3 bg-slate-900 bg-opacity-50 flex items-center justify-between cursor-pointer hover:bg-opacity-70 transition-colors" onclick="toggleVulnHost('${scan.ip}')">
                     <div class="flex items-center space-x-3">
-                        <svg class="w-5 h-5 ${hasVulns ? 'text-red-400' : 'text-green-400'}" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z"></path>
+                        <svg class="w-5 h-5 text-cyan-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path>
                         </svg>
                         <div>
                             <div class="font-semibold text-lg">${escapeHtml(scan.hostname)}</div>
@@ -2273,10 +2268,8 @@ function displayVulnerabilityIntel(scans) {
                         </div>
                     </div>
                     <div class="flex items-center space-x-4">
-                        ${criticalCount > 0 ? `<span class="text-sm text-red-400">🔴 ${criticalCount}</span>` : ''}
-                        ${highCount > 0 ? `<span class="text-sm text-orange-400">🟠 ${highCount}</span>` : ''}
-                        ${mediumCount > 0 ? `<span class="text-sm text-yellow-400">🟡 ${mediumCount}</span>` : ''}
-                        ${exploitCount > 0 ? `<span class="text-sm text-purple-400">💥 ${exploitCount}</span>` : ''}
+                        <span class="text-sm text-cyan-400">📡 ${serviceCount} services</span>
+                        ${scriptCount > 0 ? `<span class="text-sm text-purple-400">📜 ${scriptCount} scripts</span>` : ''}
                         <span class="text-xs text-gray-500">${scan.scan_date}</span>
                         <svg id="vuln-chevron-${scan.ip.replace(/\./g, '-')}" class="w-5 h-5 text-gray-400 transform transition-transform" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"></path>
@@ -2285,70 +2278,41 @@ function displayVulnerabilityIntel(scans) {
                 </div>
                 
                 <div id="vuln-host-${scan.ip.replace(/\./g, '-')}" class="hidden px-4 py-3 border-t border-slate-700">
-                    ${scan.total_vulnerabilities === 0 ? `
-                        <p class="text-center text-green-400 py-4">✅ No vulnerabilities found</p>
-                    ` : `
-                        <div class="mb-4 grid grid-cols-2 md:grid-cols-5 gap-3">
-                            <div class="bg-red-900 bg-opacity-30 rounded p-2 text-center">
-                                <div class="text-xs text-gray-400">Critical</div>
-                                <div class="text-xl font-bold text-red-400">${criticalCount}</div>
-                            </div>
-                            <div class="bg-orange-900 bg-opacity-30 rounded p-2 text-center">
-                                <div class="text-xs text-gray-400">High</div>
-                                <div class="text-xl font-bold text-orange-400">${highCount}</div>
-                            </div>
-                            <div class="bg-yellow-900 bg-opacity-30 rounded p-2 text-center">
-                                <div class="text-xs text-gray-400">Medium</div>
-                                <div class="text-xl font-bold text-yellow-400">${mediumCount}</div>
-                            </div>
-                            <div class="bg-blue-900 bg-opacity-30 rounded p-2 text-center">
-                                <div class="text-xs text-gray-400">Low</div>
-                                <div class="text-xl font-bold text-blue-400">${lowCount}</div>
-                            </div>
-                            <div class="bg-purple-900 bg-opacity-30 rounded p-2 text-center">
-                                <div class="text-xs text-gray-400">Exploits</div>
-                                <div class="text-xl font-bold text-purple-400">${exploitCount}</div>
-                            </div>
-                        </div>
-                        
-                        <div class="space-y-2 max-h-96 overflow-y-auto scrollbar-thin">
-                            ${scan.vulnerabilities.map(vuln => {
-                                const severityColor = vuln.severity === 'critical' ? 'red' : 
-                                                     vuln.severity === 'high' ? 'orange' : 
-                                                     vuln.severity === 'medium' ? 'yellow' : 'blue';
-                                return `
-                                    <div class="bg-slate-700 bg-opacity-50 rounded p-3 hover:bg-opacity-70 transition-colors">
-                                        <div class="flex items-start justify-between">
-                                            <div class="flex-1">
-                                                <div class="flex items-center space-x-2 mb-1">
-                                                    <span class="font-mono text-sm text-${severityColor}-400">${escapeHtml(vuln.id)}</span>
-                                                    ${vuln.is_exploit ? '<span class="text-xs bg-purple-600 text-white px-2 py-0.5 rounded">EXPLOIT</span>' : ''}
-                                                </div>
-                                                <div class="text-xs text-gray-400">
-                                                    Port: ${escapeHtml(vuln.port)} (${escapeHtml(vuln.service)})
-                                                </div>
+                    <div class="space-y-3">
+                        ${scan.services.map(service => {
+                            const hasScripts = service.scripts && service.scripts.length > 0;
+                            return `
+                                <div class="bg-slate-700 bg-opacity-50 rounded-lg p-4">
+                                    <div class="flex items-start justify-between mb-2">
+                                        <div class="flex-1">
+                                            <div class="flex items-center space-x-2 mb-1">
+                                                <span class="font-semibold text-white">${escapeHtml(service.port)}</span>
+                                                <span class="text-sm text-gray-400">${escapeHtml(service.service)}</span>
                                             </div>
-                                            <div class="flex items-center space-x-2">
-                                                <span class="px-2 py-1 rounded text-xs font-semibold bg-${severityColor}-600 text-white">
-                                                    ${vuln.score}
-                                                </span>
-                                                <a href="${escapeHtml(vuln.url)}" target="_blank" class="text-blue-400 hover:text-blue-300 text-xs">
-                                                    <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14"></path>
-                                                    </svg>
-                                                </a>
-                                            </div>
+                                            ${service.version ? `
+                                                <div class="text-sm text-cyan-300 font-mono bg-slate-900 bg-opacity-50 px-2 py-1 rounded inline-block">
+                                                    ${escapeHtml(service.version)}
+                                                </div>
+                                            ` : ''}
                                         </div>
                                     </div>
-                                `;
-                            }).join('')}
-                            ${scan.total_vulnerabilities > 100 ? `
-                                <p class="text-center text-gray-400 text-sm py-2">
-                                    Showing first 100 of ${scan.total_vulnerabilities} vulnerabilities
-                                </p>
-                            ` : ''}
-                        </div>
-                    `}
+                                    
+                                    ${hasScripts ? `
+                                        <div class="mt-3 space-y-2">
+                                            ${service.scripts.map(script => `
+                                                <div class="bg-slate-900 bg-opacity-50 rounded p-3">
+                                                    <div class="text-sm font-semibold text-purple-400 mb-2">
+                                                        📜 ${escapeHtml(script.name)}
+                                                    </div>
+                                                    <pre class="text-xs text-gray-300 font-mono whitespace-pre-wrap overflow-x-auto max-h-96 scrollbar-thin">${escapeHtml(script.output)}</pre>
+                                                </div>
+                                            `).join('')}
+                                        </div>
+                                    ` : ''}
+                                </div>
+                            `;
+                        }).join('')}
+                    </div>
                 </div>
             </div>
         `;
@@ -2374,7 +2338,7 @@ function toggleVulnHost(ip) {
 }
 
 async function refreshVulnerabilityIntel() {
-    showNotification('Refreshing vulnerability intelligence...', 'info');
+    showNotification('Refreshing service intelligence...', 'info');
     await loadVulnerabilityIntel();
 }
 

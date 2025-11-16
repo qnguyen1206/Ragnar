@@ -972,8 +972,8 @@
             <div class="glass rounded-xl p-6 mb-6">
                 <div class="flex items-center justify-between mb-6">
                     <div>
-                        <h2 class="text-2xl font-bold mb-2">🔍 Vulnerability Intelligence</h2>
-                        <p class="text-sm text-gray-400">Detailed vulnerability scan results from discovered hosts</p>
+                        <h2 class="text-2xl font-bold mb-2">🔍 Service Intelligence</h2>
+                        <p class="text-sm text-gray-400">Interesting reconnaissance data from service scans (MQTT topics, banners, etc.)</p>
                     </div>
                     <button onclick="refreshVulnerabilityIntel()" class="refresh-btn bg-Ragnar-600 hover:bg-Ragnar-700 text-white px-4 py-2 rounded-lg transition-colors">
                         <svg class="w-4 h-4 inline mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -984,26 +984,22 @@
                 </div>
                 
                 <!-- Intel Statistics -->
-                <div class="grid grid-cols-2 md:grid-cols-5 gap-4 mb-6">
+                <div class="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
                     <div class="bg-slate-800 bg-opacity-50 rounded-lg p-4">
-                        <div class="text-sm text-gray-400 mb-1">Scanned Hosts</div>
-                        <div id="intel-stat-hosts" class="text-2xl font-bold text-white">0</div>
+                        <div class="text-sm text-gray-400 mb-1">Total Scanned</div>
+                        <div id="intel-stat-scanned" class="text-2xl font-bold text-white">0</div>
                     </div>
-                    <div class="bg-red-900 bg-opacity-30 rounded-lg p-4">
-                        <div class="text-sm text-gray-400 mb-1">Critical CVEs</div>
-                        <div id="intel-stat-critical" class="text-2xl font-bold text-red-400">0</div>
+                    <div class="bg-cyan-900 bg-opacity-30 rounded-lg p-4">
+                        <div class="text-sm text-gray-400 mb-1">Interesting Hosts</div>
+                        <div id="intel-stat-interesting" class="text-2xl font-bold text-cyan-400">0</div>
                     </div>
-                    <div class="bg-orange-900 bg-opacity-30 rounded-lg p-4">
-                        <div class="text-sm text-gray-400 mb-1">High CVEs</div>
-                        <div id="intel-stat-high" class="text-2xl font-bold text-orange-400">0</div>
-                    </div>
-                    <div class="bg-yellow-900 bg-opacity-30 rounded-lg p-4">
-                        <div class="text-sm text-gray-400 mb-1">Medium CVEs</div>
-                        <div id="intel-stat-medium" class="text-2xl font-bold text-yellow-400">0</div>
+                    <div class="bg-purple-900 bg-opacity-30 rounded-lg p-4">
+                        <div class="text-sm text-gray-400 mb-1">Services w/ Intel</div>
+                        <div id="intel-stat-services" class="text-2xl font-bold text-purple-400">0</div>
                     </div>
                     <div class="bg-blue-900 bg-opacity-30 rounded-lg p-4">
-                        <div class="text-sm text-gray-400 mb-1">Total Exploits</div>
-                        <div id="intel-stat-exploits" class="text-2xl font-bold text-blue-400">0</div>
+                        <div class="text-sm text-gray-400 mb-1">Script Outputs</div>
+                        <div id="intel-stat-scripts" class="text-2xl font-bold text-blue-400">0</div>
                     </div>
                 </div>
                 
