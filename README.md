@@ -10,7 +10,6 @@
     <td><img src="https://github.com/user-attachments/assets/88345794-edfc-49e8-90ab-48d72b909e86" width="800"/></td>
   </tr>
 </table>
-
 </p>
 
 Ragnar is a « Tamagotchi like » sophisticated, autonomous network scanning, vulnerability assessment, and offensive security tool designed to run on a Raspberry Pi equipped with a 2.13-inch e-Paper HAT. This document provides a detailed explanation of the project.
@@ -22,6 +21,17 @@ Ragnar is a « Tamagotchi like » sophisticated, autonomous network scanning, vu
 > Ragnar includes a built-in kill switch endpoint (`/api/kill`) that completely wipes all databases, logs, This ensures no sensitive data remains after demonstrations or training sessions.
 > If Ragnar is to be found witout permission in a network anyone kan completely wipe all databases + delete the entire repository rendering Ragnar dead.
 > **📖 Full Documentation:** See [kill switch doc](KILL_SWITCH.md) for complete usage instructions and safety guidelines.
+
+### 🔨 Installation
+
+The fastest way to install Ragnar is using the automatic installation script :
+
+```bash
+# Download and run the installer
+wget https://raw.githubusercontent.com/PierreGode/Ragnar/main/install_ragnar.sh
+sudo chmod +x install_ragnar.sh && sudo ./install_ragnar.sh
+# Choose the choice 1 for automatic installation. It may take a while as a lot of packages and modules will be installed. You must reboot at the end.
+```
 
 
 ### 🌐 Web Interface & WiFi Management
@@ -47,20 +57,6 @@ The AP portal features:
 - Countdown timer showing when Ragnar will retry WiFi
 - Known networks management
 - One-tap connection to saved networks
-
-
-## 📚 Table of Contents
-
-- [Introduction](#-introduction)
-- [Features](#-features)
-- [Getting Started](#-getting-started)
-  - [Prerequisites](#-prerequisites)
-  - [Installation](#-installation)
-- [Quick Start](#-quick-start)
-- [Usage Example](#-usage-example)
-- [Contributing](#-contributing)
-- [License](#-license)
-- [Contact](#-contact)
 
 ## 📄 Introduction
 
@@ -141,66 +137,6 @@ For **detailed information** about **installation** process go to [Install Guide
 
 **Quick Installation**: you can use the fastest way to install **Ragnar** [Getting Started](#-getting-started)
 
-## 💡 Usage Example
-
-Here's a demonstration of how Ragnar autonomously hunts through your network like a Viking raider (fake demo for illustration):
-
-```bash
-# Boot Sequence - WiFi Management
-[WiFiManager] Scanning for known networks...
-[+] Found: HomeNetwork (Signal: -45dBm)
-[WiFiManager] Auto-connecting to HomeNetwork...
-[+] Connected! IP: 192.168.1.211
-[Display] Showing: WiFi icon + .211
-
-# If no WiFi found:
-[WiFiManager] No known networks found after 60s
-[WiFiManager] Starting AP mode: Ragnar-Setup
-[+] AP Portal available at: http://192.168.4.1/portal
-[+] Waiting for user configuration (3 minute timeout)
-
-# Web Interface Starts
-[Webapp] Modern dashboard available at http://192.168.1.211:8000
-[+] Real-time threat intelligence dashboard active
-[+] Hardware profile: Auto-detected Pi Zero 2W (512MB)
-
-# Reconnaissance Phase
-[NetworkScanner] Discovering alive hosts...
-[+] Host found: 192.168.1.100
-    ├── Ports: 22,80,445,3306
-    └── MAC: 00:11:22:33:44:55
-
-# Threat Intelligence Enrichment
-[ThreatIntelligence] Enriching findings...
-[+] Querying: CISA KEV, NVD, AlienVault OTX, MITRE ATT&CK
-[+] CVE-2017-0144 found in CISA KEV (EternalBlue)
-    ├── Severity: CRITICAL
-    ├── EPSS Score: 97.5%
-    └── MITRE Techniques: T1210 (Exploitation of Remote Services)
-
-# Attack Sequence 
-[NmapVulnScanner] Found vulnerabilities on 192.168.1.100
-    ├── MySQL 5.5 < 5.7 - User Enumeration
-    └── SMB - EternalBlue Candidate
-
-[SSHBruteforce] Cracking credentials...
-[+] Success! user:password123
-[StealFilesSSH] Extracting sensitive data...
-
-# Automated Data Exfiltration
-[SQLBruteforce] Database accessed!
-[StealDataSQL] Dumping tables...
-[SMBBruteforce] Share accessible
-[+] Found config files, credentials, backups...
-
-# View Results
-[+] Dashboard: http://192.168.1.211:8000
-    ├── Threat Intel: 3 critical findings
-    ├── Credentials: 5 cracked
-    └── Files: 127 exfiltrated
-```
-
-This is just a demo output - actual results will vary based on your network and target configuration.
 
 **Access Ragnar:**
 - **Main Dashboard**: `http://<ragnar-ip>:8000` - Modern web interface with real-time updates
