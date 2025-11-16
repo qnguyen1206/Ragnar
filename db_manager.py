@@ -202,6 +202,9 @@ class DatabaseManager:
         
         # Perform CSV migration if needed
         self._migrate_from_csv()
+        
+        # Clean up any duplicate entries
+        self.cleanup_duplicate_hosts()
     
     def _migrate_from_csv(self):
         """
@@ -289,11 +292,22 @@ class DatabaseManager:
         except (ValueError, TypeError):
             return default
     
+    def _is_pseudo_mac(self, mac: str) -> bool:
+        """Check if MAC is a pseudo-MAC (format: 00:00:c0:a8:xx:xx or similar)."""
+        if not mac:
+            return False
+        return mac.lower().startswith('00:00:')
+    
     def upsert_host(self, mac: str, ip: str = None, hostname: str = None, 
                    vendor: str = None, ports: str = None, services: str = None,
                    vulnerabilities: str = None, **kwargs):
         """
         Insert or update a host record.
+        
+        DUPLICATE PREVENTION:
+        - If adding a real MAC for an IP that has a pseudo-MAC, migrates data and deletes pseudo-MAC
+        - If adding a pseudo-MAC for an IP that has a real MAC, uses the real MAC instead
+        - Prevents duplicate entries for the same IP with different MACs
         
         Args:
             mac: MAC address (primary key)
@@ -314,6 +328,57 @@ class DatabaseManager:
         
         # Normalize MAC address
         mac = mac.lower().strip()
+        
+        # DUPLICATE PREVENTION: Check for existing entry with same IP but different MAC
+        if ip:
+            existing_host = self.get_host_by_ip(ip)
+            if existing_host and existing_host['mac'] != mac:
+                existing_mac = existing_host['mac']
+                is_new_mac_pseudo = self._is_pseudo_mac(mac)
+                is_existing_mac_pseudo = self._is_pseudo_mac(existing_mac)
+                
+                if is_new_mac_pseudo and not is_existing_mac_pseudo:
+                    # Trying to add pseudo-MAC when real MAC exists - use real MAC instead
+                    logger.info(f"🔄 Real MAC {existing_mac} already exists for IP {ip}, ignoring pseudo-MAC {mac}")
+                    mac = existing_mac
+                elif not is_new_mac_pseudo and is_existing_mac_pseudo:
+                    # Upgrading from pseudo-MAC to real MAC - migrate data
+                    logger.info(f"🔄 Upgrading IP {ip} from pseudo-MAC {existing_mac} to real MAC {mac}")
+                    
+                    # Merge data from old entry with new data, preserving valuable info
+                    # Ports: merge instead of replace to preserve scan history
+                    existing_ports = set(existing_host.get('ports', '').split(',')) if existing_host.get('ports') else set()
+                    new_ports = set(ports.split(',')) if ports else set()
+                    merged_ports = ','.join(sorted(existing_ports.union(new_ports), key=lambda x: int(x) if x.isdigit() else 0))
+                    
+                    # Use new data if provided, otherwise keep existing
+                    hostname = hostname or existing_host.get('hostname', '')
+                    vendor = vendor or existing_host.get('vendor', '')
+                    ports = merged_ports
+                    services = services or existing_host.get('services', '')
+                    vulnerabilities = vulnerabilities or existing_host.get('vulnerabilities', '')
+                    
+                    # Preserve action statuses and other metadata from pseudo-MAC entry
+                    for field in ['alive_count', 'network_profile', 'scanner_status',
+                                'ssh_connector', 'rdp_connector', 'ftp_connector',
+                                'smb_connector', 'telnet_connector', 'sql_connector',
+                                'steal_files_ssh', 'steal_files_rdp', 'steal_files_ftp',
+                                'steal_files_smb', 'steal_files_telnet', 'steal_data_sql',
+                                'nmap_vuln_scanner', 'notes', 'failed_ping_count']:
+                        if field not in kwargs and existing_host.get(field):
+                            kwargs[field] = existing_host[field]
+                    
+                    # Delete the old pseudo-MAC entry
+                    self.delete_host(existing_mac)
+                    logger.info(f"🗑️ Deleted old pseudo-MAC entry {existing_mac}")
+                elif is_new_mac_pseudo and is_existing_mac_pseudo:
+                    # Both are pseudo-MACs - keep the existing one
+                    logger.debug(f"Both MACs are pseudo for IP {ip}, keeping existing {existing_mac}")
+                    mac = existing_mac
+                else:
+                    # Both are real MACs but different - this is IP reassignment
+                    logger.warning(f"⚠️ IP {ip} reassigned from MAC {existing_mac} to {mac} (both real MACs)")
+                    # Continue with the new MAC, existing entry will be marked as failed ping
         
         try:
             with self.get_connection() as conn:
@@ -481,16 +546,24 @@ class DatabaseManager:
             return None
     
     def get_host_by_ip(self, ip: str) -> Optional[Dict]:
-        """Get host record by IP address."""
+        """Get host record by IP address. If multiple exist, prefers real MAC over pseudo-MAC."""
         try:
             with self.get_connection() as conn:
                 cursor = conn.cursor()
-                cursor.execute("SELECT * FROM hosts WHERE ip = ?", (ip.strip(),))
-                row = cursor.fetchone()
+                cursor.execute("SELECT * FROM hosts WHERE ip = ? ORDER BY mac", (ip.strip(),))
+                rows = cursor.fetchall()
                 
-                if row:
-                    return dict(row)
-                return None
+                if not rows:
+                    return None
+                
+                # If multiple entries exist for same IP, prefer real MAC over pseudo-MAC
+                if len(rows) > 1:
+                    logger.warning(f"Found {len(rows)} entries for IP {ip} - preferring real MAC")
+                    for row in rows:
+                        if not self._is_pseudo_mac(row['mac']):
+                            return dict(row)
+                
+                return dict(rows[0])
         except Exception as e:
             logger.error(f"Failed to get host by IP {ip}: {e}")
             return None
@@ -575,6 +648,138 @@ class DatabaseManager:
         except Exception as e:
             logger.error(f"Failed to update ping status for {mac}: {e}")
             return False
+    
+    def cleanup_duplicate_hosts(self):
+        """
+        Remove duplicate host entries where the same IP exists with both:
+        - A real MAC address (from ARP discovery)
+        - A pseudo-MAC address (format 00:00:xx:xx:xx:xx)
+        
+        Priority: Real MAC addresses are kept, pseudo-MACs are deleted.
+        Data from pseudo-MAC entries is migrated to real MAC entries.
+        
+        Returns:
+            int: Number of duplicate entries removed
+        """
+        try:
+            deleted_count = 0
+            
+            with self.get_connection() as conn:
+                cursor = conn.cursor()
+                
+                # Find all IPs that have multiple MAC addresses
+                cursor.execute("""
+                    SELECT ip, COUNT(*) as count 
+                    FROM hosts 
+                    GROUP BY ip 
+                    HAVING COUNT(*) > 1
+                """)
+                
+                duplicate_ips = cursor.fetchall()
+                
+                if not duplicate_ips:
+                    logger.debug("No duplicate IP entries found")
+                    return 0
+                
+                logger.info(f"Found {len(duplicate_ips)} IPs with duplicate entries")
+                
+                for ip_row in duplicate_ips:
+                    ip = ip_row['ip'] if isinstance(ip_row, sqlite3.Row) else ip_row[0]
+                    
+                    # Get all entries for this IP
+                    cursor.execute("""
+                        SELECT mac, hostname, vendor, ports, services, vulnerabilities,
+                               last_seen, failed_ping_count, status, alive_count,
+                               network_profile, scanner_status, ssh_connector, rdp_connector,
+                               ftp_connector, smb_connector, telnet_connector, sql_connector,
+                               steal_files_ssh, steal_files_rdp, steal_files_ftp,
+                               steal_files_smb, steal_files_telnet, steal_data_sql,
+                               nmap_vuln_scanner, notes
+                        FROM hosts 
+                        WHERE ip = ?
+                        ORDER BY last_seen DESC
+                    """, (ip,))
+                    
+                    entries = cursor.fetchall()
+                    
+                    if len(entries) < 2:
+                        continue
+                    
+                    logger.debug(f"IP {ip} has {len(entries)} entries:")
+                    
+                    real_mac_entry = None
+                    pseudo_mac_entries = []
+                    
+                    for entry in entries:
+                        mac = entry['mac'] if isinstance(entry, sqlite3.Row) else entry[0]
+                        logger.debug(f"  - MAC: {mac}, Status: {entry['status'] if isinstance(entry, sqlite3.Row) else entry[9]}")
+                        
+                        if self._is_pseudo_mac(mac):
+                            pseudo_mac_entries.append(entry)
+                        else:
+                            if real_mac_entry is None:
+                                real_mac_entry = entry
+                            else:
+                                # Multiple real MACs - keep the most recently seen
+                                logger.warning(f"  Multiple real MACs for {ip}, keeping most recent")
+                    
+                    # Delete pseudo-MAC entries if we have a real MAC
+                    if real_mac_entry and pseudo_mac_entries:
+                        real_mac = real_mac_entry['mac'] if isinstance(real_mac_entry, sqlite3.Row) else real_mac_entry[0]
+                        logger.info(f"  → Keeping real MAC: {real_mac}")
+                        
+                        # Merge ports from pseudo-MAC entries into real MAC
+                        real_ports = set(real_mac_entry['ports'].split(',')) if real_mac_entry['ports'] else set()
+                        for pseudo_entry in pseudo_mac_entries:
+                            pseudo_mac = pseudo_entry['mac'] if isinstance(pseudo_entry, sqlite3.Row) else pseudo_entry[0]
+                            pseudo_ports = set(pseudo_entry['ports'].split(',')) if pseudo_entry['ports'] else set()
+                            real_ports.update(pseudo_ports)
+                            
+                            cursor.execute("DELETE FROM hosts WHERE mac = ?", (pseudo_mac,))
+                            deleted_count += 1
+                            logger.info(f"  → Deleted pseudo-MAC: {pseudo_mac}")
+                        
+                        # Update real MAC with merged ports
+                        if real_ports:
+                            merged_ports = ','.join(sorted([p for p in real_ports if p], key=lambda x: int(x) if x.isdigit() else 0))
+                            cursor.execute("UPDATE hosts SET ports = ? WHERE mac = ?", (merged_ports, real_mac))
+                    
+                    elif len(pseudo_mac_entries) > 1:
+                        # Multiple pseudo-MACs but no real MAC - keep newest, delete rest
+                        keep_entry = pseudo_mac_entries[0]
+                        keep_mac = keep_entry['mac'] if isinstance(keep_entry, sqlite3.Row) else keep_entry[0]
+                        logger.info(f"  → No real MAC found, keeping newest pseudo-MAC: {keep_mac}")
+                        
+                        for pseudo_entry in pseudo_mac_entries[1:]:
+                            pseudo_mac = pseudo_entry['mac'] if isinstance(pseudo_entry, sqlite3.Row) else pseudo_entry[0]
+                            cursor.execute("DELETE FROM hosts WHERE mac = ?", (pseudo_mac,))
+                            deleted_count += 1
+                            logger.info(f"  → Deleted older pseudo-MAC: {pseudo_mac}")
+                    
+                    elif len(entries) > 1 and not real_mac_entry and not pseudo_mac_entries:
+                        # Multiple real MACs - keep most recently seen
+                        keep_entry = entries[0]
+                        keep_mac = keep_entry['mac'] if isinstance(keep_entry, sqlite3.Row) else keep_entry[0]
+                        logger.warning(f"  → Multiple real MACs, keeping most recent: {keep_mac}")
+                        
+                        for entry in entries[1:]:
+                            old_mac = entry['mac'] if isinstance(entry, sqlite3.Row) else entry[0]
+                            cursor.execute("DELETE FROM hosts WHERE mac = ?", (old_mac,))
+                            deleted_count += 1
+                            logger.info(f"  → Deleted older entry: {old_mac}")
+                
+                conn.commit()
+                
+                if deleted_count > 0:
+                    logger.info(f"✅ Cleanup complete! Deleted {deleted_count} duplicate entries.")
+                else:
+                    logger.debug("No duplicates needed to be removed")
+                
+                return deleted_count
+                
+        except Exception as e:
+            logger.error(f"Error during duplicate cleanup: {e}")
+            return 0
     
     def cleanup_old_hosts(self, hours: int = 24):
         """
