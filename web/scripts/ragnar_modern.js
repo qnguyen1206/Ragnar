@@ -567,20 +567,20 @@ function initializeMobileMenu() {
 
 async function loadInitialData() {
     try {
-        // Load status
-        const status = await fetchAPI('/api/status');
+        // Load all initial data in parallel for faster loading
+        const [status] = await Promise.all([
+            fetchAPI('/api/status').catch(err => {
+                console.error('Error loading status:', err);
+                return null;
+            }),
+            loadDashboardData().catch(err => console.error('Error loading dashboard:', err)),
+            loadConsoleLogs().catch(err => console.error('Error loading console logs:', err)),
+            refreshWifiStatus().catch(err => console.error('Error loading WiFi status:', err))
+        ]);
+        
         if (status) {
             updateDashboardStatus(status);
         }
-        
-        // Load dashboard statistics
-        await loadDashboardData();
-        
-        // Load initial console logs
-        await loadConsoleLogs();
-        
-        // Load initial Wi-Fi status
-        await refreshWifiStatus();
         
         // Add welcome message to console
         addConsoleMessage('Ragnar Modern Web Interface Initialized', 'success');
