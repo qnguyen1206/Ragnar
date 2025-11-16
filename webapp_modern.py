@@ -1543,11 +1543,11 @@ def get_hardware_profiles():
                     'scanner_max_threads': 3,
                     'orchestrator_max_concurrent': 2,
                     'nmap_scan_aggressivity': '-T2',
-                    'scan_interval': 300,
-                    'scan_vuln_interval': 600,
+                    'scan_interval': 400,
+                    'scan_vuln_interval': 700,
                     'max_concurrent_scans': 1,
-                    'memory_warning_threshold': 70,
-                    'memory_critical_threshold': 85,
+                    'memory_warning_threshold': 90,
+                    'memory_critical_threshold': 99,
                     'enable_resource_monitoring': True
                 }
             },
