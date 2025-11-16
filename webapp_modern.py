@@ -2154,6 +2154,189 @@ def get_loot():
         return jsonify({'error': str(e)}), 500
 
 
+@app.route('/api/vulnerability-intel')
+def get_vulnerability_intel():
+    """Get interesting intelligence from scan files (not vulnerabilities - those are in threat intel)"""
+    try:
+        vuln_dir = os.path.join('data', 'output', 'vulnerabilities')
+        
+        if not os.path.exists(vuln_dir):
+            return jsonify({
+                'scans': [],
+                'statistics': {
+                    'total_scanned': 0,
+                    'interesting_hosts': 0,
+                    'services_with_intel': 0,
+                    'script_outputs': 0
+                }
+            })
+        
+        scans = []
+        stats = {
+            'total_scanned': 0,
+            'interesting_hosts': 0,
+            'services_with_intel': 0,
+            'script_outputs': 0
+        }
+        
+        # Process all scan files
+        for filename in os.listdir(vuln_dir):
+            if filename.endswith('_vuln_scan.txt'):
+                file_path = os.path.join(vuln_dir, filename)
+                stats['total_scanned'] += 1
+                
+                try:
+                    with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
+                        content = f.read()
+                    
+                    # Extract host information
+                    parts = filename.split('_')
+                    ip = parts[1] if len(parts) > 1 else 'Unknown'
+                    
+                    hostname = 'Unknown'
+                    hostname_match = re.search(r'Nmap scan report for ([^\s]+)\s+\(([^\)]+)\)', content)
+                    if hostname_match:
+                        hostname = hostname_match.group(1)
+                        ip = hostname_match.group(2)
+                    else:
+                        hostname_match = re.search(r'Nmap scan report for ([^\s]+)', content)
+                        if hostname_match:
+                            potential_host = hostname_match.group(1)
+                            if not re.match(r'^\d+\.\d+\.\d+\.\d+$', potential_host):
+                                hostname = potential_host
+                    
+                    # Extract interesting service information
+                    services = []
+                    
+                    # Parse port/service lines with version info
+                    port_lines = re.findall(r'(\d+/tcp)\s+open\s+(\S+)(?:\s+(.+?))?(?=\n|$)', content)
+                    
+                    for port, service_name, version_info in port_lines:
+                        service_data = {
+                            'port': port,
+                            'service': service_name,
+                            'version': version_info.strip() if version_info else '',
+                            'scripts': []
+                        }
+                        
+                        # Look for script output after this port
+                        # Find the section between this port and the next port or end
+                        port_num = port.split('/')[0]
+                        pattern = rf'{re.escape(port)}.*?(?=\n\d+/tcp|\nService Info:|\nNmap done:|$)'
+                        port_section_match = re.search(pattern, content, re.DOTALL)
+                        
+                        if port_section_match:
+                            port_section = port_section_match.group(0)
+                            
+                            # Extract script outputs (lines starting with |)
+                            script_lines = re.findall(r'^\|(.+)$', port_section, re.MULTILINE)
+                            
+                            if script_lines:
+                                # Filter out lines with PACKETSTORM, vulners, CVE, exploit references
+                                filtered_lines = []
+                                for line in script_lines:
+                                    line_lower = line.lower()
+                                    # Skip lines containing vulnerability/exploit references
+                                    if any(keyword in line_lower for keyword in ['packetstorm', 'vulners.com', 'cve-', 'exploit', 'https://']):
+                                        continue
+                                    # Skip lines that look like vulnerability IDs or scores
+                                    if re.search(r'\d+\.\d+\s+https?://', line):
+                                        continue
+                                    # Skip nmap footer messages
+                                    if 'service detection performed' in line_lower:
+                                        continue
+                                    if 'please report any incorrect results' in line_lower:
+                                        continue
+                                    if 'nmap.org/submit' in line_lower:
+                                        continue
+                                    filtered_lines.append(line)
+                                
+                                script_lines = filtered_lines
+                                
+                                # Group script output by script name
+                                current_script = None
+                                script_content = []
+                                
+                                for line in script_lines:
+                                    line = line.strip()
+                                    
+                                    # Check if this is a script name line (ends with :)
+                                    if ':' in line and not line.startswith('_') and not line.startswith(' '):
+                                        # Save previous script if exists
+                                        if current_script and script_content:
+                                            service_data['scripts'].append({
+                                                'name': current_script,
+                                                'output': '\n'.join(script_content)
+                                            })
+                                            stats['script_outputs'] += 1
+                                        
+                                        # Start new script
+                                        script_name_match = re.match(r'^\s*(\S+?):\s*(.*)', line)
+                                        if script_name_match:
+                                            script_name = script_name_match.group(1)
+                                            # Skip vulnerability-related scripts
+                                            if script_name.lower() in ['vulners', 'vulns']:
+                                                current_script = None
+                                                script_content = []
+                                                continue
+                                            current_script = script_name
+                                            first_content = script_name_match.group(2)
+                                            script_content = [first_content] if first_content else []
+                                    else:
+                                        # Add to current script content
+                                        if current_script:
+                                            script_content.append(line)
+                                
+                                # Save last script
+                                if current_script and script_content:
+                                    service_data['scripts'].append({
+                                        'name': current_script,
+                                        'output': '\n'.join(script_content)
+                                    })
+                                    stats['script_outputs'] += 1
+                        
+                        # Only add service if it has interesting data (version info or script output)
+                        if service_data['version'] or service_data['scripts']:
+                            services.append(service_data)
+                            stats['services_with_intel'] += 1
+                    
+                    # Only include hosts with interesting intelligence (not basic scans)
+                    if services:
+                        mod_time = os.path.getmtime(file_path)
+                        scan_date = datetime.fromtimestamp(mod_time).strftime('%Y-%m-%d %H:%M:%S')
+                        
+                        scans.append({
+                            'ip': ip,
+                            'hostname': hostname,
+                            'scan_date': scan_date,
+                            'filename': filename,
+                            'services': services,
+                            'total_services': len(services)
+                        })
+                        
+                        stats['interesting_hosts'] += 1
+                    
+                except Exception as e:
+                    logger.error(f"Error parsing scan file {filename}: {e}")
+                    continue
+        
+        # Sort scans by interesting content (most services and scripts first), then by scan date
+        scans.sort(key=lambda x: (
+            -x['total_services'],  # Most services first
+            -sum(len(svc.get('scripts', [])) for svc in x['services']),  # Most scripts first
+            x['scan_date']  # Then by date descending
+        ), reverse=False)  # reverse=False because we're using negative values
+        
+        return jsonify({
+            'scans': scans,
+            'statistics': stats
+        })
+        
+    except Exception as e:
+        logger.error(f"Error getting vulnerability intelligence: {e}")
+        return jsonify({'error': str(e)}), 500
+
+
 @app.route('/api/logs')
 def get_logs():
     """Get recent logs - prioritizing orchestrator.py output"""
