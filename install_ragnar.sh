@@ -141,11 +141,11 @@ check_system_compatibility() {
             should_ask_confirmation=true
         fi
         
-        # Compare versions (expecting Bookworm = 12)
-        expected_version="12"
+        # Compare versions (expecting trixie = 13)
+        expected_version="13"
         if [ "$VERSION_ID" != "$expected_version" ]; then
             log "WARNING" "Different OS version detected"
-            echo -e "${YELLOW}This script was tested with Raspbian GNU/Linux 12 (bookworm)${NC}"
+            echo -e "${YELLOW}This script was tested with Raspbian GNU/Linux 13 (trixie)${NC}"
             echo -e "${YELLOW}Current system: ${PRETTY_NAME}${NC}"
             if [ "$VERSION_ID" -lt "$expected_version" ]; then
                 echo -e "${YELLOW}Your system version ($VERSION_ID) is older than recommended ($expected_version)${NC}"
