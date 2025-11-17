@@ -1010,26 +1010,49 @@ main() {
         pip3 install . --break-system-packages >/dev/null 2>&1
     fi
 
-    # Auto-detect E-Paper Display
-    echo -e "\n${BLUE}Detecting E-Paper Display...${NC}"
-    log "INFO" "Attempting to auto-detect E-Paper display"
+    # Ask user if e-Paper is connected before attempting detection
+    echo -e "\n${BLUE}E-Paper Display Auto-Detection${NC}"
+    echo -e "${YELLOW}I will now attempt to detect your e-Paper display.${NC}"
+    echo -e "${YELLOW}This requires the display to be properly connected via SPI.${NC}"
+    read -p "Is your e-Paper display connected? (y/n): " epd_connected
     
-    EPD_VERSION=""
-    EPD_VERSIONS=("epd2in13_V4" "epd2in13_V3" "epd2in13_V2" "epd2in7" "epd2in13")
-    
-    for version in "${EPD_VERSIONS[@]}"; do
-        if python3 -c "from waveshare_epd import ${version}; epd = ${version}.EPD(); epd.init(); epd.sleep()" 2>/dev/null; then
-            EPD_VERSION="$version"
-            echo -e "${GREEN}✓ Detected E-Paper display: $EPD_VERSION${NC}"
-            log "SUCCESS" "Auto-detected E-Paper display: $EPD_VERSION"
-            break
+    if [[ "$epd_connected" =~ ^[Yy]$ ]]; then
+        # Auto-detect E-Paper Display
+        echo -e "\n${BLUE}Detecting E-Paper Display...${NC}"
+        log "INFO" "Attempting to auto-detect E-Paper display"
+    if [[ "$epd_connected" =~ ^[Yy]$ ]]; then
+        # Auto-detect E-Paper Display
+        echo -e "\n${BLUE}Detecting E-Paper Display...${NC}"
+        log "INFO" "Attempting to auto-detect E-Paper display"
+        
+        EPD_VERSION=""
+        EPD_VERSIONS=("epd2in13_V4" "epd2in13_V3" "epd2in13_V2" "epd2in7" "epd2in13")
+        
+        for version in "${EPD_VERSIONS[@]}"; do
+            if python3 -c "from waveshare_epd import ${version}; epd = ${version}.EPD(); epd.init(); epd.sleep()" 2>/dev/null; then
+                EPD_VERSION="$version"
+                echo -e "${GREEN}✓ Detected E-Paper display: $EPD_VERSION${NC}"
+                log "SUCCESS" "Auto-detected E-Paper display: $EPD_VERSION"
+                break
+            fi
+        done
+        
+        # If auto-detection failed despite user saying it's connected
+        if [ -z "$EPD_VERSION" ]; then
+            echo -e "${YELLOW}⚠ Could not auto-detect E-Paper display${NC}"
+            echo -e "${YELLOW}This might be due to:${NC}"
+            echo -e "${YELLOW}  - SPI interface not enabled${NC}"
+            echo -e "${YELLOW}  - Incorrect wiring${NC}"
+            echo -e "${YELLOW}  - Unsupported display model${NC}"
+            log "WARNING" "E-Paper auto-detection failed despite user confirmation"
         fi
-    done
+    else
+        echo -e "${YELLOW}Skipping auto-detection${NC}"
+        log "INFO" "User indicated e-Paper display is not connected, skipping auto-detection"
+    fi
     
-    # If auto-detection failed, show manual selection
+    # If auto-detection failed or was skipped, show manual selection
     if [ -z "$EPD_VERSION" ]; then
-        echo -e "${YELLOW}⚠ Could not auto-detect E-Paper display${NC}"
-        log "WARNING" "E-Paper auto-detection failed, requesting manual selection"
         
         echo -e "\n${BLUE}Please select your E-Paper Display version:${NC}"
         echo "1. epd2in13"
