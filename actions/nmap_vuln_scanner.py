@@ -741,8 +741,17 @@ class NmapVulnScanner:
                         # Send real-time update with scan results
                         if real_time_callback:
                             self._send_host_update(real_time_callback, ip, row, "success")
+                    
+                    elif result == 'skipped':
+                        # Host was skipped (already scanned)
+                        logger.debug(f"Host {ip} skipped - already scanned")
+                        # Don't update database status - keep existing status
+                        if real_time_callback:
+                            self._send_host_update(real_time_callback, ip, row, "skipped")
                             
                     else:
+                        # Scan failed
+                        scanned_count += 1  # Count failed attempts
                         # Update failed status in database
                         try:
                             self.db.update_host_action_status(
