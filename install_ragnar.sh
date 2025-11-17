@@ -1020,10 +1020,6 @@ main() {
         # Auto-detect E-Paper Display
         echo -e "\n${BLUE}Detecting E-Paper Display...${NC}"
         log "INFO" "Attempting to auto-detect E-Paper display"
-    if [[ "$epd_connected" =~ ^[Yy]$ ]]; then
-        # Auto-detect E-Paper Display
-        echo -e "\n${BLUE}Detecting E-Paper Display...${NC}"
-        log "INFO" "Attempting to auto-detect E-Paper display"
         
         EPD_VERSION=""
         EPD_VERSIONS=("epd2in13_V4" "epd2in13_V3" "epd2in13_V2" "epd2in7" "epd2in13")
