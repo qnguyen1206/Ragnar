@@ -576,17 +576,20 @@ def sync_all_counts():
                             'mac': mac
                         }
                 
-                logger.info(f"[SYNC] ✅ Read data from SQLite database:")
-                logger.info(f"  - Total unique IPs: {total_target_count}")
-                logger.info(f"  - Active (alive): {aggregated_targets}")
-                logger.info(f"  - Inactive (degraded): {inactive_target_count}")
-                logger.info(f"  - Total open ports: {aggregated_ports}")
+                logger.debug(f"[SYNC] ✅ Read data from SQLite database:")
+                logger.debug(f"  - Total unique IPs: {total_target_count}")
+                logger.debug(f"  - Active (alive): {aggregated_targets}")
+                logger.debug(f"  - Inactive (degraded): {inactive_target_count}")
+                logger.debug(f"  - Total open ports: {aggregated_ports}")
                 
-                # Log detailed port breakdown for debugging
-                if port_debug_info:
-                    logger.info(f"[PORT COUNT BREAKDOWN] Counting ports from {len(port_debug_info)} alive hosts with open ports:")
-                    for info in port_debug_info:
-                        logger.info(f"    {info}")
+                # OPTIMIZATION: Only log port breakdown when debug logging is enabled
+                # Reduces log I/O on Pi Zero during normal operation
+                if port_debug_info and logger.level <= logging.DEBUG:
+                    logger.debug(f"[PORT COUNT BREAKDOWN] Counting ports from {len(port_debug_info)} alive hosts with open ports:")
+                    for info in port_debug_info[:10]:  # Limit to first 10 to reduce log spam
+                        logger.debug(f"    {info}")
+                    if len(port_debug_info) > 10:
+                        logger.debug(f"    ... and {len(port_debug_info) - 10} more hosts with ports")
                 
             except Exception as e:
                 logger.error(f"[SQLITE SYNC] ❌ Error reading from SQLite database: {e}")
@@ -602,11 +605,16 @@ def sync_all_counts():
             shared_data.portnbr = aggregated_ports
             shared_data.networkkbnbr = total_target_count
             
-            logger.info(f"✅ Updated counts from SQLite database:")
-            logger.info(f"  - Targets: {old_targets} -> {aggregated_targets}")
-            logger.info(f"  - Ports: {old_ports} -> {aggregated_ports}")
-            logger.info(f"  - Total hosts: {total_target_count}")
-            logger.info(f"  - Inactive hosts: {inactive_target_count}")
+            # OPTIMIZATION: Only log count changes to reduce I/O overhead
+            # On Pi Zero, frequent logging can impact performance
+            if old_targets != aggregated_targets or old_ports != aggregated_ports:
+                logger.info(f"✅ Updated counts from SQLite database:")
+                logger.info(f"  - Targets: {old_targets} -> {aggregated_targets}")
+                logger.info(f"  - Ports: {old_ports} -> {aggregated_ports}")
+                logger.info(f"  - Total hosts: {total_target_count}")
+                logger.info(f"  - Inactive hosts: {inactive_target_count}")
+            else:
+                logger.debug(f"Counts unchanged: targets={aggregated_targets}, ports={aggregated_ports}")
 
             # Track new and lost hosts
             previous_snapshot = getattr(shared_data, 'network_hosts_snapshot', {}) or {}
@@ -1462,10 +1470,11 @@ def serve_static(filename):
 
 @app.route('/api/status')
 def get_status():
-    """Get current Ragnar status"""
+    """Get current Ragnar status (optimized - uses cached data from background sync)"""
     try:
-        # Synchronize all counts across all sources for consistency
-        sync_all_counts()
+        # OPTIMIZATION: Don't call sync_all_counts() here - it's expensive!
+        # Background thread handles syncing every SYNC_BACKGROUND_INTERVAL seconds
+        # This endpoint now returns cached data instantly for fast dashboard loading
         
         status_data = {
             'ragnar_status': safe_str(shared_data.ragnarstatustext),
@@ -1487,7 +1496,11 @@ def get_status():
             'manual_mode': safe_bool(shared_data.config.get('manual_mode', False)),
             'timestamp': datetime.now().isoformat()
         }
-        return jsonify(status_data)
+        
+        # Add cache headers for quick responses
+        response = jsonify(status_data)
+        response.headers['Cache-Control'] = 'public, max-age=5'  # Cache for 5 seconds
+        return response
     except Exception as e:
         logger.error(f"Error getting status: {e}")
         return jsonify({'error': str(e)}), 500
@@ -8501,15 +8514,105 @@ def format_uptime(seconds):
 # DASHBOARD API ENDPOINTS
 # ============================================================================
 
+@app.route('/api/dashboard/quick')
+def get_dashboard_quick():
+    """OPTIMIZED: Combined fast endpoint that returns all essential dashboard data in one call.
+    This eliminates multiple round-trips and significantly speeds up dashboard loading on Pi Zero."""
+    try:
+        # OPTIMIZATION: Use cached data from background sync - no expensive operations here!
+        # Background thread keeps data fresh every SYNC_BACKGROUND_INTERVAL seconds
+        
+        current_time = time.time()
+        last_sync_ts = getattr(shared_data, 'last_sync_timestamp', last_sync_time)
+        last_sync_iso = None
+        last_sync_age = None
+
+        if last_sync_ts:
+            try:
+                last_sync_iso = datetime.fromtimestamp(last_sync_ts).isoformat()
+                last_sync_age = max(current_time - last_sync_ts, 0.0)
+            except Exception:
+                last_sync_iso = None
+
+        # Get all counts from cached shared_data (fast!)
+        active_target_count = safe_int(shared_data.targetnbr)
+        total_target_count = safe_int(shared_data.total_targetnbr)
+        inactive_target_count = safe_int(shared_data.inactive_targetnbr)
+        
+        # If we don't have proper total/inactive counts, calculate them from active count
+        if total_target_count == 0 and active_target_count > 0:
+            total_target_count = active_target_count
+            inactive_target_count = 0
+        elif inactive_target_count == 0 and total_target_count > active_target_count:
+            inactive_target_count = total_target_count - active_target_count
+
+        # Get WiFi status (fast - from cache or quick check)
+        wifi_status = {}
+        try:
+            wifi_manager = getattr(shared_data, 'ragnar_instance', None)
+            if wifi_manager and hasattr(wifi_manager, 'wifi_manager'):
+                wifi_status = wifi_manager.wifi_manager.get_status()
+        except Exception:
+            pass  # Silently fail - non-critical for dashboard
+
+        # Combine stats and status in single response (eliminates separate /api/status call)
+        combined_data = {
+            # Stats
+            'target_count': active_target_count,
+            'active_target_count': active_target_count,
+            'inactive_target_count': inactive_target_count,
+            'total_target_count': total_target_count,
+            'new_target_count': safe_int(getattr(shared_data, 'new_targets', 0)),
+            'lost_target_count': safe_int(getattr(shared_data, 'lost_targets', 0)),
+            'new_target_ips': getattr(shared_data, 'new_target_ips', []),
+            'lost_target_ips': getattr(shared_data, 'lost_target_ips', []),
+            'port_count': safe_int(shared_data.portnbr),
+            'vulnerability_count': safe_int(shared_data.vulnnbr),
+            'vulnerable_hosts_count': safe_int(getattr(shared_data, 'vulnerable_host_count', 0)),
+            'vulnerable_host_count': safe_int(getattr(shared_data, 'vulnerable_host_count', 0)),
+            'credential_count': safe_int(shared_data.crednbr),
+            'level': safe_int(shared_data.levelnbr),
+            'points': safe_int(shared_data.coinnbr),
+            'coins': safe_int(shared_data.coinnbr),
+            'data_count': safe_int(shared_data.datanbr),
+            'last_sync_timestamp': last_sync_ts,
+            'last_sync_iso': last_sync_iso,
+            'last_sync_age_seconds': last_sync_age,
+            
+            # Status
+            'ragnar_status': safe_str(shared_data.ragnarstatustext),
+            'ragnar_status2': safe_str(shared_data.ragnarstatustext2),
+            'ragnar_says': safe_str(shared_data.ragnarsays),
+            'orchestrator_status': safe_str(shared_data.ragnarorch_status),
+            'wifi_connected': wifi_status.get('wifi_connected', safe_bool(shared_data.wifi_connected)),
+            'current_ssid': wifi_status.get('current_ssid'),
+            'ap_mode_active': wifi_status.get('ap_mode_active', False),
+            'ap_ssid': wifi_status.get('ap_ssid'),
+            'bluetooth_active': safe_bool(shared_data.bluetooth_active),
+            'pan_connected': safe_bool(shared_data.pan_connected),
+            'usb_active': safe_bool(shared_data.usb_active),
+            'manual_mode': safe_bool(shared_data.config.get('manual_mode', False)),
+            'timestamp': datetime.now().isoformat()
+        }
+
+        response = jsonify(combined_data)
+        # Cache for 3 seconds - balance between freshness and performance
+        response.headers['Cache-Control'] = 'public, max-age=3'
+        return response
+    except Exception as e:
+        logger.error(f"Error getting dashboard quick data: {e}")
+        return jsonify({'error': str(e)}), 500
+
 @app.route('/api/dashboard/stats')
 def get_dashboard_stats():
-    """Get dashboard statistics using synchronized data from shared_data to ensure consistency"""
+    """Get dashboard statistics using synchronized data from shared_data to ensure consistency.
+    DEPRECATED: Use /api/dashboard/quick for faster loading."""
     try:
-        # Check for network switches and clear old data if needed
-        check_and_handle_network_switch()
+        # OPTIMIZATION: Removed check_and_handle_network_switch() - not needed on every request
+        # Background thread handles this periodically
         
-        # Ensure recent synchronization without blocking the request unnecessarily
-        ensure_recent_sync()
+        # OPTIMIZATION: Removed ensure_recent_sync() - background thread keeps data fresh
+        # No need to block requests with sync operations
         
         # Use the synchronized data from shared_data instead of re-calculating
         # This prevents inconsistencies between different counting methods
@@ -8563,9 +8666,8 @@ def get_dashboard_stats():
         }
 
         response = jsonify(stats)
-        response.headers['Cache-Control'] = 'no-cache, no-store, must-revalidate'
-        response.headers['Pragma'] = 'no-cache'
-        response.headers['Expires'] = '0'
+        # Cache for 3 seconds for better performance
+        response.headers['Cache-Control'] = 'public, max-age=3'
         return response
     except Exception as e:
         logger.error(f"Error getting dashboard stats: {e}")
