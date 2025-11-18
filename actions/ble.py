@@ -493,6 +493,9 @@ class BluetoothManager:
                     self.logger.info("Scanning is active, getting scan results...")
                     scan_devices = self._get_scan_results()
                     if scan_devices:
+                        # Enrich device names with detailed info from bluetoothctl
+                        self.logger.info(f"Enriching {len(scan_devices)} discovered devices with detailed info...")
+                        scan_devices = self._enrich_device_names(scan_devices)
                         devices.update(scan_devices)
                         self.logger.info(f"Found {len(scan_devices)} devices from active scan")
                 
@@ -963,8 +966,22 @@ proc.kill()
                 for line in info_output.split('\n'):
                     line = line.strip()
                     
+                    # Device name
+                    if line.startswith('Name:'):
+                        details['name'] = line.split(':', 1)[1].strip()
+                    
+                    # Device alias (friendly name, often more descriptive)
+                    elif line.startswith('Alias:'):
+                        alias = line.split(':', 1)[1].strip()
+                        # Prefer alias over name if available
+                        if alias and alias != details.get('name'):
+                            details['alias'] = alias
+                            # Use alias as the display name if it's more descriptive
+                            if 'name' not in details or len(alias) > len(details['name']):
+                                details['name'] = alias
+                    
                     # RSSI (signal strength)
-                    if line.startswith('RSSI:'):
+                    elif line.startswith('RSSI:'):
                         try:
                             details['rssi'] = int(line.split(':')[1].strip())
                         except (ValueError, IndexError):
@@ -1014,6 +1031,63 @@ proc.kill()
             self.logger.warning(f"Error getting device details for {address}: {e}")
         
         return details
+    
+    def _enrich_device_names(self, devices: Dict[str, Dict[str, Any]]) -> Dict[str, Dict[str, Any]]:
+        """
+        Enrich device information by querying bluetoothctl info for each device
+        This gets better names, RSSI, and other details
+        Args:
+            devices: Dictionary of devices to enrich
+        Returns: Enriched devices dictionary
+        """
+        enriched_devices = devices.copy()
+        
+        for address, device_info in enriched_devices.items():
+            # Skip if we already have a good name (not Unknown/generic)
+            current_name = device_info.get('name', '')
+            if current_name and current_name not in ['Unknown Device', 'Unknown', '']:
+                # Still try to get RSSI and other details if missing
+                if device_info.get('rssi') is None:
+                    try:
+                        details = self._get_device_details(address)
+                        # Only update RSSI and other metadata, keep the name if it's good
+                        if 'rssi' in details:
+                            device_info['rssi'] = details['rssi']
+                        if 'device_class' in details and not device_info.get('device_class'):
+                            device_info['device_class'] = details['device_class']
+                        if 'device_type' in details and not device_info.get('device_type'):
+                            device_info['device_type'] = details['device_type']
+                        if 'paired' in details:
+                            device_info['paired'] = details['paired']
+                        if 'connected' in details:
+                            device_info['connected'] = details['connected']
+                        if 'trusted' in details:
+                            device_info['trusted'] = details['trusted']
+                        if 'services' in details and details['services']:
+                            device_info['services'] = details['services']
+                    except Exception as e:
+                        self.logger.debug(f"Could not enrich device {address}: {e}")
+                continue
+            
+            # Try to get full device details including proper name
+            try:
+                self.logger.debug(f"Enriching device info for {address}...")
+                details = self._get_device_details(address)
+                
+                if details:
+                    # Update with enriched information
+                    if 'name' in details:
+                        device_info['name'] = details['name']
+                        self.logger.info(f"Enriched name for {address}: {details['name']}")
+                    
+                    # Update other fields
+                    for key in ['rssi', 'device_class', 'device_type', 'paired', 'connected', 'trusted', 'services', 'alias']:
+                        if key in details:
+                            device_info[key] = details[key]
+            except Exception as e:
+                self.logger.debug(f"Could not enrich device {address}: {e}")
+        
+        return enriched_devices
     
     def pair_device(self, address: str) -> Tuple[bool, str]:
         """
