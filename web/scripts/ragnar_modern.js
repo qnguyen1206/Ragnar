@@ -4287,6 +4287,255 @@ function clearBluetoothDevices() {
 }
 
 // ============================================================================
+// BLUETOOTH PENTEST FUNCTIONS
+// ============================================================================
+
+async function startBeaconTracking() {
+    const btn = document.getElementById('beacon-track-btn');
+    const resultsDiv = document.getElementById('beacon-results');
+    const durationInput = document.getElementById('beacon-duration');
+    
+    if (!btn || !resultsDiv || !durationInput) return;
+    
+    const duration = parseInt(durationInput.value) || 60;
+    const originalText = btn.textContent;
+    
+    btn.disabled = true;
+    btn.textContent = 'Tracking...';
+    resultsDiv.classList.remove('hidden');
+    resultsDiv.textContent = `Tracking beacons for ${duration} seconds...`;
+    
+    try {
+        const response = await postAPI('/api/bluetooth/pentest/beacon-track', { duration });
+        
+        if (response.success) {
+            const beaconCount = response.beacons_found || 0;
+            resultsDiv.innerHTML = `
+                <div class="text-green-400">✓ Found ${beaconCount} beacon(s)</div>
+                <div class="mt-1">${JSON.stringify(response.beacons, null, 2)}</div>
+            `;
+            addConsoleMessage(`Beacon tracking complete: ${beaconCount} beacons found`, 'success');
+            updatePentestSummary('beacon_tracking', response);
+        } else {
+            throw new Error(response.error || 'Beacon tracking failed');
+        }
+    } catch (error) {
+        console.error('Beacon tracking error:', error);
+        resultsDiv.innerHTML = `<div class="text-red-400">✗ Error: ${error.message}</div>`;
+        addConsoleMessage(`Beacon tracking failed: ${error.message}`, 'error');
+    } finally {
+        btn.disabled = false;
+        btn.textContent = originalText;
+    }
+}
+
+async function startDataExfiltration() {
+    const btn = document.getElementById('exfil-btn');
+    const resultsDiv = document.getElementById('exfil-results');
+    const targetInput = document.getElementById('exfil-target');
+    
+    if (!btn || !resultsDiv || !targetInput) return;
+    
+    const target = targetInput.value.trim();
+    if (!target || !target.match(/^([0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2}$/)) {
+        resultsDiv.classList.remove('hidden');
+        resultsDiv.innerHTML = '<div class="text-red-400">✗ Invalid MAC address format</div>';
+        return;
+    }
+    
+    const originalText = btn.textContent;
+    btn.disabled = true;
+    btn.textContent = 'Exfiltrating...';
+    resultsDiv.classList.remove('hidden');
+    resultsDiv.textContent = `Extracting data from ${target}...`;
+    
+    try {
+        const response = await postAPI('/api/bluetooth/pentest/exfiltrate', { target });
+        
+        if (response.device_info) {
+            const serviceCount = response.services?.length || 0;
+            const fileCount = response.files?.length || 0;
+            const contactCount = response.contacts?.length || 0;
+            
+            resultsDiv.innerHTML = `
+                <div class="text-green-400">✓ Exfiltration complete</div>
+                <div class="mt-1 text-xs">
+                    Services: ${serviceCount} | Files: ${fileCount} | Contacts: ${contactCount}
+                </div>
+            `;
+            addConsoleMessage(`Data exfiltration from ${target} complete`, 'success');
+            updatePentestSummary('exfiltration', response);
+        } else {
+            throw new Error(response.error || 'Exfiltration failed');
+        }
+    } catch (error) {
+        console.error('Exfiltration error:', error);
+        resultsDiv.innerHTML = `<div class="text-red-400">✗ Error: ${error.message}</div>`;
+        addConsoleMessage(`Exfiltration failed: ${error.message}`, 'error');
+    } finally {
+        btn.disabled = false;
+        btn.textContent = originalText;
+    }
+}
+
+async function startBlueBorneScan() {
+    const btn = document.getElementById('blueborne-btn');
+    const resultsDiv = document.getElementById('blueborne-results');
+    const targetInput = document.getElementById('blueborne-target');
+    
+    if (!btn || !resultsDiv || !targetInput) return;
+    
+    const target = targetInput.value.trim();
+    if (!target || !target.match(/^([0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2}$/)) {
+        resultsDiv.classList.remove('hidden');
+        resultsDiv.innerHTML = '<div class="text-red-400">✗ Invalid MAC address format</div>';
+        return;
+    }
+    
+    const originalText = btn.textContent;
+    btn.disabled = true;
+    btn.textContent = 'Scanning...';
+    resultsDiv.classList.remove('hidden');
+    resultsDiv.textContent = `Scanning ${target} for BlueBorne...`;
+    
+    try {
+        const response = await postAPI('/api/bluetooth/pentest/blueborne-scan', { target });
+        
+        const vulnCount = response.vulnerabilities?.length || 0;
+        const isVulnerable = response.vulnerable || false;
+        
+        resultsDiv.innerHTML = `
+            <div class="${isVulnerable ? 'text-red-400' : 'text-green-400'}">
+                ${isVulnerable ? '⚠ Potentially vulnerable' : '✓ No vulnerabilities detected'}
+            </div>
+            ${vulnCount > 0 ? `<div class="mt-1 text-xs">Found ${vulnCount} potential issue(s)</div>` : ''}
+        `;
+        addConsoleMessage(`BlueBorne scan of ${target} complete`, 'info');
+        updatePentestSummary('blueborne_scan', response);
+    } catch (error) {
+        console.error('BlueBorne scan error:', error);
+        resultsDiv.innerHTML = `<div class="text-red-400">✗ Error: ${error.message}</div>`;
+        addConsoleMessage(`BlueBorne scan failed: ${error.message}`, 'error');
+    } finally {
+        btn.disabled = false;
+        btn.textContent = originalText;
+    }
+}
+
+async function startMovementTracking() {
+    const btn = document.getElementById('track-btn');
+    const resultsDiv = document.getElementById('track-results');
+    const targetInput = document.getElementById('track-target');
+    const durationInput = document.getElementById('track-duration');
+    
+    if (!btn || !resultsDiv || !targetInput || !durationInput) return;
+    
+    const target = targetInput.value.trim();
+    const duration = parseInt(durationInput.value) || 300;
+    
+    if (!target || !target.match(/^([0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2}$/)) {
+        resultsDiv.classList.remove('hidden');
+        resultsDiv.innerHTML = '<div class="text-red-400">✗ Invalid MAC address format</div>';
+        return;
+    }
+    
+    const originalText = btn.textContent;
+    btn.disabled = true;
+    btn.textContent = 'Tracking...';
+    resultsDiv.classList.remove('hidden');
+    resultsDiv.textContent = `Tracking ${target} for ${duration}s...`;
+    
+    try {
+        const response = await postAPI('/api/bluetooth/pentest/track-movement', { target, duration });
+        
+        if (response.readings && response.readings.length > 0) {
+            const avgRssi = response.readings.reduce((sum, r) => sum + r.rssi, 0) / response.readings.length;
+            const avgDistance = response.readings.reduce((sum, r) => sum + r.distance_estimate, 0) / response.readings.length;
+            
+            resultsDiv.innerHTML = `
+                <div class="text-green-400">✓ Tracking complete</div>
+                <div class="mt-1 text-xs">
+                    Readings: ${response.readings.length} | Avg RSSI: ${avgRssi.toFixed(1)} dBm | 
+                    Avg Distance: ${avgDistance.toFixed(2)}m
+                </div>
+            `;
+            addConsoleMessage(`Movement tracking of ${target} complete`, 'success');
+            updatePentestSummary('movement_tracking', response);
+        } else {
+            throw new Error('No readings collected');
+        }
+    } catch (error) {
+        console.error('Movement tracking error:', error);
+        resultsDiv.innerHTML = `<div class="text-red-400">✗ Error: ${error.message}</div>`;
+        addConsoleMessage(`Movement tracking failed: ${error.message}`, 'error');
+    } finally {
+        btn.disabled = false;
+        btn.textContent = originalText;
+    }
+}
+
+// Pentest summary tracking
+let pentestResults = {};
+
+function updatePentestSummary(testType, data) {
+    pentestResults[testType] = {
+        timestamp: new Date().toISOString(),
+        data: data
+    };
+    
+    const summaryDiv = document.getElementById('pentest-summary');
+    const contentDiv = document.getElementById('pentest-summary-content');
+    
+    if (!summaryDiv || !contentDiv) return;
+    
+    summaryDiv.classList.remove('hidden');
+    
+    const summaryLines = [];
+    if (pentestResults.beacon_tracking) {
+        summaryLines.push(`Beacon Tracking: ${pentestResults.beacon_tracking.data.beacons_found || 0} beacons found`);
+    }
+    if (pentestResults.exfiltration) {
+        const d = pentestResults.exfiltration.data;
+        summaryLines.push(`Data Exfiltration: ${d.services?.length || 0} services, ${d.files?.length || 0} files`);
+    }
+    if (pentestResults.blueborne_scan) {
+        const vulnerable = pentestResults.blueborne_scan.data.vulnerable ? 'Vulnerable' : 'Safe';
+        summaryLines.push(`BlueBorne Scan: ${vulnerable}`);
+    }
+    if (pentestResults.movement_tracking) {
+        const count = pentestResults.movement_tracking.data.readings?.length || 0;
+        summaryLines.push(`Movement Tracking: ${count} readings collected`);
+    }
+    
+    contentDiv.innerHTML = summaryLines.map(line => `<div>• ${line}</div>`).join('');
+}
+
+async function downloadPentestReport() {
+    try {
+        const response = await fetchAPI('/api/bluetooth/pentest/report');
+        
+        if (response && response.timestamp) {
+            const blob = new Blob([JSON.stringify(response, null, 2)], { type: 'application/json' });
+            const url = window.URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = `bluetooth_pentest_${Date.now()}.json`;
+            document.body.appendChild(a);
+            a.click();
+            window.URL.revokeObjectURL(url);
+            document.body.removeChild(a);
+            
+            addConsoleMessage('Pentest report downloaded', 'success');
+        } else {
+            throw new Error('No report data available');
+        }
+    } catch (error) {
+        console.error('Report download error:', error);
+        addConsoleMessage(`Failed to download report: ${error.message}`, 'error');
+    }
+}
+
+// ============================================================================
 // MANUAL MODE FUNCTIONS
 // ============================================================================
 

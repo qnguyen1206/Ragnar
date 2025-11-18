@@ -5304,6 +5304,21 @@ except Exception as e:
     bluetooth_manager = None
     BLUETOOTH_AVAILABLE = False
 
+# Import the Bluetooth pentest module
+try:
+    from actions.ble_pentest import BluetoothPentest
+    bluetooth_pentest = BluetoothPentest(logger)
+    BLUETOOTH_PENTEST_AVAILABLE = True
+    logger.info("Bluetooth pentest module loaded successfully")
+except ImportError as e:
+    logger.warning(f"Bluetooth pentest module not available: {e}")
+    bluetooth_pentest = None
+    BLUETOOTH_PENTEST_AVAILABLE = False
+except Exception as e:
+    logger.error(f"Error initializing Bluetooth pentest module: {e}")
+    bluetooth_pentest = None
+    BLUETOOTH_PENTEST_AVAILABLE = False
+
 @app.route('/api/bluetooth/status')
 def get_bluetooth_status():
     """Get current Bluetooth status"""
@@ -5509,6 +5524,119 @@ def diagnose_bluetooth():
         
     except Exception as e:
         logger.error(f"Error diagnosing Bluetooth: {e}")
+        return jsonify({'error': str(e)}), 500
+
+# ============================================================================
+# BLUETOOTH PENTEST ENDPOINTS
+# ============================================================================
+
+@app.route('/api/bluetooth/pentest/beacon-track', methods=['POST'])
+def pentest_beacon_track():
+    """Start beacon tracking"""
+    try:
+        if not BLUETOOTH_PENTEST_AVAILABLE or bluetooth_pentest is None:
+            return jsonify({'error': 'Bluetooth pentest module not available'}), 503
+        
+        data = request.get_json() or {}
+        duration = data.get('duration', 60)
+        
+        beacons = bluetooth_pentest.start_beacon_tracking(duration)
+        
+        return jsonify({
+            'success': True,
+            'beacons_found': len(beacons),
+            'beacons': beacons
+        })
+        
+    except Exception as e:
+        logger.error(f"Error tracking beacons: {e}")
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/bluetooth/pentest/exfiltrate', methods=['POST'])
+def pentest_exfiltrate():
+    """Exfiltrate data from target device"""
+    try:
+        if not BLUETOOTH_PENTEST_AVAILABLE or bluetooth_pentest is None:
+            return jsonify({'error': 'Bluetooth pentest module not available'}), 503
+        
+        data = request.get_json() or {}
+        target = data.get('target')
+        
+        if not target:
+            return jsonify({'error': 'Target MAC address required'}), 400
+        
+        result = bluetooth_pentest.exfiltrate_device_info(target)
+        
+        if result:
+            return jsonify(result)
+        else:
+            return jsonify({'error': 'Exfiltration failed'}), 500
+        
+    except Exception as e:
+        logger.error(f"Error exfiltrating data: {e}")
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/bluetooth/pentest/blueborne-scan', methods=['POST'])
+def pentest_blueborne():
+    """Scan for BlueBorne vulnerabilities"""
+    try:
+        if not BLUETOOTH_PENTEST_AVAILABLE or bluetooth_pentest is None:
+            return jsonify({'error': 'Bluetooth pentest module not available'}), 503
+        
+        data = request.get_json() or {}
+        target = data.get('target')
+        
+        if not target:
+            return jsonify({'error': 'Target MAC address required'}), 400
+        
+        result = bluetooth_pentest.blueborne_scan(target)
+        
+        return jsonify(result)
+        
+    except Exception as e:
+        logger.error(f"Error scanning for BlueBorne: {e}")
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/bluetooth/pentest/track-movement', methods=['POST'])
+def pentest_track_movement():
+    """Track device movement via RSSI"""
+    try:
+        if not BLUETOOTH_PENTEST_AVAILABLE or bluetooth_pentest is None:
+            return jsonify({'error': 'Bluetooth pentest module not available'}), 503
+        
+        data = request.get_json() or {}
+        target = data.get('target')
+        duration = data.get('duration', 300)
+        
+        if not target:
+            return jsonify({'error': 'Target MAC address required'}), 400
+        
+        readings = bluetooth_pentest.track_device_movement(target, duration)
+        
+        return jsonify({
+            'success': True,
+            'target': target,
+            'duration': duration,
+            'readings': readings
+        })
+        
+    except Exception as e:
+        logger.error(f"Error tracking movement: {e}")
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/bluetooth/pentest/report', methods=['GET'])
+def pentest_get_report():
+    """Get comprehensive pentest report"""
+    try:
+        if not BLUETOOTH_PENTEST_AVAILABLE or bluetooth_pentest is None:
+            return jsonify({'error': 'Bluetooth pentest module not available'}), 503
+        
+        report = bluetooth_pentest.generate_report()
+        
+        return jsonify(report)
+        
+    except Exception as e:
+        logger.error(f"Error generating report: {e}")
         return jsonify({'error': str(e)}), 500
 
 
