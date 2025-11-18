@@ -245,6 +245,7 @@ install_dependencies() {
     # List of required packages based on README
     packages=(
         "python3-pip"
+        "zram-tools"
         "wget"
         "lsof"
         "git"
