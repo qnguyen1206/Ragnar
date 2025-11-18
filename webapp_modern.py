@@ -584,7 +584,7 @@ def sync_all_counts():
                 
                 # OPTIMIZATION: Only log port breakdown when debug logging is enabled
                 # Reduces log I/O on Pi Zero during normal operation
-                if port_debug_info and logger.level <= logging.DEBUG:
+                if port_debug_info and logger.isEnabledFor(logging.DEBUG):
                     logger.debug(f"[PORT COUNT BREAKDOWN] Counting ports from {len(port_debug_info)} alive hosts with open ports:")
                     for info in port_debug_info[:10]:  # Limit to first 10 to reduce log spam
                         logger.debug(f"    {info}")
