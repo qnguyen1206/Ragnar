@@ -582,11 +582,10 @@ def sync_all_counts():
                 logger.debug(f"  - Inactive (degraded): {inactive_target_count}")
                 logger.debug(f"  - Total open ports: {aggregated_ports}")
                 
-                # OPTIMIZATION: Only log port breakdown when debug logging is enabled
-                # Reduces log I/O on Pi Zero during normal operation
+
                 if port_debug_info:
                     logger.debug(f"[PORT COUNT BREAKDOWN] Counting ports from {len(port_debug_info)} alive hosts with open ports:")
-                    for info in port_debug_info[:10]:  # Limit to first 10 to reduce log spam
+                    for info in port_debug_info[:10]:
                         logger.debug(f"    {info}")
                     if len(port_debug_info) > 10:
                         logger.debug(f"    ... and {len(port_debug_info) - 10} more hosts with ports")
@@ -598,15 +597,12 @@ def sync_all_counts():
             old_targets = shared_data.targetnbr
             old_ports = shared_data.portnbr
 
-            # Update shared data with counts from SQLite database
             shared_data.targetnbr = aggregated_targets
             shared_data.total_targetnbr = total_target_count
             shared_data.inactive_targetnbr = inactive_target_count
             shared_data.portnbr = aggregated_ports
             shared_data.networkkbnbr = total_target_count
             
-            # OPTIMIZATION: Only log count changes to reduce I/O overhead
-            # On Pi Zero, frequent logging can impact performance
             if old_targets != aggregated_targets or old_ports != aggregated_ports:
                 logger.info(f"✅ Updated counts from SQLite database:")
                 logger.info(f"  - Targets: {old_targets} -> {aggregated_targets}")
@@ -637,12 +633,10 @@ def sync_all_counts():
                         f"[GAMIFICATION] Registered {new_mac_count} new MAC(s), awarded {points_awarded} points"
                     )
 
-            # Sync credential count from crackedpwd directory
             cred_results_dir = getattr(shared_data, 'crackedpwd_dir', os.path.join('data', 'output', 'crackedpwd'))
 
             logger.debug(f"Syncing credentials from directory: {cred_results_dir}")
 
-            # Create directory if it doesn't exist
             try:
                 os.makedirs(cred_results_dir, exist_ok=True)
                 logger.debug(f"Ensured directory exists: {cred_results_dir}")
@@ -660,7 +654,6 @@ def sync_all_counts():
                             try:
                                 with open(filepath, 'r', encoding='utf-8', errors='ignore') as f:
                                     content = f.read()
-                                    # Count lines with credential format (user:pass)
                                     for line in content.split('\n'):
                                         if ':' in line and line.strip():
                                             cred_count += 1
@@ -673,14 +666,12 @@ def sync_all_counts():
                 except Exception as e:
                     logger.warning(f"Could not list crackedpwd directory: {e}")
 
-                # Update shared data with the current credential count
                 old_creds = shared_data.crednbr
                 shared_data.crednbr = cred_count
                 logger.debug(f"Updated credentials: {old_creds} -> {cred_count}")
             else:
                 logger.warning(f"Crackedpwd directory does not exist: {cred_results_dir}")
 
-            # Sync data stolen count
             data_stolen_dir = getattr(shared_data, 'datastolendir', os.path.join('data', 'output', 'data_stolen'))
             if os.path.exists(data_stolen_dir):
                 try:
@@ -691,7 +682,6 @@ def sync_all_counts():
                 except Exception as e:
                     logger.debug(f"Could not count data stolen files: {e}")
             
-            # Sync zombies count
             zombies_dir = getattr(shared_data, 'zombiesdir', os.path.join('data', 'output', 'zombies'))
             if os.path.exists(zombies_dir):
                 try:
@@ -702,7 +692,6 @@ def sync_all_counts():
                 except Exception as e:
                     logger.debug(f"Could not count zombie files: {e}")
             
-            # Sync attacks count (count action modules available)
             actions_dir = getattr(shared_data, 'actions_dir', os.path.join('actions'))
             if os.path.exists(actions_dir):
                 try:
@@ -713,8 +702,6 @@ def sync_all_counts():
                 except Exception as e:
                     logger.debug(f"Could not count attack modules: {e}")
 
-            # SQLite is the primary source of truth - CSV livestatus file is deprecated
-            # All counts are synchronized from SQLite database above
             
             try:
                 shared_data.update_stats()
@@ -725,7 +712,6 @@ def sync_all_counts():
 
             logger.debug(f"Completed sync_all_counts() - Active Targets: {shared_data.targetnbr}, Total Targets: {shared_data.total_targetnbr}, Inactive Targets: {shared_data.inactive_targetnbr}, Ports: {shared_data.portnbr}, Vulns: {shared_data.vulnnbr}, Creds: {shared_data.crednbr}, Level: {shared_data.levelnbr}, Coins: {shared_data.coinnbr}")
             
-            # Consistency check to prevent flickering
             if shared_data.targetnbr > shared_data.total_targetnbr:
                 logger.warning(f"CONSISTENCY WARNING: Active targets ({shared_data.targetnbr}) > Total targets ({shared_data.total_targetnbr}). Adjusting total.")
                 shared_data.total_targetnbr = shared_data.targetnbr
@@ -743,7 +729,7 @@ def sync_all_counts():
 def safe_int(value, default=0):
     """Safely convert value to int, handling numpy types"""
     try:
-        if hasattr(value, 'item'):  # numpy types have .item() method
+        if hasattr(value, 'item'):
             return int(value.item())
         return int(value) if value is not None else default
     except (ValueError, TypeError, AttributeError):
@@ -773,21 +759,18 @@ def ensure_recent_sync(max_age=SYNC_BACKGROUND_INTERVAL):
         sync_all_counts()
 
 
-# WiFi SSID cache to avoid frequent nmcli calls
 _wifi_ssid_cache = {'ssid': None, 'timestamp': 0}
-_WIFI_SSID_CACHE_TTL = 60  # Cache for 60 seconds
+_WIFI_SSID_CACHE_TTL = 60
 
 def get_current_wifi_ssid():
     """Get the current WiFi SSID for file naming"""
     global _wifi_ssid_cache
     
-    # Return cached value if still valid
     current_timestamp = time.time()
     if _wifi_ssid_cache['ssid'] and (current_timestamp - _wifi_ssid_cache['timestamp']) < _WIFI_SSID_CACHE_TTL:
         return _wifi_ssid_cache['ssid']
     
     try:
-        # Try to get SSID from wifi_manager if available
         if hasattr(shared_data, 'wifi_manager') and getattr(shared_data, 'wifi_manager', None):
             wifi_manager = getattr(shared_data, 'wifi_manager')
             ssid = wifi_manager.get_current_ssid()
@@ -3548,7 +3531,7 @@ def _parse_nmap_ping_output(output):
 # Global variables for network scanning
 network_scan_cache = {}
 network_scan_last_update = 0
-ARP_SCAN_INTERVAL = 10  # seconds
+ARP_SCAN_INTERVAL = 60  # seconds
 
 @app.route('/api/scan/arp-localnet')
 def get_arp_scan_localnet():

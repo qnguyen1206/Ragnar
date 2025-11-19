@@ -7,10 +7,8 @@ const RECONNECT_DELAY_MAX = 15000;
 let currentTab = 'dashboard';
 let autoRefreshIntervals = {};
 
-// Track which tabs have been preloaded to avoid duplicate loading
 let preloadedTabs = new Set();
 
-// Configuration metadata for tooltips
 const configMetadata = {
     manual_mode: {
         label: "Manual Mode",
@@ -290,7 +288,6 @@ function isValidIPv4(ip) {
     return ipv4Pattern.test(ip.trim());
 }
 
-// Initialize on page load
 document.addEventListener('DOMContentLoaded', function() {
     initializeSocket();
     initializeTabs();
@@ -315,7 +312,6 @@ function initializeSocket() {
         reconnectAttempts = 0;
         addConsoleMessage('Connected to Ragnar server', 'success');
         
-        // Request initial data
         socket.emit('request_status');
         socket.emit('request_logs');
     });
@@ -324,7 +320,6 @@ function initializeSocket() {
         console.log('Disconnected from Ragnar server');
         updateConnectionStatus(false);
         addConsoleMessage('Disconnected from server', 'error');
-        // Ensure the client continues to retry if Socket.IO gives up internally
         setTimeout(() => {
             if (socket && socket.disconnected) {
                 console.log('Attempting manual socket reconnection');
@@ -419,7 +414,6 @@ function updateConnectionStatus(connected) {
 }
 
 function setupEventListeners() {
-    // Tab navigation
     document.querySelectorAll('[data-tab]').forEach(button => {
         button.addEventListener('click', function() {
             const tabName = this.getAttribute('data-tab');
@@ -466,34 +460,28 @@ function showTab(tabName) {
         systemMonitoringInterval = null;
     }
     
-    // Hide all tabs
     document.querySelectorAll('.tab-content').forEach(tab => {
         tab.classList.add('hidden');
     });
     
-    // Remove active class from all nav buttons
     document.querySelectorAll('.nav-btn, [data-tab]').forEach(btn => {
         btn.classList.remove('bg-Ragnar-600');
         btn.classList.add('text-gray-300', 'hover:text-white', 'hover:bg-gray-700');
     });
     
-    // Show selected tab
     const selectedTab = document.getElementById(`${tabName}-tab`);
     if (selectedTab) {
         selectedTab.classList.remove('hidden');
     }
     
-    // Add active class to selected nav button
     const selectedBtn = document.querySelector(`[data-tab="${tabName}"]`);
     if (selectedBtn) {
         selectedBtn.classList.add('bg-Ragnar-600');
         selectedBtn.classList.remove('text-gray-300', 'hover:text-white', 'hover:bg-gray-700');
     }
     
-    // Load tab-specific data
     loadTabData(tabName);
     
-    // Close mobile menu
     const mobileMenu = document.getElementById('mobile-menu');
     if (mobileMenu) {
         mobileMenu.classList.add('hidden');
@@ -506,7 +494,7 @@ function refreshCurrentTab() {
 }
 
 function setupAutoRefresh() {
-    // Set up auto-refresh for different tabs
+
     autoRefreshIntervals.network = setInterval(() => {
         if (currentTab === 'network' && socket && socket.connected) {
             socket.emit('request_network');
