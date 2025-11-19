@@ -103,19 +103,32 @@ class SSHConnector:
         self.scan = self.scan[self.scan["Ports"].str.contains("22", na=False)]
 
     def ssh_connect(self, adresse_ip, user, password):
-        """
-        Attempt to connect to an SSH service using the given credentials.
-        """
+        """Attempt to connect to SSH using only the supplied credentials."""
         ssh = paramiko.SSHClient()
         ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
-        
+
         try:
-            ssh.connect(adresse_ip, username=user, password=password, banner_timeout=200)  # Adjust timeout as necessary
+            ssh.connect(
+                adresse_ip,
+                username=user,
+                password=password,
+                port=22,
+                timeout=15,
+                auth_timeout=15,
+                banner_timeout=15,
+                look_for_keys=False,  # Prevent consuming auth attempts with key probing
+                allow_agent=False
+            )
+            logger.debug(f"SSH login succeeded for {adresse_ip} using {user}:{password}")
             return True
-        except (paramiko.AuthenticationException, socket.error, paramiko.SSHException):
+        except paramiko.AuthenticationException:
+            logger.debug(f"SSH authentication failed for {adresse_ip} | user={user}")
+            return False
+        except (socket.error, paramiko.SSHException) as exc:
+            logger.warning(f"SSH connection error to {adresse_ip}: {exc}")
             return False
         finally:
-            ssh.close()  # Ensure the SSH connection is closed
+            ssh.close()
 
     def worker(self, progress, task_id, success_flag):
         """
