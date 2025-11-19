@@ -855,10 +855,24 @@ method=auto
             'rdp': self.shared_data.rdpfile
         }
         
-        def _first_present(row, *keys):
+        def _normalize_keys(row):
+            normalized = {}
+            for key, value in row.items():
+                if key is None:
+                    continue
+                normalized_key = key.strip().lower()
+                if normalized_key:
+                    normalized[normalized_key] = value
+            return normalized
+
+        def _first_present(row, normalized_row, *keys):
             for key in keys:
                 if key in row and row[key] not in (None, ''):
                     return row[key]
+
+                normalized_key = key.strip().lower()
+                if normalized_key in normalized_row and normalized_row[normalized_key] not in (None, ''):
+                    return normalized_row[normalized_key]
             return ''
 
         for service, filepath in cred_files.items():
@@ -868,9 +882,23 @@ method=auto
                     with open(filepath, 'r', encoding='utf-8', errors='ignore') as f:
                         reader = csv.DictReader(f)
                         for row in reader:
-                            ip_value = _first_present(row, 'IP Address', 'IP', 'Target', 'target_ip')
-                            user_value = _first_present(row, 'Username', 'User', 'Login', 'Account')
-                            password_value = _first_present(row, 'Password', 'Pass', 'Credential')
+                            normalized_row = _normalize_keys(row)
+
+                            ip_value = _first_present(
+                                row,
+                                normalized_row,
+                                'IP Address', 'IP', 'Target', 'target_ip', 'ip address'
+                            )
+                            user_value = _first_present(
+                                row,
+                                normalized_row,
+                                'Username', 'User', 'Login', 'Account', 'user name'
+                            )
+                            password_value = _first_present(
+                                row,
+                                normalized_row,
+                                'Password', 'Pass', 'Credential'
+                            )
 
                             creds.append({
                                 'ip': str(ip_value).strip(),
