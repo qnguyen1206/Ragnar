@@ -4915,6 +4915,8 @@ function updateConnectivityIndicator(id, active, ssid = null, apMode = false) {
 
 let consoleBuffer = [];
 const MAX_CONSOLE_LINES = 200;
+let lastConsoleLogCount = 0;
+let lastConsoleLogSignature = null;
 
 function addConsoleMessage(message, type = 'info') {
     const timestamp = new Date().toLocaleTimeString();
@@ -4945,15 +4947,13 @@ function addConsoleMessage(message, type = 'info') {
 
 function updateConsole(logs) {
     if (!logs || !Array.isArray(logs)) {
-        // If no logs available, add informational messages
         if (consoleBuffer.length === 0) {
             addConsoleMessage('No historical logs available', 'warning');
             addConsoleMessage('New activity will appear here as it occurs', 'info');
         }
         return;
     }
-    
-    // If logs are empty array, provide user feedback
+
     if (logs.length === 0) {
         if (consoleBuffer.length === 0) {
             addConsoleMessage('No recent activity logged', 'info');
@@ -4961,37 +4961,73 @@ function updateConsole(logs) {
         }
         return;
     }
-    
-    // Clear existing buffer and add new logs
-    consoleBuffer = [];
-    
-    logs.forEach(log => {
-        // Skip empty lines
-        if (!log.trim()) return;
-        
+
+    const processLogLine = (log) => {
+        if (!log || !log.trim()) return;
+
         let type = 'info';
-        if (log.includes('ERROR') || log.includes('Error') || log.includes('error')) type = 'error';
-        else if (log.includes('WARN') || log.includes('Warning') || log.includes('warning')) type = 'warning';
-        else if (log.includes('INFO') || log.includes('Info')) type = 'info';
-        else if (log.includes('DEBUG') || log.includes('Debug')) type = 'info';
-        else if (log.includes('SUCCESS') || log.includes('Success')) type = 'success';
-        
-        const timestamp = new Date().toLocaleTimeString();
+        if (log.match(/error/i)) type = 'error';
+        else if (log.match(/warn/i)) type = 'warning';
+        else if (log.match(/success/i)) type = 'success';
+
         const colors = {
             'success': 'text-green-400',
             'error': 'text-red-400',
             'warning': 'text-yellow-400',
             'info': 'text-gray-300'
         };
-        
+
         consoleBuffer.push({
-            timestamp,
+            timestamp: new Date().toLocaleTimeString(),
             message: log.trim(),
             type,
             colorClass: colors[type]
         });
-    });
-    
+
+        if (consoleBuffer.length > MAX_CONSOLE_LINES) {
+            consoleBuffer = consoleBuffer.slice(-MAX_CONSOLE_LINES);
+        }
+    };
+
+    const rebuildBuffer = () => {
+        consoleBuffer = [];
+        const recentLogs = logs.slice(-MAX_CONSOLE_LINES);
+        recentLogs.forEach(processLogLine);
+    };
+
+    const appendNewEntries = () => {
+        if (!lastConsoleLogSignature) {
+            rebuildBuffer();
+            return;
+        }
+
+        const lastIndex = logs.lastIndexOf(lastConsoleLogSignature);
+        if (lastIndex === -1) {
+            rebuildBuffer();
+            return;
+        }
+
+        let skipIndex = lastIndex + 1;
+        // Handle duplicates of the signature value at the end of the array
+        for (let i = lastIndex + 1; i < logs.length; i++) {
+            if (logs[i] === lastConsoleLogSignature) {
+                skipIndex = i + 1;
+            } else {
+                break;
+            }
+        }
+
+        logs.slice(skipIndex).forEach(processLogLine);
+    };
+
+    if (!lastConsoleLogCount || logs.length < lastConsoleLogCount) {
+        rebuildBuffer();
+    } else {
+        appendNewEntries();
+    }
+
+    lastConsoleLogCount = logs.length;
+    lastConsoleLogSignature = logs[logs.length - 1];
     updateConsoleDisplay();
 }
 
