@@ -855,17 +855,27 @@ method=auto
             'rdp': self.shared_data.rdpfile
         }
         
+        def _first_present(row, *keys):
+            for key in keys:
+                if key in row and row[key] not in (None, ''):
+                    return row[key]
+            return ''
+
         for service, filepath in cred_files.items():
             try:
                 if os.path.exists(filepath):
                     creds = []
-                    with open(filepath, 'r') as f:
+                    with open(filepath, 'r', encoding='utf-8', errors='ignore') as f:
                         reader = csv.DictReader(f)
                         for row in reader:
+                            ip_value = _first_present(row, 'IP Address', 'IP', 'Target', 'target_ip')
+                            user_value = _first_present(row, 'Username', 'User', 'Login', 'Account')
+                            password_value = _first_present(row, 'Password', 'Pass', 'Credential')
+
                             creds.append({
-                                'ip': row.get('IP Address', ''),
-                                'username': row.get('Username', ''),
-                                'password': row.get('Password', '')
+                                'ip': str(ip_value).strip(),
+                                'username': str(user_value).strip() or 'N/A',
+                                'password': str(password_value).strip()
                             })
                     credentials[service] = creds
                 else:
