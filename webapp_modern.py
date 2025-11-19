@@ -2373,11 +2373,17 @@ def get_logs():
         # 2. Get Ragnar main activity logs from data/logs directory
         logs_dir = shared_data.logsdir
         if os.path.exists(logs_dir):
+            skip_console_logs = {
+                'orchestrator.py.log',
+                'scanning.py.log',
+                'nmap_vuln_scanner.py.log',
+                'comment.py.log'
+            }
             # Look for recent log files from attack actions
             for log_filename in os.listdir(logs_dir):
                 if log_filename.endswith('.log') or log_filename.endswith('.txt'):
-                    # Skip files we've already processed
-                    if log_filename in ['orchestrator.py.log', 'scanning.py.log', 'nmap_vuln_scanner.py.log']:
+                    # Skip files we've already processed or explicitly excluded
+                    if log_filename in skip_console_logs:
                         continue
                     
                     log_path = os.path.join(logs_dir, log_filename)
@@ -2394,6 +2400,15 @@ def get_logs():
                         # Skip files that can't be read
                         continue
         
+        noise_filters = (
+            'comment.py - INFO - Comments loaded successfully from cache',
+        )
+        if noise_filters:
+            all_logs = [
+                log for log in all_logs
+                if not any(noise in log for noise in noise_filters)
+            ]
+
         # Sort logs chronologically if they have timestamps
         # Logs are in format: YYYY-MM-DD HH:MM:SS - filename - LEVEL - message
         def extract_timestamp(log_line):

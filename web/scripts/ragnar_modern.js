@@ -4913,8 +4913,19 @@ function updateConnectivityIndicator(id, active, ssid = null, apMode = false) {
 // CONSOLE
 // ============================================================================
 
-let consoleBuffer = [];
 const MAX_CONSOLE_LINES = 200;
+const CONSOLE_NOISE_PATTERNS = [
+    'comment.py - INFO - Comments loaded successfully from cache'
+];
+const HISTORY_LOG_TYPE_COLORS = {
+    'success': 'text-green-400',
+    'error': 'text-red-400',
+    'warning': 'text-yellow-400',
+    'info': 'text-gray-300'
+};
+
+let consoleBuffer = [];
+let lastConsoleLogLine = null;
 
 function addConsoleMessage(message, type = 'info') {
     const timestamp = new Date().toLocaleTimeString();
@@ -4943,6 +4954,45 @@ function addConsoleMessage(message, type = 'info') {
     updateConsoleDisplay();
 }
 
+function shouldHideConsoleLog(logLine) {
+    return CONSOLE_NOISE_PATTERNS.some(pattern => logLine.includes(pattern));
+}
+
+function determineConsoleLogType(logLine) {
+    if (!logLine) return 'info';
+    const normalized = logLine.toLowerCase();
+    if (normalized.includes('error')) return 'error';
+    if (normalized.includes('warn')) return 'warning';
+    if (normalized.includes('success')) return 'success';
+    return 'info';
+}
+
+const LOG_TIMESTAMP_PATTERN = /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/;
+
+function extractLogTimestamp(logLine) {
+    if (!logLine || logLine.length < 19) {
+        return new Date().toLocaleTimeString();
+    }
+    const timestampCandidate = logLine.slice(0, 19);
+    if (LOG_TIMESTAMP_PATTERN.test(timestampCandidate)) {
+        const parsed = new Date(timestampCandidate.replace(' ', 'T'));
+        if (!Number.isNaN(parsed.getTime())) {
+            return parsed.toLocaleTimeString();
+        }
+    }
+    return new Date().toLocaleTimeString();
+}
+
+function createConsoleEntryFromLog(logLine) {
+    const type = determineConsoleLogType(logLine);
+    return {
+        timestamp: extractLogTimestamp(logLine),
+        message: logLine,
+        type,
+        colorClass: HISTORY_LOG_TYPE_COLORS[type] || HISTORY_LOG_TYPE_COLORS['info']
+    };
+}
+
 function updateConsole(logs) {
     if (!logs || !Array.isArray(logs)) {
         // If no logs available, add informational messages
@@ -4962,36 +5012,46 @@ function updateConsole(logs) {
         return;
     }
     
-    // Clear existing buffer and add new logs
-    consoleBuffer = [];
+    const cleanedLogs = logs
+        .map(log => typeof log === 'string' ? log.trim() : '')
+        .filter(log => log && !shouldHideConsoleLog(log));
+
+    if (cleanedLogs.length === 0) {
+        return;
+    }
+
+    let newLogLines = [];
+    if (!lastConsoleLogLine) {
+        consoleBuffer = [];
+        newLogLines = cleanedLogs.slice(-MAX_CONSOLE_LINES);
+    } else {
+        const lastIndex = cleanedLogs.lastIndexOf(lastConsoleLogLine);
+        if (lastIndex === cleanedLogs.length - 1) {
+            lastConsoleLogLine = cleanedLogs[cleanedLogs.length - 1];
+            return;
+        }
+        if (lastIndex !== -1) {
+            newLogLines = cleanedLogs.slice(lastIndex + 1);
+        } else {
+            consoleBuffer = [];
+            newLogLines = cleanedLogs.slice(-MAX_CONSOLE_LINES);
+        }
+    }
+
+    if (newLogLines.length === 0) {
+        lastConsoleLogLine = cleanedLogs[cleanedLogs.length - 1];
+        return;
+    }
     
-    logs.forEach(log => {
-        // Skip empty lines
-        if (!log.trim()) return;
-        
-        let type = 'info';
-        if (log.includes('ERROR') || log.includes('Error') || log.includes('error')) type = 'error';
-        else if (log.includes('WARN') || log.includes('Warning') || log.includes('warning')) type = 'warning';
-        else if (log.includes('INFO') || log.includes('Info')) type = 'info';
-        else if (log.includes('DEBUG') || log.includes('Debug')) type = 'info';
-        else if (log.includes('SUCCESS') || log.includes('Success')) type = 'success';
-        
-        const timestamp = new Date().toLocaleTimeString();
-        const colors = {
-            'success': 'text-green-400',
-            'error': 'text-red-400',
-            'warning': 'text-yellow-400',
-            'info': 'text-gray-300'
-        };
-        
-        consoleBuffer.push({
-            timestamp,
-            message: log.trim(),
-            type,
-            colorClass: colors[type]
-        });
+    newLogLines.forEach(logLine => {
+        consoleBuffer.push(createConsoleEntryFromLog(logLine));
     });
     
+    if (consoleBuffer.length > MAX_CONSOLE_LINES) {
+        consoleBuffer = consoleBuffer.slice(-MAX_CONSOLE_LINES);
+    }
+    
+    lastConsoleLogLine = cleanedLogs[cleanedLogs.length - 1];
     updateConsoleDisplay();
 }
 
