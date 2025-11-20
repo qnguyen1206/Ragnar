@@ -3756,6 +3756,7 @@ async function connectToWifiNetwork() {
     if (!selectedWifiNetwork) return;
     
     const passwordInput = document.getElementById('wifi-connect-password');
+    const passwordSection = document.getElementById('wifi-password-section');
     const saveCheckbox = document.getElementById('wifi-save-network');
     const statusDiv = document.getElementById('wifi-connect-status');
     const submitBtn = document.getElementById('wifi-connect-submit-btn');
