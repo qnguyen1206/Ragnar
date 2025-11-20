@@ -4844,7 +4844,16 @@ async function executeManualAttack() {
 }
 
 async function startOrchestrator() {
+    const statusEl = document.getElementById('system-control-status');
+    
     try {
+        // Show status and start progress
+        if (statusEl) {
+            statusEl.classList.remove('hidden');
+            statusEl.textContent = 'Starting automatic mode...';
+            statusEl.className = 'text-sm text-blue-600 mt-4';
+        }
+        
         addConsoleMessage('Starting automatic mode...', 'info');
         
         const data = await postAPI('/api/manual/orchestrator/start', {});
@@ -4854,18 +4863,47 @@ async function startOrchestrator() {
             updateElement('ragnar-mode', 'Auto');
             document.getElementById('ragnar-mode').className = 'text-green-400 font-semibold';
             
+            if (statusEl) {
+                statusEl.textContent = 'Automatic mode activated - Orchestrator running';
+                statusEl.className = 'text-sm text-green-600 mt-4';
+                
+                // Hide status after 3 seconds
+                setTimeout(() => {
+                    if (statusEl) {
+                        statusEl.classList.add('hidden');
+                    }
+                }, 3000);
+            }
+            
         } else {
             addConsoleMessage(`Failed to start automatic mode: ${data.message || 'Unknown error'}`, 'error');
+            if (statusEl) {
+                statusEl.textContent = `Error: ${data.message || 'Failed to start automatic mode'}`;
+                statusEl.className = 'text-sm text-red-600 mt-4';
+            }
         }
         
     } catch (error) {
         console.error('Error starting orchestrator:', error);
         addConsoleMessage('Failed to start automatic mode', 'error');
+        if (statusEl) {
+            statusEl.textContent = `Error: ${error.message}`;
+            statusEl.className = 'text-sm text-red-600 mt-4';
+        }
     }
 }
 
 async function stopOrchestrator() {
+    const statusEl = document.getElementById('system-control-status');
+    
     try {
+        // Show status and start progress
+        if (statusEl) {
+            statusEl.classList.remove('hidden');
+            statusEl.textContent = 'Stopping automatic mode...';
+            statusEl.className = 'text-sm text-orange-600 mt-4';
+        }
+        
         addConsoleMessage('Stopping automatic mode...', 'info');
         
         const data = await postAPI('/api/manual/orchestrator/stop', {});
@@ -4875,40 +4913,97 @@ async function stopOrchestrator() {
             updateElement('ragnar-mode', 'Manual');
             document.getElementById('ragnar-mode').className = 'text-orange-400 font-semibold';
             
+            if (statusEl) {
+                statusEl.textContent = 'Pentest Mode activated - Manual control enabled';
+                statusEl.className = 'text-sm text-orange-600 mt-4';
+                
+                // Hide status after 3 seconds
+                setTimeout(() => {
+                    if (statusEl) {
+                        statusEl.classList.add('hidden');
+                    }
+                }, 3000);
+            }
+            
         } else {
             addConsoleMessage(`Failed to stop automatic mode: ${data.message || 'Unknown error'}`, 'error');
+            if (statusEl) {
+                statusEl.textContent = `Error: ${data.message || 'Failed to stop automatic mode'}`;
+                statusEl.className = 'text-sm text-red-600 mt-4';
+            }
         }
         
     } catch (error) {
         console.error('Error stopping orchestrator:', error);
         addConsoleMessage('Failed to stop automatic mode', 'error');
+        if (statusEl) {
+            statusEl.textContent = `Error: ${error.message}`;
+            statusEl.className = 'text-sm text-red-600 mt-4';
+        }
     }
 }
 
 async function triggerNetworkScan() {
+    const statusEl = document.getElementById('system-control-status');
+    
     try {
+        // Show status and start progress
+        if (statusEl) {
+            statusEl.classList.remove('hidden');
+            statusEl.textContent = 'Initiating network discovery scan...';
+            statusEl.className = 'text-sm text-blue-600 mt-4';
+        }
+        
         addConsoleMessage('Triggering network scan...', 'info');
         
         const data = await postAPI('/api/manual/scan/network', {});
         
         if (data.success) {
             addConsoleMessage('Network scan triggered successfully', 'success');
+            if (statusEl) {
+                statusEl.textContent = 'Network scan started - Check Network tab for progress';
+                statusEl.className = 'text-sm text-green-600 mt-4';
+                
+                // Hide status after 4 seconds
+                setTimeout(() => {
+                    if (statusEl) {
+                        statusEl.classList.add('hidden');
+                    }
+                }, 4000);
+            }
         } else {
             addConsoleMessage(`Failed to trigger network scan: ${data.message || 'Unknown error'}`, 'error');
+            if (statusEl) {
+                statusEl.textContent = `Error: ${data.message || 'Failed to trigger network scan'}`;
+                statusEl.className = 'text-sm text-red-600 mt-4';
+            }
         }
         
     } catch (error) {
         console.error('Error triggering network scan:', error);
         addConsoleMessage('Failed to trigger network scan', 'error');
+        if (statusEl) {
+            statusEl.textContent = `Error: ${error.message}`;
+            statusEl.className = 'text-sm text-red-600 mt-4';
+        }
     }
 }
 
 async function triggerVulnScan() {
+    const statusEl = document.getElementById('system-control-status');
+    
     try {
         const vulnIpDropdown = document.getElementById('vuln-ip-dropdown');
         const selectedIp = vulnIpDropdown ? vulnIpDropdown.value : 'all';
         const isAllTargets = !selectedIp || selectedIp === 'all';
         const scanLabel = isAllTargets ? 'all targets' : selectedIp;
+
+        // Show status and start progress
+        if (statusEl) {
+            statusEl.classList.remove('hidden');
+            statusEl.textContent = `Starting vulnerability scan for ${scanLabel}...`;
+            statusEl.className = 'text-sm text-purple-600 mt-4';
+        }
 
         addConsoleMessage(`Triggering vulnerability scan for ${scanLabel}...`, 'info');
 
@@ -4916,13 +5011,32 @@ async function triggerVulnScan() {
         
         if (data.success) {
             addConsoleMessage('Vulnerability scan triggered successfully', 'success');
+            if (statusEl) {
+                statusEl.textContent = `Vulnerability scan initiated for ${scanLabel} - Check Threat Intel tab`;
+                statusEl.className = 'text-sm text-green-600 mt-4';
+                
+                // Hide status after 4 seconds
+                setTimeout(() => {
+                    if (statusEl) {
+                        statusEl.classList.add('hidden');
+                    }
+                }, 4000);
+            }
         } else {
             addConsoleMessage(`Failed to trigger vulnerability scan: ${data.message || 'Unknown error'}`, 'error');
+            if (statusEl) {
+                statusEl.textContent = `Error: ${data.message || 'Failed to trigger vulnerability scan'}`;
+                statusEl.className = 'text-sm text-red-600 mt-4';
+            }
         }
         
     } catch (error) {
         console.error('Error triggering vulnerability scan:', error);
         addConsoleMessage('Failed to trigger vulnerability scan', 'error');
+        if (statusEl) {
+            statusEl.textContent = `Error: ${error.message}`;
+            statusEl.className = 'text-sm text-red-600 mt-4';
+        }
     }
 }
 
