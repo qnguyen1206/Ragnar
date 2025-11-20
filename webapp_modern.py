@@ -51,6 +51,7 @@ from utils import WebUtils
 from logger import Logger
 from threat_intelligence import ThreatIntelligenceFusion
 from lynis_parser import parse_lynis_dat
+from actions.lynis_pentest_ssh import LynisPentestSSH
 
 # Initialize logger
 logger = Logger(name="webapp_modern.py", level=logging.DEBUG)
@@ -8043,6 +8044,54 @@ def trigger_vulnerability_scan():
         # Reset status on error
         shared_data.ragnarstatustext = "IDLE"
         shared_data.ragnarstatustext2 = f"Failed to start vuln scan"
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@app.route('/api/manual/pentest/lynis', methods=['POST'])
+def run_manual_lynis_pentest():
+    """Manually trigger a Lynis pentest for a specific host."""
+    try:
+        if not shared_data.config.get('manual_mode', False):
+            return jsonify({'success': False, 'error': 'Enable Pentest Mode to run manual pentests'}), 400
+
+        data = request.get_json(silent=True) or {}
+        target_ip = (data.get('ip') or '').strip()
+        username = (data.get('username') or '').strip()
+        password = data.get('password') or ''
+
+        if not target_ip or not username or not password:
+            return jsonify({'success': False, 'error': 'IP, username, and password are required'}), 400
+
+        shared_data.ragnarstatustext = "LynisPentest"
+        shared_data.ragnarstatustext2 = f"Manual pentest: {target_ip}"
+        broadcast_status_update()
+
+        def execute_manual_lynis():
+            try:
+                action = LynisPentestSSH(shared_data)
+                status = action.run_manual(target_ip, username, password)
+                success = status == 'success'
+                shared_data.ragnarstatustext = "IDLE"
+                shared_data.ragnarstatustext2 = (
+                    "Lynis pentest completed" if success else "Lynis pentest failed"
+                )
+                broadcast_status_update()
+                logger.info(f"Manual Lynis pentest finished for {target_ip} with status: {status}")
+            except Exception as exc:
+                logger.error(f"Error during manual Lynis pentest for {target_ip}: {exc}")
+                shared_data.ragnarstatustext = "IDLE"
+                shared_data.ragnarstatustext2 = "Lynis pentest error"
+                broadcast_status_update()
+
+        threading.Thread(target=execute_manual_lynis, daemon=True).start()
+
+        return jsonify({'success': True, 'message': f'Lynis pentest initiated for {target_ip}'})
+
+    except Exception as e:
+        logger.error(f"Error starting manual Lynis pentest: {e}")
+        shared_data.ragnarstatustext = "IDLE"
+        shared_data.ragnarstatustext2 = "Lynis pentest error"
+        broadcast_status_update()
         return jsonify({'success': False, 'error': str(e)}), 500
 
 # ============================================================================

@@ -9,11 +9,13 @@ let autoRefreshIntervals = {};
 
 let preloadedTabs = new Set();
 let pendingFileHighlight = null;
+let manualModeActive = false;
+let manualDataPrimed = false;
 
 const configMetadata = {
     manual_mode: {
-        label: "Manual Mode",
-        description: "Hold Ragnar in manual control. Disable this to let the orchestrator continuously discover devices, run actions, and launch vulnerability scans automatically."
+        label: "Pentest Mode",
+        description: "Hold Ragnar in hands-on pentest control. Disable this to let the orchestrator continuously discover devices, run actions, and launch vulnerability scans automatically."
     },
     debug_mode: {
         label: "Debug Mode",
@@ -506,6 +508,8 @@ function setupAutoRefresh() {
     autoRefreshIntervals.connect = setInterval(() => {
         if (currentTab === 'connect') {
             refreshWifiStatus();
+        }
+        if (currentTab === 'pentest' && manualModeActive) {
             refreshBluetoothStatus();
         }
     }, 15000); // Every 15 seconds
@@ -706,6 +710,14 @@ async function loadTabData(tabName) {
         case 'connect':
             if (!alreadyPreloaded) {
                 await loadConnectData();
+            }
+            break;
+        case 'pentest':
+            if (manualModeActive) {
+                await loadPentestData();
+            } else {
+                addConsoleMessage('Enable Pentest Mode to access the Pentest tab', 'warning');
+                showTab('dashboard');
             }
             break;
         case 'discovered':
@@ -4541,6 +4553,32 @@ async function downloadPentestReport() {
 // MANUAL MODE FUNCTIONS
 // ============================================================================
 
+function syncManualModeUI(isManualMode) {
+    manualModeActive = isManualMode;
+
+    const manualHint = document.getElementById('manual-mode-hint');
+    if (manualHint) {
+        manualHint.classList.toggle('hidden', isManualMode);
+    }
+
+    document.querySelectorAll('.pentest-nav-btn').forEach(btn => {
+        btn.classList.toggle('hidden', !isManualMode);
+    });
+
+    if (!isManualMode && currentTab === 'pentest') {
+        showTab('dashboard');
+    }
+
+    if (isManualMode) {
+        if (!manualDataPrimed) {
+            loadManualModeData();
+            manualDataPrimed = true;
+        }
+    } else {
+        manualDataPrimed = false;
+    }
+}
+
 async function loadManualModeData() {
     try {
         // Store current selections before reloading
@@ -4626,8 +4664,18 @@ async function loadManualModeData() {
         }
         
     } catch (error) {
-        console.error('Error loading manual mode data:', error);
-        addConsoleMessage('Failed to load manual mode data', 'error');
+        console.error('Error loading Pentest Mode data:', error);
+        addConsoleMessage('Failed to load Pentest Mode data', 'error');
+    }
+}
+
+async function loadPentestData() {
+    try {
+        await loadManualModeData();
+        await refreshBluetoothStatus();
+    } catch (error) {
+        console.error('Error loading pentest data:', error);
+        addConsoleMessage('Failed to load pentest data', 'error');
     }
 }
 
@@ -4696,11 +4744,6 @@ async function startOrchestrator() {
             updateElement('ragnar-mode', 'Auto');
             document.getElementById('ragnar-mode').className = 'text-green-400 font-semibold';
             
-            // Hide manual controls
-            const manualControls = document.getElementById('manual-controls');
-            if (manualControls) {
-                manualControls.classList.add('hidden');
-            }
         } else {
             addConsoleMessage(`Failed to start automatic mode: ${data.message || 'Unknown error'}`, 'error');
         }
@@ -4718,17 +4761,10 @@ async function stopOrchestrator() {
         const data = await postAPI('/api/manual/orchestrator/stop', {});
         
         if (data.success) {
-            addConsoleMessage('Automatic mode stopped - Manual mode activated', 'warning');
+            addConsoleMessage('Automatic mode stopped - Pentest Mode activated', 'warning');
             updateElement('ragnar-mode', 'Manual');
             document.getElementById('ragnar-mode').className = 'text-orange-400 font-semibold';
             
-            // Show manual controls
-            const manualControls = document.getElementById('manual-controls');
-            if (manualControls) {
-                manualControls.classList.remove('hidden');
-                // Load manual mode data
-                loadManualModeData();
-            }
         } else {
             addConsoleMessage(`Failed to stop automatic mode: ${data.message || 'Unknown error'}`, 'error');
         }
@@ -4777,6 +4813,84 @@ async function triggerVulnScan() {
     } catch (error) {
         console.error('Error triggering vulnerability scan:', error);
         addConsoleMessage('Failed to trigger vulnerability scan', 'error');
+    }
+}
+
+async function runManualLynisPentest() {
+    const ipInput = document.getElementById('manual-lynis-ip');
+    const userInput = document.getElementById('manual-lynis-username');
+    const passInput = document.getElementById('manual-lynis-password');
+    const statusWrap = document.getElementById('manual-lynis-status');
+    const statusMessage = document.getElementById('manual-lynis-status-message');
+    const submitBtn = document.getElementById('manual-lynis-btn');
+
+    if (!ipInput || !userInput || !passInput) {
+        addConsoleMessage('Manual Lynis form is missing elements', 'error');
+        return;
+    }
+
+    const ip = ipInput.value.trim();
+    const username = userInput.value.trim();
+    const password = passInput.value;
+
+    const setStatus = (message, type = 'info') => {
+        if (!statusWrap || !statusMessage) return;
+        const styles = {
+            success: 'border-green-500/40 bg-green-900/30 text-green-200',
+            error: 'border-red-500/50 bg-red-900/40 text-red-200',
+            info: 'border-slate-700 bg-slate-900/70 text-gray-200'
+        };
+        statusWrap.classList.remove('hidden');
+        statusMessage.className = `rounded-lg px-4 py-3 text-sm ${styles[type] || styles.info}`;
+        statusMessage.textContent = message;
+    };
+
+    if (!ip || !username || !password) {
+        setStatus('IP, username, and password are required to run Lynis manually.', 'error');
+        return;
+    }
+
+    if (!isValidIPv4(ip)) {
+        setStatus('Please enter a valid IPv4 address.', 'error');
+        return;
+    }
+
+    if (submitBtn) {
+        submitBtn.disabled = true;
+        submitBtn.textContent = 'Launching...';
+    }
+
+    try {
+        const response = await fetch('/api/manual/pentest/lynis', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ ip, username, password })
+        });
+
+        let payload = {};
+        try {
+            payload = await response.json();
+        } catch (parseError) {
+            console.warn('Unable to parse manual Lynis response JSON', parseError);
+        }
+
+        if (!response.ok || (payload && payload.success === false)) {
+            throw new Error((payload && (payload.error || payload.message)) || `Request failed (${response.status})`);
+        }
+
+        const successMessage = (payload && payload.message) || `Lynis pentest initiated for ${ip}`;
+        setStatus(successMessage, 'success');
+        addConsoleMessage(successMessage, 'success');
+        passInput.value = '';
+    } catch (error) {
+        console.error('Error running manual Lynis pentest:', error);
+        setStatus(`Failed to start Lynis pentest: ${error.message}`, 'error');
+        addConsoleMessage(`Manual Lynis error: ${error.message}`, 'error');
+    } finally {
+        if (submitBtn) {
+            submitBtn.disabled = false;
+            submitBtn.textContent = 'Run Lynis Pentest';
+        }
     }
 }
 
@@ -4853,7 +4967,7 @@ function updateDashboardStatus(data) {
     updateElement('Ragnar-says', (data.ragnar_says || 'Hacking away...'));
     
     // Update mode and handle manual controls
-    const isManualMode = data.manual_mode;
+    const isManualMode = Boolean(data.manual_mode);
     updateElement('Ragnar-mode', isManualMode ? 'Manual' : 'Auto');
     
     // Update mode styling
@@ -4866,20 +4980,7 @@ function updateDashboardStatus(data) {
         }
     }
     
-    // Show/hide manual controls based on mode
-    const manualControls = document.getElementById('manual-controls');
-    if (manualControls) {
-        if (isManualMode) {
-            const wasHidden = manualControls.classList.contains('hidden');
-            manualControls.classList.remove('hidden');
-            // Only load manual mode data when first showing controls, not on every status update
-            if (wasHidden) {
-                loadManualModeData();
-            }
-        } else {
-            manualControls.classList.add('hidden');
-        }
-    }
+    syncManualModeUI(isManualMode);
     
     // Update connectivity status with WiFi SSID
     updateConnectivityIndicator('wifi-status', data.wifi_connected, data.current_ssid, data.ap_mode_active);
