@@ -357,7 +357,11 @@ class Orchestrator:
         # Check if action requires a specific port
         required_port = getattr(action, 'port', None)
         if required_port not in (None, '', 0, '0'):
-            if str(required_port) not in ports:
+            # Normalize port comparison - strip whitespace and remove protocol suffixes
+            required_port_str = str(required_port).strip().split('/')[0]
+            ports_normalized = [str(p).strip().split('/')[0] for p in ports]
+            
+            if required_port_str not in ports_normalized:
                 logger.debug(
                     f"Skipping {action.action_name} for {ip} - required port {required_port} not in {ports}"
                 )
