@@ -5451,9 +5451,12 @@ function displayLootTable(data) {
         return;
     }
     
-    let html = `<div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">`;
+    const previewCount = 6;
+    const hasMoreItems = data.length > previewCount;
+    const previewItems = data.slice(0, previewCount);
+    const hiddenItems = hasMoreItems ? data.slice(previewCount) : [];
     
-    data.forEach(item => {
+    function createLootItemHTML(item) {
         const filename = escapeHtml(item.filename || 'Unknown File');
         const size = escapeHtml(item.size || 'N/A');
         const source = escapeHtml(item.source || 'Unknown');
@@ -5463,7 +5466,7 @@ function displayLootTable(data) {
         const clickAttr = encodedPath ? `onclick="openLootFile('${encodedPath}')"` : 'disabled aria-disabled="true"';
         const actionHint = encodedPath ? '<p class="text-xs text-Ragnar-400 mt-3">Open in Files →</p>' : '';
         
-        html += `
+        return `
             <button type="button" class="${buttonClasses}" ${clickAttr}>
                 <div class="flex items-center justify-between mb-2">
                     <h3 class="text-lg font-semibold text-Ragnar-400 truncate" title="${filename}">${filename}</h3>
@@ -5476,10 +5479,67 @@ function displayLootTable(data) {
                 ${actionHint}
             </button>
         `;
+    }
+    
+    let html = `<div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4" id="loot-preview-items">`;
+    
+    // Add preview items
+    previewItems.forEach(item => {
+        html += createLootItemHTML(item);
     });
     
     html += '</div>';
+    
+    // Add expandable section for remaining items
+    if (hasMoreItems) {
+        html += `
+            <div class="mt-4">
+                <button onclick="toggleLootExpansion()" 
+                        class="flex items-center justify-center w-full py-3 px-4 bg-gray-800 hover:bg-gray-700 rounded-lg transition-colors text-gray-300 hover:text-white">
+                    <span id="loot-expand-text">Show ${hiddenItems.length} more items</span>
+                    <svg id="loot-expand-arrow" class="w-4 h-4 ml-2 transition-transform" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"></path>
+                    </svg>
+                </button>
+                <div id="loot-hidden-items" class="hidden mt-4">
+                    <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+        `;
+        
+        hiddenItems.forEach(item => {
+            html += createLootItemHTML(item);
+        });
+        
+        html += `
+                    </div>
+                </div>
+            </div>
+        `;
+    }
+    
     container.innerHTML = html;
+}
+
+function toggleLootExpansion() {
+    const hiddenItems = document.getElementById('loot-hidden-items');
+    const expandText = document.getElementById('loot-expand-text');
+    const expandArrow = document.getElementById('loot-expand-arrow');
+    
+    if (!hiddenItems || !expandText || !expandArrow) return;
+    
+    const isHidden = hiddenItems.classList.contains('hidden');
+    
+    if (isHidden) {
+        // Show hidden items
+        hiddenItems.classList.remove('hidden');
+        expandText.textContent = 'Show less';
+        expandArrow.style.transform = 'rotate(180deg)';
+    } else {
+        // Hide items
+        hiddenItems.classList.add('hidden');
+        const hiddenItemCount = hiddenItems.querySelectorAll('button').length;
+        expandText.textContent = `Show ${hiddenItemCount} more items`;
+        expandArrow.style.transform = 'rotate(0deg)';
+    }
 }
 
 function openLootFile(encodedPath) {
