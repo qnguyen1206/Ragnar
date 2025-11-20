@@ -5012,7 +5012,7 @@ async function triggerVulnScan() {
         if (data.success) {
             addConsoleMessage('Vulnerability scan triggered successfully', 'success');
             if (statusEl) {
-                statusEl.textContent = `Vulnerability scan initiated for ${scanLabel} - Check Threat Intel tab`;
+                statusEl.textContent = `Vulnerability scan initiated for ${scanLabel} - Check Threat Intel tab in a few minutes`;
                 statusEl.className = 'text-sm text-green-600 mt-4';
                 
                 // Hide status after 4 seconds
