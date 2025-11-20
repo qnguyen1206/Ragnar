@@ -2175,8 +2175,10 @@ def get_vulnerability_intel():
             'script_outputs': 0
         }
         
+        vuln_files = os.listdir(vuln_dir)
+
         # Process all scan files
-        for filename in os.listdir(vuln_dir):
+        for filename in vuln_files:
             if filename.endswith('_vuln_scan.txt'):
                 file_path = os.path.join(vuln_dir, filename)
                 stats['total_scanned'] += 1
@@ -2314,6 +2316,78 @@ def get_vulnerability_intel():
                     
                 except Exception as e:
                     logger.error(f"Error parsing scan file {filename}: {e}")
+                    continue
+
+        # Process Lynis pentest reports
+        lynis_pattern = re.compile(r'^lynis_(?P<ip>[^_]+)_(?P<ts>\d{8}_\d{6})_pentest\.txt$')
+
+        for filename in vuln_files:
+            match = lynis_pattern.match(filename)
+            if not match:
+                continue
+
+                file_path = os.path.join(vuln_dir, filename)
+                stats['total_scanned'] += 1
+
+                try:
+                    with open(file_path, 'r', encoding='utf-8', errors='ignore') as handle:
+                        content = handle.read()
+
+                    ip = match.group('ip')
+                    timestamp_raw = match.group('ts')
+                    hostname = f"{ip} (Lynis)"
+
+                    mod_time = os.path.getmtime(file_path)
+                    scan_date = datetime.fromtimestamp(mod_time).strftime('%Y-%m-%d %H:%M:%S')
+
+                    findings = []
+                    for line in content.splitlines():
+                        stripped = line.strip()
+                        lowered = stripped.lower()
+                        if not stripped:
+                            continue
+                        if lowered.startswith('warning[') or lowered.startswith('suggestion['):
+                            findings.append(stripped)
+                        elif 'hardening index' in lowered:
+                            findings.append(stripped)
+
+                    if not findings:
+                        snippet = content.strip().splitlines()[:40]
+                        findings = snippet if snippet else ['No explicit warnings captured; see full report for details.']
+
+                    report_excerpt = '\n'.join(findings)
+                    # Keep payload manageable for the UI
+                    if len(report_excerpt) > 8000:
+                        report_excerpt = report_excerpt[:8000] + '\n...[truncated]'
+
+                    service_entry = {
+                        'port': 'system',
+                        'service': 'lynis pentest',
+                        'version': timestamp_raw,
+                        'scripts': [
+                            {
+                                'name': 'security_audit',
+                                'output': report_excerpt
+                            }
+                        ]
+                    }
+
+                    stats['services_with_intel'] += 1
+                    stats['script_outputs'] += 1
+                    stats['interesting_hosts'] += 1
+
+                    scans.append({
+                        'ip': ip,
+                        'hostname': hostname,
+                        'scan_date': scan_date,
+                        'filename': filename,
+                        'services': [service_entry],
+                        'total_services': 1,
+                        'scan_type': 'lynis'
+                    })
+
+                except Exception as exc:
+                    logger.error(f"Error parsing Lynis report {filename}: {exc}")
                     continue
         
         # Sort scans by interesting content (most services and scripts first), then by scan date
