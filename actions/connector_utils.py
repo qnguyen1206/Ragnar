@@ -7,6 +7,7 @@ across different protocol connectors (SSH, FTP, SMB, RDP, Telnet, SQL).
 import os
 import json
 import logging
+from datetime import datetime
 from logger import Logger
 
 logger = Logger(name="connector_utils.py", level=logging.DEBUG)
@@ -178,7 +179,6 @@ class TimestampTracker:
             return True, "Never run before"
         
         try:
-            from datetime import datetime
             last_run = datetime.fromisoformat(self.timestamps[ip])
             time_since_last = datetime.utcnow() - last_run
             hours_since = time_since_last.total_seconds() / 3600
@@ -199,6 +199,5 @@ class TimestampTracker:
         Args:
             ip: IP address of the host
         """
-        from datetime import datetime
         self.timestamps[ip] = datetime.utcnow().isoformat()
         self._save_db()
