@@ -15,8 +15,8 @@
 # - Logging events and errors to ensure maintainability and ease of debugging.
 # - Handling graceful degradation by managing retries and idle states when no new targets are found.
 
-# VERSION: 11:10:18:45 - FIX: Vuln scans run EVERY 15min with force=True (no retry delays)
-ORCHESTRATOR_VERSION = "11:10:18:45"
+# VERSION: 11:23:20:30 - FEATURE: 24-hour timestamp tracking for vuln scans (avoid re-scanning within 24h unless force=True)
+ORCHESTRATOR_VERSION = "11:23:20:30"
 
 import json
 import importlib
@@ -84,7 +84,7 @@ class Orchestrator:
                 logger.warning(f"Missing config attribute '{attr}', setting default value: {default_value}")
                 setattr(self.shared_data, attr, default_value)
 
-    def _should_retry(self, action_key, row, status_type='success'):
+    def _should_retry(self, action_key, row, status_type='success', custom_delay_seconds=None):
         """
         Check if an action should be retried based on its status and retry configuration.
         
@@ -92,6 +92,8 @@ class Orchestrator:
             action_key: The action name/key to check
             row: The data row containing action status
             status_type: Either 'success' or 'failed'
+            custom_delay_seconds: Optional custom delay in seconds (overrides config values)
+                                  Use this for special cases like 24-hour vuln scan delays
             
         Returns:
             tuple: (should_retry: bool, reason: str or None)
@@ -108,7 +110,8 @@ class Orchestrator:
             if not retry_enabled:
                 return (False, "success retry disabled")
             
-            delay = getattr(self.shared_data, 'success_retry_delay', 300)
+            # Use custom delay if provided, otherwise use config value
+            delay = custom_delay_seconds if custom_delay_seconds is not None else getattr(self.shared_data, 'success_retry_delay', 300)
             status_prefix = 'success'
         elif status_type == 'failed':
             if 'failed' not in action_status:
@@ -118,7 +121,8 @@ class Orchestrator:
             if not retry_enabled:
                 return (False, "failed retry disabled")
             
-            delay = getattr(self.shared_data, 'failed_retry_delay', 180)
+            # Use custom delay if provided, otherwise use config value
+            delay = custom_delay_seconds if custom_delay_seconds is not None else getattr(self.shared_data, 'failed_retry_delay', 180)
             status_prefix = 'failed'
         else:
             logger.error(f"Invalid status_type: {status_type}")
@@ -574,10 +578,15 @@ class Orchestrator:
 
     def run_vulnerability_scans(self, force=False):
         """
-        Run vulnerability scans on all alive hosts with timeout protection
+        Run vulnerability scans on all alive hosts with timeout protection.
+        
+        Implements 24-hour timestamp tracking to avoid re-scanning hosts within 24 hours.
+        Each successful scan updates the timestamp, and subsequent scans check if 24 hours
+        have elapsed before scanning again.
         
         Args:
-            force: If True, bypass retry delay checks (used for scheduled/startup scans)
+            force: If True, bypass all retry delay checks including 24-hour window
+                   (used for scheduled/startup scans)
         """
         scan_vuln_running = getattr(self.shared_data, 'scan_vuln_running', True)
         
@@ -616,14 +625,17 @@ class Orchestrator:
                     logger.info(f"🎯 Force scan enabled - scanning {ip} ({hostname})")
                 else:
                     # Only check retry logic if this is NOT a forced/scheduled scan
-                    # Check success retry logic using helper
-                    should_retry, reason = self._should_retry(action_key, row, 'success')
+                    # For vulnerability scans, enforce 24-hour delay (86400 seconds) between successful scans
+                    vuln_scan_delay_24h = 86400  # 24 hours in seconds
+                    
+                    # Check success retry logic with 24-hour delay
+                    should_retry, reason = self._should_retry(action_key, row, 'success', custom_delay_seconds=vuln_scan_delay_24h)
                     if not should_retry:
                         logger.debug(f"Skipping {ip} ({hostname}): {reason}")
                         scans_skipped += 1
                         continue
                     
-                    # Check failed retry logic using helper
+                    # Check failed retry logic using helper (use default failed_retry_delay for failures)
                     should_retry, reason = self._should_retry(action_key, row, 'failed')
                     if not should_retry:
                         logger.debug(f"Skipping {ip} ({hostname}): {reason}")
