@@ -186,7 +186,7 @@ def handle_exit(sig, frame, display_thread, ragnar_thread, web_thread):
     shared_data.webapp_should_exit = True
     
     # Stop individual threads
-    handle_exit_display(sig, frame, display_thread)
+    handle_exit_display(sig, frame, display_thread, exit_process=False)
     
     if display_thread and display_thread.is_alive():
         display_thread.join(timeout=5)

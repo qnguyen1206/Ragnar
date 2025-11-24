@@ -699,8 +699,16 @@ class SharedData:
                     module_name = filename[:-3]
                     try:
                         module = importlib.import_module(f'actions.{module_name}')
-                        b_class = getattr(module, 'b_class')
-                        b_status = getattr(module, 'b_status')
+                        if getattr(module, 'BYPASS_ACTION_MODULE', False):
+                            logger.debug(f"Skipping helper module {module_name} (BYPASS_ACTION_MODULE)")
+                            continue
+
+                        b_class = getattr(module, 'b_class', None)
+                        b_status = getattr(module, 'b_status', None)
+                        if not b_class or not b_status:
+                            logger.debug(f"Skipping module {module_name} without action metadata")
+                            continue
+
                         b_port = getattr(module, 'b_port', None)
                         b_parent = getattr(module, 'b_parent', None)
                         actions_config.append({

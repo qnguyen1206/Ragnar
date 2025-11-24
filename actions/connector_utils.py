@@ -10,6 +10,9 @@ import logging
 from datetime import datetime
 from logger import Logger
 
+# Helper modules should not be registered as runnable actions
+BYPASS_ACTION_MODULE = True
+
 logger = Logger(name="connector_utils.py", level=logging.DEBUG)
 
 

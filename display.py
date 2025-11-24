@@ -655,7 +655,7 @@ class Display:
             except Exception as e:
                 logger.error(f"An error occurred: {e}")
 
-def handle_exit_display(signum, frame, display_thread):
+def handle_exit_display(signum, frame, display_thread, exit_process=True):
     """Handle the exit signal and close the display."""
     global should_exit
     shared_data.display_should_exit = True
@@ -665,9 +665,14 @@ def handle_exit_display(signum, frame, display_thread):
             main_loop.epd_helper.sleep()
     except Exception as e:
         logger.error(f"Error while closing the display: {e}")
-    display_thread.join()
+
+    if display_thread and display_thread.is_alive():
+        display_thread.join()
+
     logger.info("Main loop finished. Clean exit.")
-    sys.exit(0)
+
+    if exit_process:
+        sys.exit(0)
 
 # Declare main_loop globally
 main_loop = None
