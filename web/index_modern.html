@@ -194,6 +194,52 @@
                 overflow-x: hidden;
             }
         }
+
+        /* Responsive layout for network table on small screens */
+        @media (max-width: 640px) {
+            #network-table table,
+            #network-table tbody,
+            #network-table tr,
+            #network-table td {
+                display: block;
+                width: 100%;
+            }
+
+            #network-table thead {
+                display: none;
+            }
+
+            #network-table tr {
+                border-bottom: 1px solid rgba(148, 163, 184, 0.2);
+                padding-bottom: 1rem;
+                margin-bottom: 1rem;
+            }
+
+            #network-table td {
+                display: flex;
+                align-items: flex-start;
+                justify-content: space-between;
+                gap: 1rem;
+                padding: 0.5rem 0;
+            }
+
+            #network-table td::before {
+                content: attr(data-label);
+                font-weight: 600;
+                text-transform: uppercase;
+                color: rgba(226, 232, 240, 0.8);
+                font-size: 0.7rem;
+                letter-spacing: 0.04em;
+            }
+
+            #network-table td:last-child {
+                padding-bottom: 0;
+            }
+
+            #network-table td button {
+                width: 100%;
+            }
+        }
     </style>
 </head>
 

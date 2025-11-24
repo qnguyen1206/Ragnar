@@ -2212,16 +2212,16 @@ function renderHostRow(normalized) {
     const ip = escapeHtml(normalized.ip);
 
     return `
-        <td class="py-3 px-4">
+        <td class="py-3 px-4" data-label="Status">
             <span class="px-2 py-1 rounded text-xs ${normalized.statusClass}">${escapeHtml(normalized.statusText)}</span>
         </td>
-        <td class="py-3 px-4 font-mono">${ip}</td>
-        <td class="py-3 px-4">${hostname || 'Unknown'}</td>
-        <td class="py-3 px-4 font-mono text-sm">${mac || 'Unknown'}</td>
-        <td class="py-3 px-4 text-sm">${formatPortsCell(normalized.ports)}</td>
-        <td class="py-3 px-4 text-sm">${formatVulnerabilityCell(normalized)}</td>
-        <td class="py-3 px-4 text-sm">${formatLastScanCell(normalized.lastScan)}</td>
-        <td class="py-3 px-4">
+        <td class="py-3 px-4 font-mono" data-label="IP Address">${ip}</td>
+        <td class="py-3 px-4" data-label="Hostname">${hostname || 'Unknown'}</td>
+        <td class="py-3 px-4 font-mono text-sm" data-label="MAC Address">${mac || 'Unknown'}</td>
+        <td class="py-3 px-4 text-sm" data-label="Open Ports">${formatPortsCell(normalized.ports)}</td>
+        <td class="py-3 px-4 text-sm" data-label="Vulnerabilities">${formatVulnerabilityCell(normalized)}</td>
+        <td class="py-3 px-4 text-sm" data-label="Last Scan">${formatLastScanCell(normalized.lastScan)}</td>
+        <td class="py-3 px-4" data-label="Actions">
                 <button onclick="triggerDeepScan('${normalized.ip}', { mode: 'full' })" 
                     id="deep-scan-btn-${normalized.ip.replace(/\./g, '-')}"
                     data-scan-status="idle"
