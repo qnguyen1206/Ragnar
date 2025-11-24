@@ -43,6 +43,7 @@ class SharedData:
         self.config = self.default_config.copy() # Configuration of the application
         # Load existing configuration first
         self.load_config()
+        self._ensure_display_orientation_defaults()
 
         # Initialize SQLite database manager
         self.db = get_db(currentdir=self.currentdir)
@@ -396,6 +397,20 @@ class SharedData:
     #     except Exception as e:
     #         logger.error(f"Error initializing EPD display: {e}")
     #         raise
+    def _default_screen_orientation(self, epd_type):
+        """Return whether the display should be rotated 180° by default for a given panel."""
+        # Some Waveshare panels ship with connectors mounted upside down, so flipping keeps UX consistent.
+        return epd_type in {"epd2in13_V3", "epd2in13_V4"}
+
+    def _ensure_display_orientation_defaults(self):
+        """Make sure configurable display orientation keys exist with sensible defaults."""
+        epd_type = self.config.get("epd_type", "")
+        default_flip = self._default_screen_orientation(epd_type)
+        if 'screen_reversed' not in self.config:
+            self.config['screen_reversed'] = default_flip
+        # Keep web preview aligned with physical display unless overridden later.
+        self.web_screen_reversed = self.config.get('web_screen_reversed', self.config['screen_reversed'])
+
     def initialize_epd_display(self):
         """Initialize the e-paper display."""
         try:
@@ -403,22 +418,14 @@ class SharedData:
             time.sleep(1)
             self.epd_helper = EPDHelper(self.config["epd_type"])
             # self.epd_helper = EPDHelper(self.epd_type)  # FIXED: Commented out invalid duplicate initialization
-            if self.config["epd_type"] == "epd2in7":
-                logger.info("EPD type: epd2in7 screen reversed")
-                self.screen_reversed = False
-                self.web_screen_reversed = False
-            elif self.config["epd_type"] == "epd2in13_V2":
-                logger.info("EPD type: epd2in13_V2 screen reversed")
-                self.screen_reversed = False
-                self.web_screen_reversed = False
-            elif self.config["epd_type"] == "epd2in13_V3":
-                logger.info("EPD type: epd2in13_V3 screen reversed")
-                self.screen_reversed = True
-                self.web_screen_reversed = True
-            elif self.config["epd_type"] == "epd2in13_V4":
-                logger.info("EPD type: epd2in13_V4 screen reversed")
-                self.screen_reversed = True
-                self.web_screen_reversed = True
+            epd_type = self.config["epd_type"]
+            default_flip = self._default_screen_orientation(epd_type)
+            flip_enabled = bool(self.config.get('screen_reversed', default_flip))
+            self.config['screen_reversed'] = flip_enabled
+            self.screen_reversed = flip_enabled
+            self.web_screen_reversed = flip_enabled
+            orientation_text = "reversed" if flip_enabled else "normal"
+            logger.info(f"EPD type: {epd_type} screen {orientation_text} (configurable)")
             self.epd_helper.init_full_update()
             self.width, self.height = self.epd_helper.epd.width, self.epd_helper.epd.height
             logger.info(f"EPD {self.config['epd_type']} initialized with size: {self.width}x{self.height}")
@@ -429,8 +436,9 @@ class SharedData:
             self.epd_helper = None
             self.width = 122  # Default width from config
             self.height = 250  # Default height from config
-            self.screen_reversed = False
-            self.web_screen_reversed = False
+            fallback_flip = bool(self.config.get('screen_reversed', False))
+            self.screen_reversed = fallback_flip
+            self.web_screen_reversed = fallback_flip
             
             # NOTE: Test image code below was used to verify EPD hardware. 
             # Commented out to allow normal Ragnar display to show.

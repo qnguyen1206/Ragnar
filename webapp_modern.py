@@ -1519,6 +1519,11 @@ def update_config():
                 shared_data.config[key] = value
                 # Also set as attribute on shared_data for immediate access
                 setattr(shared_data, key, value)
+
+        if 'screen_reversed' in data:
+            flip_value = bool(data['screen_reversed'])
+            shared_data.screen_reversed = flip_value
+            shared_data.web_screen_reversed = flip_value
         
         # Save configuration
         shared_data.save_config()

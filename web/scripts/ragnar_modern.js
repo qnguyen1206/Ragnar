@@ -126,6 +126,10 @@ const configMetadata = {
         label: "Reference Height",
         description: "Reference pixel height used to scale drawings for the e-paper display."
     },
+    screen_reversed: {
+        label: "Flip E-Paper Output",
+        description: "Rotate the Waveshare e-paper output 180° so the content appears upright when the panel is mounted upside down."
+    },
     epd_type: {
         label: "EPD Type",
         description: "Model identifier for the connected Waveshare e-paper display."
@@ -5828,10 +5832,10 @@ function displayConfigForm(config) {
     const sections = {
         'General': ['manual_mode', 'debug_mode', 'scan_vuln_running', 'scan_vuln_no_ports', 'enable_attacks', 'blacklistcheck'],
         'Timing': ['startup_delay', 'web_delay', 'screen_delay', 'scan_interval'],
-        'Display': ['epd_type', 'ref_width', 'ref_height']
+        'Display': ['epd_type', 'ref_width', 'ref_height', 'screen_reversed']
     };
     
-    const knownBooleans = ['manual_mode', 'debug_mode', 'scan_vuln_running', 'scan_vuln_no_ports', 'enable_attacks', 'blacklistcheck'];
+    const knownBooleans = ['manual_mode', 'debug_mode', 'scan_vuln_running', 'scan_vuln_no_ports', 'enable_attacks', 'blacklistcheck', 'screen_reversed'];
     const checkboxHandlers = {
         scan_vuln_running: 'handleVulnScanToggle(this)',
         enable_attacks: 'handleEnableAttacksToggle(this)'
