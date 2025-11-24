@@ -67,7 +67,7 @@ The e-Paper HAT display and web interface make it easy to monitor and interact w
 - **Network Scanning**: Identifies live hosts and open ports on the network.
 - **Vulnerability Assessment**: Performs vulnerability scans using Nmap and other tools.
 - **Multi-Source Threat Intelligence**: Real-time threat intelligence fusion from CISA KEV, NVD CVE, AlienVault OTX, and MITRE ATT&CK.
-- **AI-Powered Analysis**: 🆕 GPT-5 Nano integration provides PWNAGOTCHI-style intelligent analysis:
+- **AI-Powered Analysis**: 🆕 GPT-5 Nano integration provides intelligent analysis:
   - Network security summaries
   - Vulnerability prioritization and remediation advice
   - Network weakness identification and attack vector analysis
