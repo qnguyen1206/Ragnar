@@ -8692,6 +8692,7 @@ def get_system_status_api():
         
         # Memory Information
         memory = psutil.virtual_memory()
+        swap = psutil.swap_memory()
         
         # Disk Information
         disk = psutil.disk_usage('/')
@@ -8776,6 +8777,15 @@ def get_system_status_api():
                 'total_formatted': format_bytes(memory.total),
                 'available_formatted': format_bytes(memory.available),
                 'used_formatted': format_bytes(memory.used)
+            },
+            'swap': {
+                'total': swap.total,
+                'used': swap.used,
+                'free': swap.free,
+                'percent': round(swap.percent, 1) if swap.total > 0 else 0,
+                'total_formatted': format_bytes(swap.total),
+                'used_formatted': format_bytes(swap.used),
+                'free_formatted': format_bytes(swap.free)
             },
             'disk': {
                 'total': disk.total,

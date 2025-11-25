@@ -195,8 +195,8 @@
             }
         }
 
-        /* Responsive layout for network table on small screens */
-        @media (max-width: 640px) {
+        /* Responsive layout for network table on tablets/phones */
+        @media (max-width: 1024px) {
             #network-table table,
             #network-table tbody,
             #network-table tr,
@@ -757,14 +757,14 @@
                     <table class="w-full">
                         <thead>
                             <tr class="border-b border-slate-600">
-                                <th class="text-left py-3 px-4 font-medium">Status</th>
-                                <th class="text-left py-3 px-4 font-medium">IP Address</th>
-                                <th class="text-left py-3 px-4 font-medium">Hostname</th>
-                                <th class="text-left py-3 px-4 font-medium">MAC Address</th>
-                                <th class="text-left py-3 px-4 font-medium">Open Ports</th>
-                                <th class="text-left py-3 px-4 font-medium">Vulnerabilities</th>
-                                <th class="text-left py-3 px-4 font-medium">Last Scan</th>
-                                <th class="text-left py-3 px-4 font-medium">Actions</th>
+                                <th class="text-left py-3 px-5 font-medium w-25">Status</th>
+                                <th class="text-left py-3 px-5 font-medium w-30">IP Address</th>
+                                <th class="text-left py-3 px-5 font-medium w-35">Hostname</th>
+                                <th class="text-left py-3 px-5 font-medium w-40">MAC Address</th>
+                                <th class="text-left py-3 px-5 font-medium w-20">Open Ports</th>
+                                <th class="text-left py-3 px-5 font-medium w-40">Vulnerabilities</th>
+                                <th class="text-left py-3 px-5 font-medium w-20">Last Scan</th>
+                                <th class="text-left py-3 px-5 font-medium w-30">Actions</th>
                             </tr>
                         </thead>
                         <tbody id="network-hosts-table">
@@ -1758,6 +1758,21 @@
                         <div class="text-xs text-gray-400" id="memory-details">-- / --</div>
                         <div class="w-full bg-gray-700 rounded-full h-2 mt-2">
                             <div id="memory-progress" class="bg-green-500 h-2 rounded-full transition-all duration-300" style="width: 0%"></div>
+                        </div>
+                    </div>
+
+                    <!-- Swap Card -->
+                    <div class="glass-card p-4">
+                        <div class="flex items-center justify-between mb-2">
+                            <h3 class="font-semibold text-sm">Swap</h3>
+                            <svg class="w-5 h-5 text-cyan-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4h7v7H4V4zm9 9h7v7h-7v-7zM4 13h3m10-2h3m-6 0h3M4 17h3" />
+                            </svg>
+                        </div>
+                        <div class="text-2xl font-bold" id="swap-usage">--</div>
+                        <div class="text-xs text-gray-400" id="swap-details">-- / --</div>
+                        <div class="w-full bg-gray-700 rounded-full h-2 mt-2">
+                            <div id="swap-progress" class="bg-cyan-500 h-2 rounded-full transition-all duration-300" style="width: 0%"></div>
                         </div>
                     </div>
                     

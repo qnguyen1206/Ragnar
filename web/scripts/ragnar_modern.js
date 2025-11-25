@@ -6732,6 +6732,18 @@ function updateSystemOverview(data) {
     if (memoryUsage) memoryUsage.textContent = `${data.memory.percent}%`;
     if (memoryDetails) memoryDetails.textContent = `${data.memory.used_formatted} / ${data.memory.total_formatted}`;
     if (memoryProgress) memoryProgress.style.width = `${data.memory.percent}%`;
+
+    // Swap (if reported)
+    if (data.swap) {
+        const swapUsage = document.getElementById('swap-usage');
+        const swapDetails = document.getElementById('swap-details');
+        const swapProgress = document.getElementById('swap-progress');
+        const swapPercent = Number.isFinite(data.swap.percent) ? data.swap.percent : 0;
+
+        if (swapUsage) swapUsage.textContent = `${swapPercent}%`;
+        if (swapDetails) swapDetails.textContent = `${data.swap.used_formatted} / ${data.swap.total_formatted}`;
+        if (swapProgress) swapProgress.style.width = `${swapPercent}%`;
+    }
     
     // Disk
     const diskUsage = document.getElementById('disk-usage');

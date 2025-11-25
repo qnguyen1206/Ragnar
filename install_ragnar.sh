@@ -804,6 +804,28 @@ EOF
     check_success "Services setup completed"
 }
 
+# Configure ZRAM swap override to increase available swap space
+configure_zram_swap() {
+    log "INFO" "Configuring ZRAM swap override (ram * 2)..."
+
+    local zram_conf_dir="/etc/systemd/zram-generator.conf.d"
+    local zram_conf_file="$zram_conf_dir/override.conf"
+
+    mkdir -p "$zram_conf_dir"
+    check_success "Ensured ZRAM override directory exists"
+
+    cat > "$zram_conf_file" << 'EOF'
+[zram0]
+zram-size = ram * 2
+EOF
+    check_success "Updated ZRAM override configuration"
+
+    systemctl daemon-reload
+    check_success "Reloaded systemd daemon for ZRAM override"
+
+    log "SUCCESS" "ZRAM swap configured to twice the physical RAM"
+}
+
 # Configure USB Gadget
 configure_usb_gadget() {
     log "INFO" "Configuring USB Gadget..."
@@ -1137,6 +1159,9 @@ main() {
     # Git repository is preserved for updates
     # Use .gitignore to protect runtime data and configurations
     log "INFO" "Git repository preserved for future updates"
+
+            # Apply the Simple Guide: Increase ZRAM Swap instructions before reboot prompt
+            configure_zram_swap
 
     log "SUCCESS" "ragnar installation completed!"
     log "INFO" "Please reboot your system to apply all changes."
