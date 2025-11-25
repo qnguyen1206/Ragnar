@@ -1,32 +1,44 @@
-# 📝 Code of Conduct
+📝 Code of Conduct
 
-Take Note About This... **Take Note...**
+(Educational Tool – Please Read Carefully)
 
-## 🤝 Our Commitment
+Take note about this… Take note…
 
-We are committed to fostering an open and welcoming environment for all contributors. As such, everyone who participates in **ragnar** is expected to adhere to the following code of conduct.
+🤝 Our Commitment
 
-## 🌟 Expected Behavior
+This project is an educational tool, and we are committed to fostering an open and welcoming environment for all participants. Everyone who contributes to Ragnar is expected to follow the guidelines in this Code of Conduct.
 
-- **Respect:** Be respectful of differing viewpoints and experiences.
-- **Constructive Feedback:** Provide constructive feedback and be open to receiving it.
-- **Empathy and Kindness:** Show empathy and kindness towards other contributors.
-- **Respect for Maintainers:** Respect the decisions of the maintainers.
-- **Positive Intent:** Assume positive intent in interactions with others.
+🌟 Expected Behavior
 
-## 🚫 Unacceptable Behavior
+Respect: Be respectful of differing viewpoints, cultures, and experiences.
 
-- **Harassment or Discrimination:** Harassment or discrimination in any form.
-- **Inappropriate Language or Imagery:** Use of inappropriate language or imagery.
-- **Personal Attacks:** Personal attacks or insults.
-- **Public or Private Harassment:** Public or private harassment.
+Constructive Feedback: Give constructive feedback and remain open to receiving it.
 
+Empathy & Kindness: Show understanding, patience, and kindness to others.
 
-## ⚖️ Enforcement
+Respect for Maintainers: Acknowledge and respect decisions made by maintainers.
 
-Instances of unacceptable behavior may be addressed by the project maintainers, who are responsible for clarifying and enforcing this code of conduct. Violations may result in temporary or permanent bans from the project and related spaces.
+Positive Intent: Assume good intentions in discussions and collaborations.
 
-## 🙏 Acknowledgments
+🚫 Unacceptable Behavior
+
+Harassment or Discrimination: Any form of harassment, discrimination, or hateful conduct.
+
+Inappropriate Language or Imagery: Use of sexually explicit, violent, or offensive content.
+
+Personal Attacks: Insults, threats, or targeted personal criticism.
+
+Public or Private Harassment: Unwanted communication or intimidation in any form.
+
+⚖️ Enforcement
+
+Project maintainers are responsible for interpreting and enforcing this Code of Conduct.
+Violations may result in actions such as warnings, temporary restrictions, or permanent removal from the project or related communication channels.
+
+🙏 Acknowledgments
+
+This Code of Conduct is adapted from the
+Contributor Covenant, version 2.0
 
 This code of conduct is adapted from the [Contributor Covenant, version 2.0](https://www.contributor-covenant.org/version/2/0/code_of_conduct.html).
 
