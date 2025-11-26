@@ -480,6 +480,20 @@ function setupEventListeners() {
             }
         });
     }
+
+    const manualPortDropdown = document.getElementById('manual-port-dropdown');
+    if (manualPortDropdown) {
+        manualPortDropdown.addEventListener('change', () => {
+            updateManualActions();
+        });
+    }
+
+    const manualActionDropdown = document.getElementById('manual-action-dropdown');
+    if (manualActionDropdown) {
+        manualActionDropdown.addEventListener('change', () => {
+            window.manualActionPreference = manualActionDropdown.value;
+        });
+    }
 }
 
 function initializeTabs() {
@@ -4721,6 +4735,85 @@ async function downloadPentestReport() {
 // MANUAL MODE FUNCTIONS
 // ============================================================================
 
+const DEFAULT_MANUAL_ATTACK_MATRIX = {
+    ssh: { label: 'SSH Brute Force', ports: ['22'] },
+    ftp: { label: 'FTP Brute Force', ports: ['21'] },
+    telnet: { label: 'Telnet Brute Force', ports: ['23'] },
+    smb: { label: 'SMB Brute Force', ports: ['139', '445'] },
+    rdp: { label: 'RDP Brute Force', ports: ['3389'] },
+    sql: { label: 'SQL Brute Force', ports: ['3306'] }
+};
+
+if (typeof window !== 'undefined') {
+    window.manualAttackMatrix = { ...DEFAULT_MANUAL_ATTACK_MATRIX };
+    window.manualActionPreference = '';
+}
+
+function hydrateManualAttackMatrix(serverMatrix) {
+    const matrix = {};
+    const mergedKeys = new Set([
+        ...Object.keys(DEFAULT_MANUAL_ATTACK_MATRIX),
+        ...(serverMatrix ? Object.keys(serverMatrix) : [])
+    ]);
+
+    mergedKeys.forEach(key => {
+        const fallback = DEFAULT_MANUAL_ATTACK_MATRIX[key] || {};
+        const incoming = (serverMatrix && serverMatrix[key]) || {};
+        const label = incoming.label || fallback.label || `${key.toUpperCase()} Attack`;
+        const fallbackPorts = Array.isArray(fallback.ports) ? fallback.ports : [];
+        const incomingPorts = Array.isArray(incoming.ports) ? incoming.ports : [];
+        const ports = (incomingPorts.length ? incomingPorts : fallbackPorts).map(port => String(port));
+
+        if (ports.length) {
+            matrix[key] = { label, ports }; 
+        }
+    });
+
+    return Object.keys(matrix).length ? matrix : { ...DEFAULT_MANUAL_ATTACK_MATRIX };
+}
+
+function getManualAttackMatrix() {
+    return window.manualAttackMatrix || { ...DEFAULT_MANUAL_ATTACK_MATRIX };
+}
+
+function getValidActionsForPort(port) {
+    if (!port) {
+        return [];
+    }
+    const normalizedPort = String(port).trim();
+    const matrix = getManualAttackMatrix();
+    return Object.entries(matrix)
+        .filter(([, config]) => Array.isArray(config.ports) && config.ports.map(String).includes(normalizedPort))
+        .map(([action, config]) => ({ key: action, label: config.label || action.toUpperCase() }));
+}
+
+function isActionAllowedOnPort(action, port) {
+    if (!action || !port) {
+        return false;
+    }
+    const normalizedPort = String(port).trim();
+    const matrix = getManualAttackMatrix();
+    const config = matrix[action];
+    return Boolean(config && config.ports && config.ports.map(String).includes(normalizedPort));
+}
+
+function setManualActionHelper(message, tone = 'muted') {
+    const helper = document.getElementById('manual-action-helper');
+    if (!helper) {
+        return;
+    }
+
+    const toneClasses = {
+        muted: 'text-gray-500',
+        warning: 'text-yellow-400',
+        error: 'text-red-400',
+        success: 'text-green-400'
+    };
+
+    helper.textContent = message;
+    helper.className = `text-[11px] mt-1 ${toneClasses[tone] || toneClasses.muted}`;
+}
+
 function syncManualModeUI(isManualMode) {
     manualModeActive = isManualMode;
 
@@ -4756,6 +4849,9 @@ async function loadManualModeData() {
         const currentVulnIp = document.getElementById('vuln-ip-dropdown')?.value || 'all';
         
         const data = await fetchAPI('/api/manual/targets');
+
+        window.manualAttackMatrix = hydrateManualAttackMatrix(data.attack_matrix);
+        window.manualActionPreference = currentAction;
         
         // Populate IP dropdown
         const ipDropdown = document.getElementById('manual-ip-dropdown');
@@ -4804,16 +4900,7 @@ async function loadManualModeData() {
         const actionDropdown = document.getElementById('manual-action-dropdown');
         if (actionDropdown) {
             actionDropdown.innerHTML = '<option value="">Select Action</option>';
-            const actions = ['ssh', 'ftp', 'telnet', 'smb', 'rdp', 'sql'];
-            actions.forEach(action => {
-                const option = document.createElement('option');
-                option.value = action;
-                option.textContent = action.toUpperCase() + ' Brute Force';
-                if (action === currentAction) {
-                    option.selected = true;
-                }
-                actionDropdown.appendChild(option);
-            });
+            actionDropdown.disabled = true;
         }
         
         // Store targets data for updateManualPorts function
@@ -4828,7 +4915,10 @@ async function loadManualModeData() {
                 if (portDropdown && currentPort) {
                     portDropdown.value = currentPort;
                 }
+                updateManualActions();
             }, 50);
+        } else {
+            updateManualActions();
         }
         
     } catch (error) {
@@ -4867,6 +4957,63 @@ function updateManualPorts() {
                 portDropdown.appendChild(option);
             });
         }
+    }
+
+    if (portDropdown) {
+        portDropdown.value = '';
+    }
+
+    updateManualActions();
+}
+
+function updateManualActions() {
+    const portDropdown = document.getElementById('manual-port-dropdown');
+    const actionDropdown = document.getElementById('manual-action-dropdown');
+
+    if (!actionDropdown) {
+        return;
+    }
+
+    const selectedPort = portDropdown ? portDropdown.value : '';
+    const previousSelection = window.manualActionPreference || actionDropdown.value || '';
+
+    actionDropdown.innerHTML = '<option value="">Select Action</option>';
+    actionDropdown.disabled = true;
+
+    if (!selectedPort) {
+        setManualActionHelper('Select a port to view compatible attack modules.', 'muted');
+        return;
+    }
+
+    const validActions = getValidActionsForPort(selectedPort);
+
+    if (!validActions.length) {
+        setManualActionHelper(`No supported attack modules detected for port ${selectedPort}.`, 'warning');
+        window.manualActionPreference = '';
+        return;
+    }
+
+    validActions.forEach(action => {
+        const option = document.createElement('option');
+        option.value = action.key;
+        option.textContent = action.label;
+        actionDropdown.appendChild(option);
+    });
+
+    actionDropdown.disabled = false;
+
+    if (previousSelection && validActions.some(action => action.key === previousSelection)) {
+        actionDropdown.value = previousSelection;
+    } else {
+        actionDropdown.value = '';
+        window.manualActionPreference = '';
+    }
+
+    if (actionDropdown.value) {
+        window.manualActionPreference = actionDropdown.value;
+        setManualActionHelper(`${actionDropdown.options[actionDropdown.selectedIndex].text} ready for port ${selectedPort}.`, 'success');
+    } else {
+        setManualActionHelper(`Found ${validActions.length} compatible ${validActions.length === 1 ? 'action' : 'actions'} on port ${selectedPort}. Choose one to proceed.`, 'success');
     }
 }
 
@@ -4942,6 +5089,16 @@ async function executeManualAttack() {
         addConsoleMessage('Please select IP, Port, and Action for manual attack', 'error');
         setManualAttackStatus('Please select a target IP, port, and action before launching.', 'error');
         appendManualAttackLog('Manual attack aborted - missing selections.', 'error');
+        return;
+    }
+
+    if (!isActionAllowedOnPort(action, port)) {
+        const matrix = getManualAttackMatrix();
+        const allowedPorts = (matrix[action]?.ports || []).join(', ');
+        const errorMessage = `${action.toUpperCase()} brute force is only available on port(s): ${allowedPorts || 'restricted'}.`;
+        addConsoleMessage(errorMessage, 'error');
+        setManualAttackStatus(errorMessage, 'error');
+        appendManualAttackLog('Manual attack blocked due to incompatible port selection.', 'error');
         return;
     }
     

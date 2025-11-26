@@ -974,12 +974,6 @@
                     </div>
                     <div class="space-y-4">
                         <div class="grid grid-cols-2 gap-3">
-                            <button onclick="startOrchestrator()" class="bg-green-600 hover:bg-green-700 text-white py-2 px-3 rounded transition-colors">
-                                Resume Auto
-                            </button>
-                            <button onclick="stopOrchestrator()" class="bg-red-600 hover:bg-red-700 text-white py-2 px-3 rounded transition-colors">
-                                Hold Manual
-                            </button>
                         </div>
                         <div class="grid grid-cols-2 gap-3">
                             <button onclick="triggerNetworkScan()" class="bg-blue-600 hover:bg-blue-700 text-white py-2 px-3 rounded transition-colors">
@@ -1029,6 +1023,7 @@
                                 <select id="manual-action-dropdown" class="mt-1 w-full bg-slate-800 border border-slate-700 rounded px-3 py-2 text-sm focus:outline-none focus:border-Ragnar-400">
                                     <option value="">Select Action</option>
                                 </select>
+                                <p id="manual-action-helper" class="text-[11px] text-gray-500 mt-1">Select a port to view compatible attack modules.</p>
                             </div>
                         </div>
                         <button id="manual-attack-launch-btn" onclick="executeManualAttack()" class="w-full bg-orange-600 hover:bg-orange-700 text-white py-3 rounded-lg font-semibold tracking-wide">Execute Attack</button>

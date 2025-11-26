@@ -7800,6 +7800,16 @@ def get_manual_mode_status():
         logger.error(f"Error getting manual mode status: {e}")
         return jsonify({'error': str(e)}), 500
 
+MANUAL_ATTACK_MATRIX = {
+    'ssh': {'label': 'SSH Brute Force', 'ports': [22]},
+    'ftp': {'label': 'FTP Brute Force', 'ports': [21]},
+    'telnet': {'label': 'Telnet Brute Force', 'ports': [23]},
+    'smb': {'label': 'SMB Brute Force', 'ports': [139, 445]},
+    'rdp': {'label': 'RDP Brute Force', 'ports': [3389]},
+    'sql': {'label': 'SQL Brute Force', 'ports': [3306]}
+}
+
+
 def _collect_manual_targets():
     """Collect targets available for manual operations."""
     targets = []
@@ -7928,12 +7938,42 @@ def _collect_manual_targets():
     return targets
 
 
+def _normalize_port_value(port_value):
+    try:
+        return str(int(port_value))
+    except (TypeError, ValueError):
+        return None
+
+
+def _is_port_allowed_for_action(action, port_value):
+    normalized_port = _normalize_port_value(port_value)
+    if not normalized_port:
+        return False
+
+    action_config = MANUAL_ATTACK_MATRIX.get(action)
+    if not action_config:
+        return False
+
+    allowed_ports = {str(port) for port in action_config.get('ports', [])}
+    return normalized_port in allowed_ports
+
+
+def _manual_attack_matrix_payload():
+    payload = {}
+    for action, config in MANUAL_ATTACK_MATRIX.items():
+        payload[action] = {
+            'label': config.get('label', action.upper()),
+            'ports': config.get('ports', [])
+        }
+    return payload
+
+
 @app.route('/api/manual/targets')
 def get_manual_targets():
     """Get available targets for manual attacks"""
     try:
         targets = _collect_manual_targets()
-        return jsonify({'targets': targets})
+        return jsonify({'targets': targets, 'attack_matrix': _manual_attack_matrix_payload()})
 
     except Exception as e:
         logger.error(f"Error getting manual targets: {e}")
@@ -7945,11 +7985,11 @@ def execute_manual_attack():
     try:
         data = request.get_json()
         target_ip = data.get('ip')
-        target_port = data.get('port') 
+        target_port = data.get('port')
         attack_type = data.get('action')
-        
-        if not target_ip or not attack_type:
-            return jsonify({'success': False, 'error': 'Missing IP or attack type'}), 400
+
+        if not target_ip or not attack_type or not target_port:
+            return jsonify({'success': False, 'error': 'Missing IP, attack type, or port'}), 400
         
         # Update status to show attack is active
         attack_display_names = {
@@ -7960,13 +8000,6 @@ def execute_manual_attack():
             'rdp': 'RDPBruteforce',
             'sql': 'SQLBruteforce'
         }
-        
-        status_name = attack_display_names.get(attack_type, f"{attack_type.upper()}Bruteforce")
-        shared_data.ragnarstatustext = status_name
-        shared_data.ragnarstatustext2 = f"Attacking: {target_ip}:{target_port or 'default'}"
-        
-        # Immediately broadcast the status change
-        broadcast_status_update()
         
         # Map attack types to module imports and execution
         attack_modules = {
@@ -7982,6 +8015,30 @@ def execute_manual_attack():
             shared_data.ragnarstatustext = "IDLE"
             shared_data.ragnarstatustext2 = "Invalid attack type"
             return jsonify({'success': False, 'error': 'Invalid attack type'}), 400
+
+        normalized_port = _normalize_port_value(target_port)
+        if not normalized_port:
+            shared_data.ragnarstatustext = "IDLE"
+            shared_data.ragnarstatustext2 = "Invalid port provided"
+            return jsonify({'success': False, 'error': 'Invalid port supplied'}), 400
+
+        if not _is_port_allowed_for_action(attack_type, normalized_port):
+            allowed_ports = ', '.join(str(port) for port in MANUAL_ATTACK_MATRIX.get(attack_type, {}).get('ports', []))
+            shared_data.ragnarstatustext = "IDLE"
+            shared_data.ragnarstatustext2 = "Port/action mismatch"
+            return jsonify({
+                'success': False,
+                'error': f"{attack_type.upper()} attacks are only permitted on port(s): {allowed_ports or 'restricted'}."
+            }), 400
+
+        target_port = normalized_port
+
+        status_name = attack_display_names.get(attack_type, f"{attack_type.upper()}Bruteforce")
+        shared_data.ragnarstatustext = status_name
+        shared_data.ragnarstatustext2 = f"Attacking: {target_ip}:{target_port}"
+
+        # Immediately broadcast the status change
+        broadcast_status_update()
         
         # Execute attack in background
         def execute_attack():
