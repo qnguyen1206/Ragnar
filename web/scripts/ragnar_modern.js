@@ -3126,6 +3126,7 @@ async function checkForUpdates() {
         if (gitStatus.has_conflicts) {
             if (updateBtn) {
                 updateBtn.disabled = true;
+                updateBtn.onclick = null;
                 updateBtn.className = 'w-full bg-red-700 text-white py-2 px-4 rounded cursor-not-allowed';
                 updateElement('update-btn-text', 'Resolve Git Conflicts');
             }
@@ -3137,11 +3138,17 @@ async function checkForUpdates() {
             return;
         }
 
-        if (gitStatus.is_dirty && data.updates_available && updateBtn) {
-            updateBtn.className = 'w-full bg-yellow-600 hover:bg-yellow-700 text-white py-2 px-4 rounded transition-colors';
-        }
-
-        if (gitStatus.has_stash && updateBtn) {
+        if (data.updates_available && data.commits_behind > 0 && updateBtn) {
+            if (gitStatus.is_dirty) {
+                updateBtn.onclick = autoStashAndUpdate;
+                updateBtn.className = 'w-full bg-yellow-600 hover:bg-yellow-700 text-white py-2 px-4 rounded transition-colors';
+                updateElement('update-btn-text', 'Auto Stash + Update');
+                addConsoleMessage('Local edits detected. Ragnar can stash them automatically before updating.', 'info');
+            } else {
+                updateBtn.onclick = performUpdate;
+                updateElement('update-btn-text', gitStatus.has_stash ? 'Update (stash present)' : 'Update System');
+            }
+        } else if (gitStatus.has_stash && updateBtn) {
             updateElement('update-btn-text', 'Update (stash present)');
         }
         
@@ -3242,6 +3249,57 @@ async function performUpdate() {
         const updateBtn = document.getElementById('update-btn');
         updateBtn.disabled = false;
         updateBtn.className = 'w-full bg-green-600 hover:bg-green-700 text-white py-2 px-4 rounded transition-colors';
+    }
+}
+
+async function autoStashAndUpdate() {
+    if (!confirm('This will stash local changes (including untracked files), update Ragnar, and drop the temporary stash. Continue?')) {
+        return;
+    }
+
+    const updateBtn = document.getElementById('update-btn');
+
+    const setButtonState = (busy, label) => {
+        if (!updateBtn) {
+            return;
+        }
+        updateBtn.disabled = !!busy;
+        updateBtn.className = busy
+            ? 'w-full bg-gray-600 text-white py-2 px-4 rounded cursor-wait'
+            : 'w-full bg-yellow-600 hover:bg-yellow-700 text-white py-2 px-4 rounded transition-colors';
+        updateElement('update-btn-text', label);
+    };
+
+    try {
+        setButtonState(true, 'Stashing & Updating...');
+        addConsoleMessage('Preparing auto stash before update...', 'info');
+
+        const response = await postAPI('/api/system/stash-update', {});
+
+        if (response.success) {
+            if (response.stash_created) {
+                addConsoleMessage('Local changes stashed temporarily for update.', 'info');
+            } else {
+                addConsoleMessage('No local changes detected; continuing with update.', 'info');
+            }
+            addConsoleMessage('Update completed successfully via auto stash.', 'success');
+            updateElement('update-info', 'Local changes stored safely. Update applied and system restarting...');
+
+            // Keep button disabled while service restarts
+            updateBtn.className = 'w-full bg-gray-600 text-white py-2 px-4 rounded cursor-not-allowed';
+            updateElement('update-btn-text', 'Auto Stash + Update');
+
+            setTimeout(async () => {
+                await verifyServiceRestart();
+            }, 10000);
+        } else {
+            throw new Error(response.error || 'Auto stash update failed');
+        }
+    } catch (error) {
+        console.error('Auto stash update error:', error);
+        addConsoleMessage(`Auto stash update failed: ${error.message}`, 'error');
+        setButtonState(false, 'Auto Stash + Update');
+        updateElement('update-info', 'Auto stash update failed. Fix issues and retry.');
     }
 }
 

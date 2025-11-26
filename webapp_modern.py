@@ -4412,6 +4412,100 @@ def deep_scan_host():
         return jsonify({'status': 'error', 'message': str(e)}), 500
 
 # ============================================================================
+# SYSTEM MANAGEMENT UTILITIES & ENDPOINTS
+# ============================================================================
+
+def _execute_git_update(repo_path: str) -> dict:
+    """Run the git pull sequence Ragnar uses, returning status metadata."""
+    result = {
+        'success': False,
+        'output': '',
+        'error': '',
+        'warnings': []
+    }
+
+    # Fix permissions ahead of git pull to avoid ownership issues on devices
+    try:
+        logger.info("Correcting file permissions before git pull...")
+        subprocess.run(
+            ['sudo', 'chown', '-R', 'ragnar:ragnar', '/home/ragnar/Ragnar'],
+            capture_output=True,
+            text=True,
+            check=True
+        )
+        logger.info("Permissions corrected successfully")
+    except subprocess.CalledProcessError as e:
+        warning = f"Permission correction failed (continuing): {e.stderr.strip() or e.stdout.strip()}"
+        logger.warning(warning)
+        result['warnings'].append(warning)
+    except Exception as e:
+        warning = f"Permission correction error (continuing): {e}"
+        logger.warning(warning)
+        result['warnings'].append(warning)
+
+    # Perform git pull
+    try:
+        pull_proc = subprocess.run(
+            ['git', 'pull'],
+            cwd=repo_path,
+            capture_output=True,
+            text=True,
+            check=True
+        )
+        result['output'] = pull_proc.stdout.strip()
+        logger.info(f"Git pull completed: {result['output']}")
+    except subprocess.CalledProcessError as e:
+        error_msg = f"Git pull failed: {e.stderr.strip() or e.stdout.strip() or str(e)}"
+        logger.error(error_msg)
+        result['error'] = error_msg
+        return result
+
+    # Ensure executable bits remain in place after pull
+    try:
+        logger.info("Making scripts executable after git pull...")
+        chmod_commands = [
+            ['sudo', 'chmod', '+x', '/home/ragnar/Ragnar/*.sh'],
+            ['sudo', 'chmod', '+x', '/home/ragnar/Ragnar/*.py'],
+            ['sudo', 'chmod', '+x', '/home/ragnar/Ragnar/Ragnar.py'],
+            ['sudo', 'chmod', '+x', '/home/ragnar/Ragnar/kill_port_8000.sh'],
+            ['sudo', 'chmod', '+x', '/home/ragnar/Ragnar/webapp_modern.py'],
+            ['sudo', 'find', '/home/ragnar/Ragnar', '-name', '*.sh', '-exec', 'chmod', '+x', '{}', ';']
+        ]
+
+        for cmd in chmod_commands:
+            try:
+                subprocess.run(cmd, capture_output=True, text=True, check=False)
+            except Exception as chmod_error:
+                logger.debug(f"Chmod command failed (continuing): {cmd} - {chmod_error}")
+
+        logger.info("Executable permissions refreshed")
+    except subprocess.CalledProcessError as e:
+        warning = f"Chmod failed (continuing): {e.stderr.strip() or e.stdout.strip()}"
+        logger.warning(warning)
+        result['warnings'].append(warning)
+    except Exception as e:
+        warning = f"Chmod error (continuing): {e}"
+        logger.warning(warning)
+        result['warnings'].append(warning)
+
+    result['success'] = True
+    return result
+
+
+def _schedule_service_restart(delay_seconds: int = 2) -> None:
+    """Restart the Ragnar service after a short delay so HTTP responses return first."""
+
+    def restart_service_delayed():
+        time.sleep(delay_seconds)
+        try:
+            subprocess.run(['sudo', 'systemctl', 'restart', 'ragnar'], check=True)
+        except subprocess.CalledProcessError as e:
+            logger.error(f"Failed to restart service: {e}")
+
+    threading.Thread(target=restart_service_delayed, daemon=True).start()
+
+
+# ============================================================================
 # SYSTEM MANAGEMENT ENDPOINTS
 # ============================================================================
 
@@ -4572,93 +4666,111 @@ def check_updates():
 def perform_update():
     """Perform system update using git pull"""
     try:
-        import subprocess
-        import os
-        
         repo_path = os.getcwd()
         logger.info(f"Performing update in repository: {repo_path}")
-        
-        # Fix permissions before git pull to prevent ownership issues
-        try:
-            logger.info("Correcting file permissions...")
-            perm_result = subprocess.run(
-                ['sudo', 'chown', '-R', 'ragnar:ragnar', '/home/ragnar/Ragnar'],
-                capture_output=True,
-                text=True,
-                check=True
-            )
-            logger.info("Permissions corrected successfully")
-        except subprocess.CalledProcessError as e:
-            logger.warning(f"Permission correction failed (continuing anyway): {e.stderr}")
-        except Exception as e:
-            logger.warning(f"Permission correction error (continuing anyway): {e}")
-        
-        # Perform git pull
-        try:
-            result = subprocess.run(
-                ['git', 'pull'], 
-                cwd=repo_path, 
-                capture_output=True, 
-                text=True, 
-                check=True
-            )
-            output = result.stdout
-            logger.info(f"Git pull completed: {output}")
-        except subprocess.CalledProcessError as e:
-            logger.error(f"Git pull failed: {e.stderr}")
+        update_result = _execute_git_update(repo_path)
+
+        if not update_result['success']:
             return jsonify({
-                'success': False, 
-                'error': f'Git pull failed: {e.stderr}',
+                'success': False,
+                'error': update_result['error'] or 'Unknown error during git pull',
+                'warnings': update_result['warnings'],
                 'suggestion': 'Please check repository status and resolve any conflicts'
             }), 500
-        
-        # Make files executable after pull
-        try:
-            logger.info("Making files executable...")
-            # More comprehensive chmod - handle shell scripts and Python files specifically
-            chmod_commands = [
-                ['sudo', 'chmod', '+x', '/home/ragnar/Ragnar/*.sh'],           # All shell scripts
-                ['sudo', 'chmod', '+x', '/home/ragnar/Ragnar/*.py'],           # All Python files
-                ['sudo', 'chmod', '+x', '/home/ragnar/Ragnar/Ragnar.py'],      # Main script
-                ['sudo', 'chmod', '+x', '/home/ragnar/Ragnar/kill_port_8000.sh'], # Specific failing script
-                ['sudo', 'chmod', '+x', '/home/ragnar/Ragnar/webapp_modern.py'], # This file
-                ['sudo', 'find', '/home/ragnar/Ragnar', '-name', '*.sh', '-exec', 'chmod', '+x', '{}', ';'] # Find all .sh files
-            ]
-            
-            for cmd in chmod_commands:
-                try:
-                    subprocess.run(cmd, capture_output=True, text=True, check=False)  # Don't fail on individual commands
-                except Exception as e:
-                    logger.debug(f"Chmod command failed (continuing): {cmd} - {e}")
-            
-            logger.info("Files made executable successfully")
-        except subprocess.CalledProcessError as e:
-            logger.warning(f"Chmod failed (continuing anyway): {e.stderr}")
-        except Exception as e:
-            logger.warning(f"Chmod error (continuing anyway): {e}")
-        
-        # Schedule service restart after a short delay
-        def restart_service_delayed():
-            import time
-            time.sleep(2)  # Give time for response to be sent
-            try:
-                subprocess.run(['sudo', 'systemctl', 'restart', 'ragnar'], check=True)
-            except subprocess.CalledProcessError as e:
-                logger.error(f"Failed to restart service: {e}")
-        
-        # Start restart in background thread
-        import threading
-        threading.Thread(target=restart_service_delayed, daemon=True).start()
-        
+
+        _schedule_service_restart()
+
         return jsonify({
             'success': True,
             'message': 'Update completed successfully',
-            'output': output
+            'output': update_result['output'],
+            'warnings': update_result['warnings']
         })
         
     except Exception as e:
         logger.error(f"Error performing update: {e}")
         return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@app.route('/api/system/stash-update', methods=['POST'])
+def stash_and_update():
+    """Automatically stash local changes, pull updates, and drop the temporary stash."""
+    repo_path = os.getcwd()
+    payload = request.get_json(silent=True) or {}
+    stash_message = payload.get('message') or f"Ragnar auto stash {datetime.utcnow().isoformat()}"
+    include_untracked = payload.get('include_untracked', True)
+
+    stash_cmd = ['git', 'stash', 'push']
+    if include_untracked:
+        stash_cmd.append('-u')
+    stash_cmd.extend(['-m', stash_message])
+
+    logger.info("Auto stash + update requested via UI")
+
+    try:
+        stash_proc = subprocess.run(
+            stash_cmd,
+            cwd=repo_path,
+            capture_output=True,
+            text=True,
+            check=True
+        )
+    except subprocess.CalledProcessError as e:
+        error_msg = e.stderr.strip() or e.stdout.strip() or str(e)
+        logger.error(f"Git stash failed: {error_msg}")
+        return jsonify({'success': False, 'error': f'Git stash failed: {error_msg}'}), 500
+
+    stash_stdout = stash_proc.stdout.strip() or stash_proc.stderr.strip() or ''
+    stash_created = 'No local changes to save' not in stash_stdout
+    stash_ref = 'stash@{0}' if stash_created else None
+
+    if stash_created:
+        logger.info(f"Local changes stashed as {stash_ref}")
+    else:
+        logger.info("Auto stash requested but no local changes were found")
+
+    update_result = _execute_git_update(repo_path)
+    if not update_result['success']:
+        # Preserve the stash so the operator can recover work manually
+        logger.error("Auto stash update failed after stashing; stash preserved for manual recovery")
+        return jsonify({
+            'success': False,
+            'error': update_result['error'] or 'Unknown error during git pull',
+            'warnings': update_result['warnings'],
+            'stash_created': stash_created,
+            'stash_retained': stash_created
+        }), 500
+
+    stash_drop_output = ''
+    stash_drop_warning = ''
+    if stash_created and stash_ref:
+        try:
+            drop_proc = subprocess.run(
+                ['git', 'stash', 'drop', stash_ref],
+                cwd=repo_path,
+                capture_output=True,
+                text=True,
+                check=True
+            )
+            stash_drop_output = drop_proc.stdout.strip() or drop_proc.stderr.strip() or ''
+            logger.info(f"Dropped temporary auto stash {stash_ref}")
+        except subprocess.CalledProcessError as e:
+            stash_drop_warning = e.stderr.strip() or e.stdout.strip() or str(e)
+            logger.warning(f"Failed to drop stash {stash_ref}: {stash_drop_warning}")
+            update_result['warnings'].append(f"Failed to drop auto stash {stash_ref}. Please clean manually.")
+
+    _schedule_service_restart()
+
+    return jsonify({
+        'success': True,
+        'message': 'Local changes stashed, update applied, stash dropped.' if stash_created else 'Update applied (no local changes were stashed).',
+        'stash_created': stash_created,
+        'stash_dropped': bool(stash_created and not stash_drop_warning),
+        'stash_output': stash_stdout,
+        'stash_drop_output': stash_drop_output,
+        'warnings': update_result['warnings'],
+        'update_output': update_result['output']
+    })
 
 @app.route('/api/system/fix-git', methods=['POST'])
 def fix_git_safe_directory():
