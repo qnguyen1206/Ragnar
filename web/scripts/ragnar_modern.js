@@ -3148,14 +3148,14 @@ async function checkForUpdates() {
             if (gitStatus.is_dirty) {
                 updateBtn.onclick = autoStashAndUpdate;
                 updateBtn.className = 'w-full bg-yellow-600 hover:bg-yellow-700 text-white py-2 px-4 rounded transition-colors';
-                updateElement('update-btn-text', 'Auto Stash + Update');
+                updateElement('update-btn-text', 'Update');
                 addConsoleMessage('Local edits detected. Ragnar can stash them automatically before updating.', 'info');
             } else {
                 updateBtn.onclick = performUpdate;
-                updateElement('update-btn-text', gitStatus.has_stash ? 'Update (stash present)' : 'Update System');
+                updateElement('update-btn-text', gitStatus.has_stash ? 'Update' : 'Update System');
             }
         } else if (gitStatus.has_stash && updateBtn) {
-            updateElement('update-btn-text', 'Update (stash present)');
+            updateElement('update-btn-text', 'Update');
         }
         
     } catch (error) {
