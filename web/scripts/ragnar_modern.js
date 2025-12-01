@@ -1034,7 +1034,6 @@ function updateDashboardStats(stats) {
     updateElement('dashboard-scanned-network-count', scannedNetworks);
     scaleStatNumber('dashboard-scanned-network-count', scannedNetworks);
     updateElement('points-count', points);
-    scaleStatNumber('points-count', points);
 
     const activeSummary = totalTargets > 0 ? `${activeTargets}/${totalTargets} active` : `${activeTargets} active`;
     const newSummary = newTargets > 0 ? `${newTargets} new` : 'No new targets';
