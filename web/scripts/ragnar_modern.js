@@ -538,6 +538,11 @@ function setupEventListeners() {
             window.manualActionPreference = manualActionDropdown.value;
         });
     }
+
+    const automationToggleBtn = document.getElementById('automation-toggle-btn');
+    if (automationToggleBtn) {
+        automationToggleBtn.addEventListener('click', handleAutomationToggle);
+    }
 }
 
 function initializeTabs() {
@@ -6045,8 +6050,11 @@ async function startOrchestrator() {
         
         if (data.success) {
             addConsoleMessage('Automatic mode started successfully', 'success');
-            updateElement('ragnar-mode', 'Auto');
-            document.getElementById('ragnar-mode').className = 'text-green-400 font-semibold';
+            updateElement('Ragnar-mode', 'Auto');
+            const modeLabel = document.getElementById('Ragnar-mode');
+            if (modeLabel) {
+                modeLabel.className = 'text-green-400 font-semibold';
+            }
             
             if (statusEl) {
                 statusEl.textContent = 'Automatic mode activated - Orchestrator running';
@@ -6095,8 +6103,11 @@ async function stopOrchestrator() {
         
         if (data.success) {
             addConsoleMessage('Automatic mode stopped - Pentest Mode activated', 'warning');
-            updateElement('ragnar-mode', 'Manual');
-            document.getElementById('ragnar-mode').className = 'text-orange-400 font-semibold';
+            updateElement('Ragnar-mode', 'Manual');
+            const modeLabel = document.getElementById('Ragnar-mode');
+            if (modeLabel) {
+                modeLabel.className = 'text-orange-400 font-semibold';
+            }
             
             if (statusEl) {
                 statusEl.textContent = 'Pentest Mode activated - Manual control enabled';
@@ -6412,12 +6423,81 @@ function updateDashboardStatus(data) {
     }
     
     syncManualModeUI(isManualMode);
+    updateAutomationToggleButton(isManualMode);
     
     // Update connectivity status with WiFi SSID
     updateConnectivityIndicator('wifi-status', data.wifi_connected, data.current_ssid, data.ap_mode_active);
     updateConnectivityIndicator('bluetooth-status', data.bluetooth_active);
     updateConnectivityIndicator('usb-status', data.usb_active);
     updateConnectivityIndicator('pan-status', data.pan_connected);
+}
+
+function updateAutomationToggleButton(isManualMode, options = {}) {
+    const button = document.getElementById('automation-toggle-btn');
+    if (!button) {
+        return;
+    }
+
+    const { force = false } = options;
+    if (button.dataset.busy === 'true' && !force) {
+        button.dataset.pendingState = isManualMode ? 'manual' : 'auto';
+        return;
+    }
+
+    if (force) {
+        delete button.dataset.pendingState;
+    }
+
+    const baseClasses = 'w-full sm:w-auto px-4 py-2 rounded-lg font-semibold transition-colors focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-offset-slate-900';
+    if (isManualMode) {
+        button.textContent = 'Enable Automation';
+        button.className = `${baseClasses} bg-green-600 hover:bg-green-500 text-white focus:ring-green-500`;
+        button.dataset.action = 'start';
+    } else {
+        button.textContent = 'Disable Automation';
+        button.className = `${baseClasses} bg-orange-600 hover:bg-orange-500 text-white focus:ring-orange-500`;
+        button.dataset.action = 'stop';
+    }
+}
+
+async function handleAutomationToggle() {
+    const button = document.getElementById('automation-toggle-btn');
+    if (!button || button.dataset.busy === 'true') {
+        return;
+    }
+
+    const action = button.dataset.action || 'stop';
+    const wasManualMode = action === 'start';
+    button.dataset.busy = 'true';
+    button.disabled = true;
+    button.classList.add('opacity-70');
+    button.textContent = action === 'start' ? 'Enabling...' : 'Disabling...';
+
+    try {
+        if (action === 'start') {
+            await startOrchestrator();
+            updateAutomationToggleButton(false, { force: true });
+        } else {
+            await stopOrchestrator();
+            updateAutomationToggleButton(true, { force: true });
+        }
+
+        refreshDashboard().catch(() => {/* best effort */});
+    } catch (error) {
+        console.error('Automation toggle failed:', error);
+        addConsoleMessage('Failed to toggle automation', 'error');
+        updateAutomationToggleButton(wasManualMode, { force: true });
+    } finally {
+        button.dataset.busy = 'false';
+        button.disabled = false;
+        button.classList.remove('opacity-70');
+
+        if (button.dataset.pendingState) {
+            const pendingManual = button.dataset.pendingState === 'manual';
+            delete button.dataset.pendingState;
+            updateAutomationToggleButton(pendingManual, { force: true });
+        }
+    }
 }
 
 function updateElement(id, value) {
