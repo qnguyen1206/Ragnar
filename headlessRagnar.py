@@ -5,7 +5,6 @@ This version removes all e-paper / Display dependencies so Ragnar can run
 cleanly on any Linux box (Pi, Hackberry, etc.) with just the web UI.
 
 hbp0_ragnar by DezusAZ
-
 """
 
 import os
