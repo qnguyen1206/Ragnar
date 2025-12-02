@@ -51,6 +51,23 @@ if [[ $EUID -ne 0 ]]; then
     exit 1
 fi
 
+# Block installation when Ragnar is running without an e-paper display
+HEADLESS_DETECTED=false
+if pgrep -f "headlessRagnar.py" >/dev/null 2>&1; then
+    HEADLESS_DETECTED=true
+else
+    if systemctl cat ragnar.service 2>/dev/null | grep -q "headlessRagnar.py"; then
+        HEADLESS_DETECTED=true
+    fi
+fi
+
+if [[ "$HEADLESS_DETECTED" == true ]]; then
+    BLOCK_MSG="Pwnagotchi requires an e-paper display, but Ragnar is running in Headless mode. Installation is disabled."
+    echo "[ERROR] ${BLOCK_MSG}"
+    write_status "error" "$BLOCK_MSG" "preflight"
+    exit 1
+fi
+
 write_status "installing" "Starting Pwnagotchi installation" "preflight"
 echo "[INFO] Beginning Pwnagotchi installation..."
 
