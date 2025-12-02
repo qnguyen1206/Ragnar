@@ -6040,25 +6040,29 @@ async function startOrchestrator() {
         // Show status and start progress
         if (statusEl) {
             statusEl.classList.remove('hidden');
-            statusEl.textContent = 'Starting automatic mode...';
+            statusEl.textContent = 'Enabling automation...';
             statusEl.className = 'text-sm text-blue-600 mt-4';
         }
         
-        addConsoleMessage('Starting automatic mode...', 'info');
+        addConsoleMessage('Enabling automation...', 'info');
         
-        const data = await postAPI('/api/manual/orchestrator/stop', {});
+        const data = await postAPI('/api/automation/orchestrator/start', {});
         
         if (data.success) {
-            addConsoleMessage('Automatic mode started successfully', 'success');
-            updateElement('Ragnar-mode', 'Auto');
+            const automationActive = data.automation_enabled !== false;
+            const modeLabelText = automationActive ? 'Auto' : 'Sleeping';
+            const modeClass = automationActive ? 'text-green-400 font-semibold' : 'text-purple-300 font-semibold';
+
+            addConsoleMessage('Automation enabled successfully', 'success');
+            updateElement('Ragnar-mode', modeLabelText);
             const modeLabel = document.getElementById('Ragnar-mode');
             if (modeLabel) {
-                modeLabel.className = 'text-green-400 font-semibold';
+                modeLabel.className = modeClass;
             }
             
             if (statusEl) {
-                statusEl.textContent = 'Automatic mode activated - Orchestrator running';
-                statusEl.className = 'text-sm text-green-600 mt-4';
+                statusEl.textContent = automationActive ? 'Automation enabled - Orchestrator running' : 'Automation queued - waiting for Wi-Fi';
+                statusEl.className = automationActive ? 'text-sm text-green-600 mt-4' : 'text-sm text-yellow-500 mt-4';
                 
                 // Hide status after 3 seconds
                 setTimeout(() => {
@@ -6097,20 +6101,20 @@ async function stopOrchestrator() {
             statusEl.className = 'text-sm text-orange-600 mt-4';
         }
         
-        addConsoleMessage('Stopping automatic mode...', 'info');
+        addConsoleMessage('Disabling automation...', 'info');
         
-        const data = await postAPI('/api/manual/orchestrator/start', {});
+        const data = await postAPI('/api/automation/orchestrator/stop', {});
         
         if (data.success) {
-            addConsoleMessage('Automatic mode stopped - Pentest Mode activated', 'warning');
-            updateElement('Ragnar-mode', 'Manual');
+            addConsoleMessage('Automation disabled - Orchestrator sleeping', 'warning');
+            updateElement('Ragnar-mode', 'Sleeping');
             const modeLabel = document.getElementById('Ragnar-mode');
             if (modeLabel) {
-                modeLabel.className = 'text-orange-400 font-semibold';
+                modeLabel.className = 'text-purple-300 font-semibold';
             }
             
             if (statusEl) {
-                statusEl.textContent = 'Pentest Mode activated - Manual control enabled';
+                statusEl.textContent = 'Automation disabled - Ragnar is sleeping';
                 statusEl.className = 'text-sm text-orange-600 mt-4';
                 
                 // Hide status after 3 seconds
@@ -6409,21 +6413,28 @@ function updateDashboardStatus(data) {
     updateElement('Ragnar-says', (data.ragnar_says || 'Hacking away...'));
     
     // Update mode and handle manual controls
+    const automationEnabled = typeof data.automation_enabled === 'boolean' ? data.automation_enabled : !Boolean(data.manual_mode);
     const isManualMode = Boolean(data.manual_mode);
-    updateElement('Ragnar-mode', isManualMode ? 'Manual' : 'Auto');
     
-    // Update mode styling
+    let modeLabel = 'Auto';
+    let modeClass = 'text-green-400 font-semibold';
+    if (!automationEnabled) {
+        modeLabel = 'Sleeping';
+        modeClass = 'text-purple-300 font-semibold';
+    } else if (isManualMode) {
+        modeLabel = 'Manual';
+        modeClass = 'text-orange-400 font-semibold';
+    }
+
+    updateElement('Ragnar-mode', modeLabel);
+    
     const modeElement = document.getElementById('Ragnar-mode');
     if (modeElement) {
-        if (isManualMode) {
-            modeElement.className = 'text-orange-400 font-semibold';
-        } else {
-            modeElement.className = 'text-green-400 font-semibold';
-        }
+        modeElement.className = modeClass;
     }
     
     syncManualModeUI(isManualMode);
-    updateAutomationToggleButton(isManualMode);
+    updateAutomationToggleButton(automationEnabled);
     
     // Update connectivity status with WiFi SSID
     updateConnectivityIndicator('wifi-status', data.wifi_connected, data.current_ssid, data.ap_mode_active);
@@ -6432,7 +6443,7 @@ function updateDashboardStatus(data) {
     updateConnectivityIndicator('pan-status', data.pan_connected);
 }
 
-function updateAutomationToggleButton(isManualMode, options = {}) {
+function updateAutomationToggleButton(automationEnabled, options = {}) {
     const button = document.getElementById('automation-toggle-btn');
     if (!button) {
         return;
@@ -6440,7 +6451,7 @@ function updateAutomationToggleButton(isManualMode, options = {}) {
 
     const { force = false } = options;
     if (button.dataset.busy === 'true' && !force) {
-        button.dataset.pendingState = isManualMode ? 'manual' : 'auto';
+        button.dataset.pendingState = automationEnabled ? 'enabled' : 'disabled';
         return;
     }
 
@@ -6449,14 +6460,14 @@ function updateAutomationToggleButton(isManualMode, options = {}) {
     }
 
     const baseClasses = 'w-full sm:w-auto px-4 py-2 rounded-lg font-semibold transition-colors focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-offset-slate-900';
-    if (isManualMode) {
-        button.textContent = 'Enable Automation';
-        button.className = `${baseClasses} bg-green-600 hover:bg-green-500 text-white focus:ring-green-500`;
-        button.dataset.action = 'start';
-    } else {
+    if (automationEnabled) {
         button.textContent = 'Disable Automation';
         button.className = `${baseClasses} bg-orange-600 hover:bg-orange-500 text-white focus:ring-orange-500`;
         button.dataset.action = 'stop';
+    } else {
+        button.textContent = 'Enable Automation';
+        button.className = `${baseClasses} bg-green-600 hover:bg-green-500 text-white focus:ring-green-500`;
+        button.dataset.action = 'start';
     }
 }
 
@@ -6467,7 +6478,7 @@ async function handleAutomationToggle() {
     }
 
     const action = button.dataset.action || 'stop';
-    const wasManualMode = action === 'start';
+    const targetStateEnabled = action === 'start';
     button.dataset.busy = 'true';
     button.disabled = true;
     button.classList.add('opacity-70');
@@ -6476,26 +6487,26 @@ async function handleAutomationToggle() {
     try {
         if (action === 'start') {
             await startOrchestrator();
-            updateAutomationToggleButton(false, { force: true });
+            updateAutomationToggleButton(true, { force: true });
         } else {
             await stopOrchestrator();
-            updateAutomationToggleButton(true, { force: true });
+            updateAutomationToggleButton(false, { force: true });
         }
 
         refreshDashboard().catch(() => {/* best effort */});
     } catch (error) {
         console.error('Automation toggle failed:', error);
         addConsoleMessage('Failed to toggle automation', 'error');
-        updateAutomationToggleButton(wasManualMode, { force: true });
+        updateAutomationToggleButton(!targetStateEnabled, { force: true });
     } finally {
         button.dataset.busy = 'false';
         button.disabled = false;
         button.classList.remove('opacity-70');
 
         if (button.dataset.pendingState) {
-            const pendingManual = button.dataset.pendingState === 'manual';
+            const pendingEnabled = button.dataset.pendingState === 'enabled';
             delete button.dataset.pendingState;
-            updateAutomationToggleButton(pendingManual, { force: true });
+            updateAutomationToggleButton(pendingEnabled, { force: true });
         }
     }
 }

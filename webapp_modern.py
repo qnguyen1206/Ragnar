@@ -854,6 +854,22 @@ def broadcast_status_update():
         logger.error(f"Error broadcasting status update: {e}")
 
 
+def is_orchestrator_running() -> bool:
+    """Determine whether the orchestrator thread is currently alive."""
+    try:
+        ragnar_instance = getattr(shared_data, 'ragnar_instance', None)
+        if not ragnar_instance:
+            return False
+
+        orchestrator_thread = getattr(ragnar_instance, 'orchestrator_thread', None)
+        if orchestrator_thread and orchestrator_thread.is_alive():
+            return not getattr(shared_data, 'orchestrator_should_exit', False)
+        return False
+    except Exception as exc:
+        logger.debug(f"Unable to determine automation state: {exc}")
+        return False
+
+
 def sync_vulnerability_count():
     """Synchronize vulnerability count across all data sources and network intelligence"""
     try:
@@ -2020,6 +2036,7 @@ def get_status():
             'ragnar_status2': safe_str(shared_data.ragnarstatustext2),
             'ragnar_says': safe_str(shared_data.ragnarsays),
             'orchestrator_status': safe_str(shared_data.ragnarorch_status),
+            'automation_enabled': is_orchestrator_running(),
             'target_count': safe_int(shared_data.targetnbr),
             'port_count': safe_int(shared_data.portnbr),
             'vulnerability_count': safe_int(shared_data.vulnnbr),
@@ -8288,6 +8305,7 @@ def get_current_status():
         'ragnar_status2': safe_str(shared_data.ragnarstatustext2),
         'ragnar_says': safe_str(shared_data.ragnarsays),
         'orchestrator_status': safe_str(shared_data.ragnarorch_status),
+        'automation_enabled': is_orchestrator_running(),
         'target_count': safe_int(shared_data.targetnbr),
         'port_count': safe_int(shared_data.portnbr),
         'vulnerability_count': safe_int(shared_data.vulnnbr),
@@ -9016,6 +9034,69 @@ def execute_manual_attack():
         logger.error(f"Error executing manual attack: {e}")
         return jsonify({'success': False, 'error': str(e)}), 500
 
+@app.route('/api/automation/orchestrator/start', methods=['POST'])
+def start_orchestrator_automation():
+    """Start the orchestrator thread to enable automation."""
+    try:
+        ragnar_instance = getattr(shared_data, 'ragnar_instance', None)
+        if not ragnar_instance:
+            return jsonify({'success': False, 'error': 'Core Ragnar instance is not initialized yet'}), 503
+
+        if is_orchestrator_running():
+            return jsonify({
+                'success': True,
+                'message': 'Automation already running',
+                'automation_enabled': True
+            })
+
+        ragnar_instance.start_orchestrator()
+        automation_enabled = is_orchestrator_running()
+
+        broadcast_status_update()
+
+        message = 'Automation enabled - orchestrator awake' if automation_enabled else 'Automation start requested - waiting for Wi-Fi'
+        return jsonify({
+            'success': True,
+            'message': message,
+            'automation_enabled': automation_enabled
+        })
+
+    except Exception as e:
+        logger.error(f"Error enabling automation: {e}")
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@app.route('/api/automation/orchestrator/stop', methods=['POST'])
+def stop_orchestrator_automation():
+    """Stop the orchestrator thread so automation sleeps."""
+    try:
+        ragnar_instance = getattr(shared_data, 'ragnar_instance', None)
+        if not ragnar_instance:
+            return jsonify({'success': False, 'error': 'Core Ragnar instance is not initialized yet'}), 503
+
+        if not is_orchestrator_running():
+            broadcast_status_update()
+            return jsonify({
+                'success': True,
+                'message': 'Automation already sleeping',
+                'automation_enabled': False
+            })
+
+        ragnar_instance.stop_orchestrator()
+        automation_enabled = is_orchestrator_running()
+        broadcast_status_update()
+
+        return jsonify({
+            'success': True,
+            'message': 'Automation disabled - orchestrator sleeping',
+            'automation_enabled': automation_enabled
+        })
+
+    except Exception as e:
+        logger.error(f"Error disabling automation: {e}")
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
 @app.route('/api/manual/orchestrator/start', methods=['POST'])
 def start_orchestrator_manual():
     """Start the orchestrator in manual mode"""
@@ -9034,6 +9115,7 @@ def start_orchestrator_manual():
     except Exception as e:
         logger.error(f"Error enabling manual mode: {e}")
         return jsonify({'success': False, 'error': str(e)}), 500
+
 
 @app.route('/api/manual/orchestrator/stop', methods=['POST'])
 def stop_orchestrator_manual():
@@ -10024,6 +10106,7 @@ def get_dashboard_quick():
             'ragnar_status2': safe_str(shared_data.ragnarstatustext2),
             'ragnar_says': safe_str(shared_data.ragnarsays),
             'orchestrator_status': safe_str(shared_data.ragnarorch_status),
+            'automation_enabled': is_orchestrator_running(),
             'wifi_connected': wifi_status.get('wifi_connected', safe_bool(shared_data.wifi_connected)),
             'current_ssid': wifi_status.get('current_ssid'),
             'ap_mode_active': wifi_status.get('ap_mode_active', False),
