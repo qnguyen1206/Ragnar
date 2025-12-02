@@ -10,7 +10,7 @@
 # - Loading and managing fonts and images required for the application's display.
 # - Handling the creation and management of a live status file to store the current status of network scans.
 # - Managing configuration settings, including loading default settings, updating, and saving configurations to a JSON file.
-# - Providing utility functions for reading and writing data to CSV files, updating statistics, and wrapping text for display purposes.
+# - Providing utility functions for reading and writing data to CSV files and db, updating statistics, and wrapping text for display purposes.
 
 import os
 import re
