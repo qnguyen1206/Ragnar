@@ -3858,16 +3858,6 @@ function updateReleaseGateState(payload = {}) {
     const message = incomingMessage || RELEASE_GATE_DEFAULT_MESSAGE;
     releaseGateState = { enabled, message };
 
-    const banner = document.getElementById('release-gate-banner');
-    if (banner) {
-        if (enabled) {
-            banner.textContent = message;
-            banner.classList.remove('hidden');
-        } else {
-            banner.classList.add('hidden');
-        }
-    }
-
     const updateBtn = document.getElementById('update-btn');
     if (updateBtn) {
         updateBtn.dataset.releaseGate = enabled ? 'true' : 'false';
