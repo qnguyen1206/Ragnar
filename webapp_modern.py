@@ -107,6 +107,9 @@ PWN_SERVICE_FILE = '/etc/systemd/system/pwnagotchi.service'
 PWN_SWAP_DELAY_SECONDS = 5
 PWN_INSTALL_STALE_SECONDS = 600  # Treat installer as stale after 10 minutes
 PWN_SWITCH_STALE_SECONDS = 60  # Consider switch stuck after 60 seconds
+RELEASE_GATE_DEFAULT_MESSAGE = (
+    "A controlled release is rolling out. Proceeding with a manual update may cause instability."
+)
 
 
 def _normalize_value(value, default='Unknown'):
@@ -1322,6 +1325,15 @@ def safe_bool(value, default=False):
         return default
 
 
+def _build_release_gate_payload():
+    enabled = safe_bool(shared_data.config.get('release_gate_enabled', False))
+    message = shared_data.config.get('release_gate_message') or RELEASE_GATE_DEFAULT_MESSAGE
+    return {
+        'enabled': enabled,
+        'message': safe_str(message or RELEASE_GATE_DEFAULT_MESSAGE)
+    }
+
+
 def ensure_recent_sync(max_age=SYNC_BACKGROUND_INTERVAL):
     """Ensure counts are synchronized if the last update is older than max_age seconds"""
     global last_sync_time
@@ -2054,6 +2066,7 @@ def get_status():
             'headless_mode': safe_bool(getattr(shared_data, 'headless_mode', False)),
             'pwnagotchi_mode': shared_data.config.get('pwnagotchi_mode', 'ragnar'),
             'pwnagotchi_installed': safe_bool(shared_data.config.get('pwnagotchi_installed', False)),
+            'release_gate': _build_release_gate_payload(),
             'timestamp': datetime.now().isoformat()
         }
         
@@ -8327,6 +8340,7 @@ def get_current_status():
         'usb_active': safe_bool(shared_data.usb_active),
         'manual_mode': safe_bool(shared_data.config.get('manual_mode', False)),
         'headless_mode': safe_bool(getattr(shared_data, 'headless_mode', False)),
+        'release_gate': _build_release_gate_payload(),
         'timestamp': datetime.now().isoformat()
     }
 
@@ -10117,6 +10131,7 @@ def get_dashboard_quick():
             'pan_connected': safe_bool(shared_data.pan_connected),
             'usb_active': safe_bool(shared_data.usb_active),
             'manual_mode': safe_bool(shared_data.config.get('manual_mode', False)),
+            'release_gate': _build_release_gate_payload(),
             'timestamp': datetime.now().isoformat()
         }
 

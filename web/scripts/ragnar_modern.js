@@ -38,6 +38,10 @@ let pwnLogStopTimeout = null;
 let pwnLogActiveFile = null;
 let pwnLogFetchInFlight = false;
 let headlessMode = false;
+const RELEASE_GATE_DEFAULT_MESSAGE = 'A controlled release is rolling out. Updating manually may cause instability.';
+let releaseGateState = { enabled: false, message: RELEASE_GATE_DEFAULT_MESSAGE };
+let releaseGateResolver = null;
+let releaseGatePendingPromise = null;
 
 const configMetadata = {
     manual_mode: {
@@ -3848,6 +3852,90 @@ function displayCurrentProfile(config) {
 // SYSTEM MANAGEMENT FUNCTIONS
 // ============================================================================
 
+function updateReleaseGateState(payload = {}) {
+    const enabled = Boolean(payload && payload.enabled);
+    const incomingMessage = typeof (payload && payload.message) === 'string' ? payload.message.trim() : '';
+    const message = incomingMessage || RELEASE_GATE_DEFAULT_MESSAGE;
+    releaseGateState = { enabled, message };
+
+    const banner = document.getElementById('release-gate-banner');
+    if (banner) {
+        if (enabled) {
+            banner.textContent = message;
+            banner.classList.remove('hidden');
+        } else {
+            banner.classList.add('hidden');
+        }
+    }
+
+    const updateBtn = document.getElementById('update-btn');
+    if (updateBtn) {
+        updateBtn.dataset.releaseGate = enabled ? 'true' : 'false';
+        ['ring-2', 'ring-yellow-500/50', 'ring-offset-2', 'ring-offset-slate-900'].forEach(cls => {
+            if (enabled) {
+                updateBtn.classList.add(cls);
+            } else {
+                updateBtn.classList.remove(cls);
+            }
+        });
+    }
+
+    if (!enabled && releaseGateResolver) {
+        const resolver = releaseGateResolver;
+        releaseGateResolver = null;
+        releaseGatePendingPromise = null;
+        hideReleaseGateModal();
+        resolver(true);
+    }
+}
+
+function showReleaseGateModal() {
+    const modal = document.getElementById('release-gate-modal');
+    const messageEl = document.getElementById('release-gate-modal-message');
+    if (messageEl) {
+        messageEl.textContent = releaseGateState.message || RELEASE_GATE_DEFAULT_MESSAGE;
+    }
+    if (modal) {
+        modal.classList.remove('hidden');
+        modal.classList.add('flex');
+    }
+}
+
+function hideReleaseGateModal() {
+    const modal = document.getElementById('release-gate-modal');
+    if (modal) {
+        modal.classList.add('hidden');
+        modal.classList.remove('flex');
+    }
+}
+
+function ensureReleaseGateAcknowledged() {
+    if (!releaseGateState.enabled) {
+        return Promise.resolve(true);
+    }
+
+    if (releaseGatePendingPromise) {
+        showReleaseGateModal();
+        return releaseGatePendingPromise;
+    }
+
+    releaseGatePendingPromise = new Promise(resolve => {
+        releaseGateResolver = resolve;
+        showReleaseGateModal();
+    });
+    return releaseGatePendingPromise;
+}
+
+function handleReleaseGateDecision(allowUpdate) {
+    hideReleaseGateModal();
+    if (releaseGateResolver) {
+        const resolver = releaseGateResolver;
+        releaseGateResolver = null;
+        releaseGatePendingPromise = null;
+        resolver(Boolean(allowUpdate));
+    }
+}
+
 async function checkForUpdates() {
     try {
         const updateBtn = document.getElementById('update-btn');
@@ -4004,6 +4092,12 @@ async function fixGitConfig() {
 }
 
 async function performUpdate() {
+    const gateApproved = await ensureReleaseGateAcknowledged();
+    if (!gateApproved) {
+        addConsoleMessage('Update postponed until the release window opens.', 'info');
+        return;
+    }
+
     if (!confirm('This will update the system and restart the service. Continue?')) {
         return;
     }
@@ -4045,6 +4139,12 @@ async function performUpdate() {
 }
 
 async function autoStashAndUpdate() {
+    const gateApproved = await ensureReleaseGateAcknowledged();
+    if (!gateApproved) {
+        addConsoleMessage('Update postponed until the release window opens.', 'info');
+        return;
+    }
+
     if (!confirm('This will update the system and restart the service. Continue?')) {
         return;
     }
@@ -6484,6 +6584,7 @@ function updateDashboardStatus(data) {
     updateConnectivityIndicator('usb-status', data.usb_active);
     updateConnectivityIndicator('pan-status', data.pan_connected);
 
+    updateReleaseGateState(data.release_gate);
     updatePwnToggleAvailability(Boolean(data.headless_mode));
 }
 
@@ -8488,6 +8589,7 @@ window.toggleEpaperSize = toggleEpaperSize;
 window.checkForUpdates = checkForUpdates;
 window.checkForUpdatesQuiet = checkForUpdatesQuiet;
 window.performUpdate = performUpdate;
+window.handleReleaseGateDecision = handleReleaseGateDecision;
 window.restartService = restartService;
 window.rebootSystem = rebootSystem;
 window.startAPMode = startAPMode;

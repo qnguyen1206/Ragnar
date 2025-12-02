@@ -2167,6 +2167,9 @@
                             <div id="update-info" class="text-sm text-gray-400 mb-3">
                                 Checking for updates...
                             </div>
+                            <div id="release-gate-banner" class="hidden text-sm text-yellow-200 bg-yellow-900/40 border border-yellow-700 rounded px-3 py-2 mb-3">
+                                Updates are currently gated.
+                            </div>
                             <button onclick="checkForUpdates()" 
                                     class="w-full bg-blue-600 hover:bg-blue-700 text-white py-2 px-4 rounded transition-colors mb-2">
                                 <svg class="w-4 h-4 inline mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -2512,6 +2515,31 @@
         </div>
         
     </main>
+
+    <!-- Release Gate Modal -->
+    <div id="release-gate-modal" class="fixed inset-0 bg-black bg-opacity-80 hidden items-center justify-center z-50">
+        <div class="glass rounded-xl p-6 max-w-lg w-full mx-4">
+            <div class="flex items-center justify-between mb-4">
+                <h3 class="text-xl font-bold">Controlled Release Warning</h3>
+                <button onclick="handleReleaseGateDecision(false)" class="text-gray-400 hover:text-white">
+                    <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"></path>
+                    </svg>
+                </button>
+            </div>
+            <p id="release-gate-modal-message" class="text-gray-200 mb-6">
+                A new Ragnar release is rolling out. Updating early may cause instability.
+            </p>
+            <div class="flex flex-col sm:flex-row gap-3">
+                <button onclick="handleReleaseGateDecision(false)" class="flex-1 bg-gray-600 hover:bg-gray-700 text-white py-2 px-4 rounded transition-colors">
+                    Later
+                </button>
+                <button onclick="handleReleaseGateDecision(true)" class="flex-1 bg-Ragnar-600 hover:bg-Ragnar-700 text-white py-2 px-4 rounded transition-colors">
+                    Update Anyway
+                </button>
+            </div>
+        </div>
+    </div>
 
     <!-- JavaScript -->
     <script src="/web/scripts/ragnar_modern.js?v=20251127"></script>
