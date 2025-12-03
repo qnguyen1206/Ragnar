@@ -472,9 +472,9 @@ class Display:
         if waves <= 0:
             waves = 1  # Always show at least one wave when connected
 
-        base_radius = max(2, int(1.5 * scale))
+        base_radius = max(1, int(1.5 * scale))
         wave_spacing = max(2, int(2.5 * scale) + 2)
-        line_width = max(1, int(scale))
+        line_width = max(1, int(scale) + 1)
 
         center_x = base_x + base_radius + wave_spacing * 2
         center_y = base_y + base_radius + wave_spacing * 2
