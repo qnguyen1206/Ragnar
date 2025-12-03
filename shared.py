@@ -637,6 +637,8 @@ class SharedData:
         self.bluetooth_scan_active = False
         self.bluetooth_scan_start_time = 0.0
         self.wifi_connected = False
+        self.wifi_signal_dbm = None  # Latest RSSI value for display
+        self.wifi_signal_quality = None  # Normalized 0-100 quality percentage
         self.pan_connected = False
         self.usb_active = False
         self.ragnarsays = "Hacking away..."

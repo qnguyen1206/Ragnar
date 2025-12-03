@@ -253,74 +253,27 @@ class Display:
                     except Exception as e:
                         logger.debug(f"Unable to persist normalized livestatus columns: {e}")
 
-                # Enhanced credential counting with race condition protection - network-specific CSV files
-                try:
-                    # Get only CSV credential files from network-specific directory
-                    crackedpw_files = glob.glob(f"{self.shared_data.crackedpwddir}/*.csv")
-                    
-                    # Sort files for consistent processing order
-                    crackedpw_files = sorted(crackedpw_files)
-                    
-                    total_passwords = 0
-                    
-                    for file in crackedpw_files:
-                        try:
-                            # Skip temporary files to prevent race conditions
-                            if os.path.basename(file).startswith('.') or file.endswith('.tmp'):
-                                logger.debug(f"Skipping temporary file: {file}")
-                                continue
-                            
-                            # Check if file exists and has content
-                            if not os.path.exists(file):
-                                logger.debug(f"File {file} no longer exists, skipping")
-                                continue
-                                
-                            file_size = os.path.getsize(file)
-                            if file_size == 0:
-                                logger.debug(f"Password file {file} is empty, skipping")
-                                continue
-                                
-                            # Multiple read attempts with small delay for race conditions
-                            for attempt in range(2):
-                                try:
-                                    with open(file, 'r', encoding='utf-8', errors='ignore') as f:
-                                        lines = f.readlines()
-                                        # Skip header row and count data rows only
-                                        data_rows = 0
-                                        for i, line in enumerate(lines):
-                                            line = line.strip()
-                                            if line:
-                                                # Skip first line if it contains CSV headers
-                                                if i == 0 and ('MAC Address' in line or 'IP Address' in line or 'User' in line or 'Password' in line):
-                                                    continue
-                                                # Count non-empty data rows
-                                                data_rows += 1
-                                        total_passwords += data_rows
-                                    break
-                                except (PermissionError, OSError) as e:
-                                    if attempt == 0:
-                                        logger.debug(f"File {file} temporarily locked, retrying...")
-                                        time.sleep(0.1)  # Brief delay for file operations
-                                        continue
-                                    else:
-                                        logger.debug(f"File {file} still locked after retry: {e}")
-                                        break
-                                        
-                        except Exception as e:
-                            logger.debug(f"Error reading password file {file}: {e}")
-                            continue
-                    
-                    # Only update if we successfully processed files
-                    old_creds = self.shared_data.crednbr
-                    if old_creds != total_passwords:
-                        self.shared_data.crednbr = total_passwords
-                        logger.info(f"DISPLAY: Updated credentials: {old_creds} -> {total_passwords} from {len(crackedpw_files)} files")
-                    else:
-                        logger.debug(f"DISPLAY: Credentials stable at: {total_passwords} from {len(crackedpw_files)} files")
-                        
-                except Exception as e:
-                    logger.error(f"Error in display credential counting: {e}")
-                    # Don't update crednbr on error to maintain stability
+                crackedpw_files = glob.glob(f"{self.shared_data.crackedpwddir}/*.csv")
+
+                total_passwords = 0
+                for file in crackedpw_files:
+                    try:
+                        # Check if file is not empty and has content
+                        if os.path.getsize(file) > 0:
+                            with open(file, 'r') as f:
+                                df = pd.read_csv(f, usecols=[0])
+                                if not df.empty:
+                                    total_passwords += len(df)
+                        else:
+                            logger.debug(f"Password file {file} is empty, skipping")
+                    except (pd.errors.EmptyDataError, pd.errors.ParserError) as e:
+                        logger.debug(f"Could not parse password file {file}: {e}")
+                        continue
+                    except Exception as e:
+                        logger.warning(f"Error reading password file {file}: {e}")
+                        continue
+
+                self.shared_data.crednbr = total_passwords
 
                 total_data = sum([len(files) for r, d, files in os.walk(self.shared_data.datastolendir)])
                 self.shared_data.datanbr = total_data
@@ -342,6 +295,12 @@ class Display:
                 wifi_connected = self.is_wifi_connected()
                 self.shared_data.wifi_connected = wifi_connected
                 logger.info(f"[DISPLAY] WiFi status check: connected={wifi_connected}")
+
+                signal_dbm, signal_quality = self.get_wifi_signal_strength() if wifi_connected else (None, None)
+                self.shared_data.wifi_signal_dbm = signal_dbm
+                self.shared_data.wifi_signal_quality = signal_quality
+                if signal_dbm is not None:
+                    logger.debug(f"[DISPLAY] WiFi RSSI: {signal_dbm} dBm, quality={self.shared_data.wifi_signal_quality}%")
                 
                 self.shared_data.ap_mode_active = self.is_ap_mode_active()
                 self.shared_data.ap_client_count = self.get_ap_client_count() if self.shared_data.ap_mode_active else 0
@@ -416,6 +375,133 @@ class Display:
         except Exception as e:
             logger.error(f"Error checking WiFi status: {e}")
             return False
+
+    def _dbm_to_quality(self, signal_dbm):
+        """Convert RSSI (dBm) to an approximate 0-100 quality percentage."""
+        if signal_dbm is None:
+            return None
+
+        quality = int((signal_dbm - (-90)) * 100 / (-30 - (-90)))
+        return max(0, min(100, quality))
+
+    def get_wifi_signal_strength(self):
+        """Return a tuple (signal_dbm, quality_percent) if available."""
+        # Primary method: use `iw dev wlan0 link`
+        try:
+            result = subprocess.run(['iw', 'dev', 'wlan0', 'link'], capture_output=True, text=True, timeout=2)
+            if result.returncode == 0:
+                for line in result.stdout.split('\n'):
+                    if 'signal:' in line:
+                        try:
+                            raw_value = line.split('signal:')[1].split('dBm')[0].strip()
+                            signal_dbm = float(raw_value)
+                            return signal_dbm, self._dbm_to_quality(signal_dbm)
+                        except (ValueError, IndexError):
+                            logger.debug(f"Failed to parse iw signal line: {line.strip()}")
+                        break
+        except FileNotFoundError:
+            logger.debug("`iw` command not available for wifi strength measurement")
+        except subprocess.TimeoutExpired:
+            logger.debug("Timeout while fetching wifi strength via iw")
+        except Exception as e:
+            logger.debug(f"Unexpected error while using iw for wifi strength: {e}")
+
+        # Fallback: use `iwconfig`
+        try:
+            result = subprocess.run(['iwconfig', 'wlan0'], capture_output=True, text=True, timeout=2)
+            if result.returncode == 0:
+                quality = None
+                signal_dbm = None
+                for line in result.stdout.split('\n'):
+                    if 'Link Quality' in line:
+                        try:
+                            quality_part = line.split('Link Quality=')[1].split(' ')[0]
+                            if '/' in quality_part:
+                                numerator, denominator = quality_part.split('/')
+                                quality = int(float(numerator) / float(denominator) * 100)
+                        except (ValueError, IndexError):
+                            logger.debug(f"Failed to parse Link Quality line: {line.strip()}")
+                    if 'Signal level' in line:
+                        try:
+                            signal_part = line.split('Signal level=')[1].split(' ')[0]
+                            if '/' in signal_part:
+                                signal_part = signal_part.split('/')[0]
+                            signal_dbm = float(signal_part.replace('dBm', ''))
+                        except (ValueError, IndexError):
+                            logger.debug(f"Failed to parse Signal level line: {line.strip()}")
+
+                if signal_dbm is not None or quality is not None:
+                    if quality is None:
+                        quality = self._dbm_to_quality(signal_dbm)
+                    if signal_dbm is None and quality is not None:
+                        # approximate dbm from quality if needed
+                        signal_dbm = (quality / 100) * (-30 - (-90)) + (-90)
+                    return signal_dbm, quality
+        except FileNotFoundError:
+            logger.debug("`iwconfig` command not available for wifi strength measurement")
+        except subprocess.TimeoutExpired:
+            logger.debug("Timeout while fetching wifi strength via iwconfig")
+        except Exception as e:
+            logger.debug(f"Unexpected error while using iwconfig for wifi strength: {e}")
+
+        return None, None
+
+    def get_wifi_bar_count(self, quality):
+        """Translate a 0-100 quality value into 0-4 signal bars."""
+        if quality is None:
+            return 0
+
+        thresholds = [20, 40, 60, 80]
+        bars = 0
+        for threshold in thresholds:
+            if quality >= threshold:
+                bars += 1
+        return bars
+
+    def render_wifi_indicator(self, image, draw):
+        """Render the Wi-Fi indicator using live signal strength when available."""
+        base_x = int(3 * self.scale_factor_x)
+        base_y = int(3 * self.scale_factor_y)
+        signal_dbm = getattr(self.shared_data, 'wifi_signal_dbm', None)
+        raw_quality = getattr(self.shared_data, 'wifi_signal_quality', None)
+        effective_quality = raw_quality if raw_quality is not None else self._dbm_to_quality(signal_dbm)
+        ip_last_octet = self.get_wifi_ip_last_octet()
+        signal_label = None
+        if signal_dbm is not None:
+            signal_label = f"{int(signal_dbm)} dBm"
+        elif raw_quality is not None:
+            signal_label = f"{int(raw_quality)}%"
+
+        if effective_quality is None:
+            image.paste(self.shared_data.wifi, (base_x, base_y))
+            if signal_label:
+                draw.text((int(14 * self.scale_factor_x), int(2 * self.scale_factor_y)), signal_label, font=self.shared_data.font_arial9, fill=0)
+            if ip_last_octet:
+                draw.text((int(14 * self.scale_factor_x), int(10 * self.scale_factor_y)), ip_last_octet, font=self.shared_data.font_arial9, fill=0)
+            return
+
+        bars = self.get_wifi_bar_count(effective_quality)
+        bar_width = max(2, int(2 * self.scale_factor_x))
+        bar_spacing = max(1, int(1 * self.scale_factor_x))
+        bar_height_step = max(3, int(3 * self.scale_factor_y))
+        base_height = bar_height_step * 4
+
+        for i in range(4):
+            x0 = base_x + i * (bar_width + bar_spacing)
+            y0 = base_y + base_height - ((i + 1) * bar_height_step)
+            x1 = x0 + bar_width
+            y1 = base_y + base_height
+            fill_color = 0 if i < bars else 255
+            draw.rectangle((x0, y0, x1, y1), fill=fill_color, outline=0)
+
+        text_x = int(14 * self.scale_factor_x)
+        signal_text_y = int(2 * self.scale_factor_y)
+        ip_text_y = int(10 * self.scale_factor_y)
+
+        if signal_label:
+            draw.text((text_x, signal_text_y), signal_label, font=self.shared_data.font_arial9, fill=0)
+        if ip_last_octet:
+            draw.text((text_x, ip_text_y), ip_last_octet, font=self.shared_data.font_arial9, fill=0)
 
     def get_wifi_ip_last_octet(self):
         """Get the last octet of the WiFi IP address (e.g., '.211' from '192.168.1.211')."""
@@ -629,12 +715,7 @@ class Display:
                         ap_text = f"AP:{self.shared_data.ap_client_count}"
                     draw.text((int(3 * self.scale_factor_x), int(3 * self.scale_factor_y)), ap_text, font=self.shared_data.font_arial9, fill=0)
                 elif self.shared_data.wifi_connected:
-                    # Show WiFi logo
-                    image.paste(self.shared_data.wifi, (int(3 * self.scale_factor_x), int(3 * self.scale_factor_y)))
-                    # Show last octet of IP address below WiFi logo
-                    ip_last_octet = self.get_wifi_ip_last_octet()
-                    if ip_last_octet:
-                        draw.text((int(14 * self.scale_factor_x), int(10 * self.scale_factor_y)), ip_last_octet, font=self.shared_data.font_arial9, fill=0)
+                    self.render_wifi_indicator(image, draw)
                 # # # if self.shared_data.bluetooth_active:
                 # # #     image.paste(self.shared_data.bluetooth, (int(23 * self.scale_factor_x), int(4 * self.scale_factor_y)))
                 if self.shared_data.pan_connected:
