@@ -461,7 +461,7 @@ class Display:
     def render_wifi_wave_indicator(self, image, draw):
         """Render a live Wi-Fi indicator using wave arcs with no dBm text."""
         base_x = int(3 * self.scale_factor_x)
-        base_y = int(7 * self.scale_factor_y)
+        base_y = int(8 * self.scale_factor_y)
         scale = min(self.scale_factor_x, self.scale_factor_y)
         signal_dbm = getattr(self.shared_data, 'wifi_signal_dbm', None)
         raw_quality = getattr(self.shared_data, 'wifi_signal_quality', None)
@@ -492,7 +492,7 @@ class Display:
 
         if ip_last_octet:
             text_x = center_x + wave_spacing + base_radius
-            text_y = center_y - base_radius - max(1, int(5 * self.scale_factor_y))
+            text_y = center_y - base_radius - max(1, int(6 * self.scale_factor_y))
             draw.text((text_x, text_y), ip_last_octet, font=self.shared_data.font_arial9, fill=0)
 
     def get_wifi_ip_last_octet(self):
