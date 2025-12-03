@@ -488,7 +488,7 @@ class Display:
                 center_x + radius,
                 center_y + radius
             )
-            draw.arc(bbox, start=210, end=330, fill=0, width=line_width)
+            draw.arc(bbox, start=210, end=290, fill=0, width=line_width)
 
         if ip_last_octet:
             text_x = center_x + wave_spacing + base_radius
