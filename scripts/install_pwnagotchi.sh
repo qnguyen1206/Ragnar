@@ -163,6 +163,10 @@ python3 -m pip install \
     --use-pep517 \
     -e .
 
+# Ensure gymnasium is available for reinforcement-learning plugins
+echo "[INFO] Installing gymnasium dependency..."
+sudo -H pip3 install --break-system-packages gymnasium
+
 # -------------------------------------------------------------------
 # VALIDATE + FIX /etc/pwnagotchi
 # -------------------------------------------------------------------
