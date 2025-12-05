@@ -87,10 +87,8 @@ class ThreatIntelligenceFusion:
         self.logger = Logger(name="ThreatIntelligence", level=logging.INFO)
         
         # Intelligence storage
-        self.intelligence_dir = os.path.join(shared_data.datadir, 'threat_intelligence')
-        self.sources_config_file = os.path.join(self.intelligence_dir, 'sources_config.json')
-        self.threat_cache_file = os.path.join(self.intelligence_dir, 'threat_cache.json')
-        self.enriched_findings_file = os.path.join(self.intelligence_dir, 'enriched_findings.json')
+        self.threat_data_dir = self._resolve_threat_dir()
+        self._rebuild_file_paths()
         
         # Configuration
         self.threat_sources: Dict[str, ThreatIntelligenceSource] = {}
@@ -109,11 +107,44 @@ class ThreatIntelligenceFusion:
         
         # Initialize the system
         self.setup_intelligence_system()
+
+    def _resolve_threat_dir(self) -> str:
+        candidate = getattr(self.shared_data, 'network_threat_dir', None)
+        if candidate:
+            return candidate
+        return os.path.join(self.shared_data.datadir, 'threat_intelligence')
+
+    def _rebuild_file_paths(self):
+        self.sources_config_file = os.path.join(self.threat_data_dir, 'sources_config.json')
+        self.threat_cache_file = os.path.join(self.threat_data_dir, 'threat_cache.json')
+        self.enriched_findings_file = os.path.join(self.threat_data_dir, 'enriched_findings.json')
+
+    def set_storage_root(self, threat_dir: str):
+        """Switch threat intelligence storage when network changes."""
+        if not threat_dir or threat_dir == self.threat_data_dir:
+            return
+        self.persist_state()
+        self.threat_data_dir = threat_dir
+        self._rebuild_file_paths()
+        os.makedirs(self.threat_data_dir, exist_ok=True)
+        self.ensure_json_files_exist()
+        self.load_configuration()
+        self.load_threat_cache()
+        self.load_enriched_findings()
+        self.logger.info(f"Threat intelligence storage switched to: {self.threat_data_dir}")
+
+    def persist_state(self):
+        """Persist caches before switching networks."""
+        try:
+            self.save_threat_cache()
+            self.save_enriched_findings()
+        except Exception as exc:
+            self.logger.warning(f"Failed to persist threat intelligence state: {exc}")
         
     def setup_intelligence_system(self):
         """Initialize the threat intelligence system"""
         try:
-            os.makedirs(self.intelligence_dir, exist_ok=True)
+            os.makedirs(self.threat_data_dir, exist_ok=True)
             self.ensure_json_files_exist()
             self.load_configuration()
             self.load_threat_cache()
@@ -126,6 +157,7 @@ class ThreatIntelligenceFusion:
     
     def ensure_json_files_exist(self):
         """Ensure all required JSON files exist with proper empty content"""
+        os.makedirs(self.threat_data_dir, exist_ok=True)
         json_files = [
             self.threat_cache_file,
             self.enriched_findings_file

@@ -56,7 +56,6 @@ out/
 build/
 tmp/
 temp/
-data/
 
 # Python
 __pycache__/
@@ -134,9 +133,6 @@ $RECYCLE.BIN/
 *.sln
 *.sw?
 
-# Note: Excluding web/scripts from the general scripts ignore
-scripts
-!web/scripts/
 */certs/
 
 # Bjorn-specific files and directories
@@ -164,9 +160,28 @@ data/output/vulnerabilities/
 data/output/zombies/
 
 # Runtime data files (generated during execution)
+data/ragnar.db
 data/livestatus.csv
 data/netkb.csv
+data/pwnagotchi_status.json
 data/logs/temp_log.txt
+data/networks/*/db/*.db
+data/networks/*/intelligence/*.json
+data/networks/*/threat_intelligence/*.json
+data/networks/*/loot/data_stolen/
+data/networks/*/loot/credentials/
+
+# Intelligence and threat data (runtime - templates are tracked)
+data/intelligence/active_findings.json
+data/intelligence/network_profiles.json
+data/intelligence/resolved_findings.json
+data/threat_intelligence/enriched_findings.json
+data/threat_intelligence/sources_config.json
+data/threat_intelligence/threat_cache.json
+data/networks/*/threat_intelligence/enriched_findings.json
+data/networks/*/threat_intelligence/sources_config.json
+data/networks/*/threat_intelligence/threat_cache.json
+data/network_data/network_unknown_network.csv
 
 # User dictionaries (may contain custom wordlists)
 data/input/dictionary/passwords.txt
@@ -191,4 +206,4 @@ resources/comments/comments.json
 *.backup
 *.bak
 *.orig
-Bjorn.py.original
+web/screen.png

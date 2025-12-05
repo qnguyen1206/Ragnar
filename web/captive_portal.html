@@ -646,55 +646,41 @@
 
         // Connect to WiFi
         async function connectToWiFi(ssid, password) {
-            try {
-                connectBtn.disabled = true;
-                connectBtnText.innerHTML = 'Connecting<span class="spinner"></span>';
-                showStatus('🔌 Connecting to WiFi... Please wait.', 'info');
+            connectBtn.disabled = true;
+            connectBtnText.innerHTML = 'Sending credentials<span class="spinner"></span>';
+            showStatus('📤 Sending WiFi credentials to Ragnar...', 'info');
 
+            try {
                 const response = await fetch('/api/wifi/connect', {
                     method: 'POST',
                     headers: {
                         'Content-Type': 'application/json',
                     },
-                    body: JSON.stringify({ ssid, password })
+                    body: JSON.stringify({ ssid, password }),
+                    // Short timeout - if AP shuts down, we won't get a response
+                    signal: AbortSignal.timeout(5000)
                 });
 
                 const data = await response.json();
-
-                if (data.success) {
-                    showStatus('✅ Successfully connected! Ragnar is now online.', 'success');
-                    connectionAttempted = false;
-                    selectedNetworkKnown = false;
-                    setTimeout(() => {
-                        showStatus('ℹ️ You can now disconnect from this AP. Ragnar is connected to WiFi.', 'info');
-                    }, 3000);
-                } else {
-                    // Connection failed
-                    const errorMessage = data.message || 'Failed to connect. Check password and try again.';
-                    showStatus('❌ ' + errorMessage, 'error');
-                    
-                    // If this was a known network or first attempt without password, show password field
-                    if (selectedNetworkKnown || !password) {
-                        selectedNetworkKnown = false;
-                        showPasswordField();
-                        showPasswordError('⚠️ Authentication failed. Please enter the correct password.');
-                        connectionAttempted = true;
-                    }
-                }
-            } catch (error) {
-                console.error('Error connecting to WiFi:', error);
-                showStatus('❌ Connection failed. Please try again.', 'error');
                 
-                // Show password field on connection error
-                if (selectedNetworkKnown) {
-                    selectedNetworkKnown = false;
-                    showPasswordField();
-                    showPasswordError('⚠️ Connection error. Please enter the password.');
+
+                showStatus('✅ Credentials sent! Ragnar is attempting to connect...', 'success');
+                
+            } catch (error) {
+                if (error.name === 'TypeError' || error.name === 'AbortError' || error.message.includes('fetch')) {
+                    showStatus('✅ Credentials sent! Ragnar is switching to WiFi mode.', 'success');
+                    setTimeout(() => {
+                        showStatus('ℹ️ This portal has closed. Check Ragnar E-paper for connection status and IP. If connection fails, Ragnar will restart AP mode automatically.', 'info');
+                    }, 2000);
+                } else {
+                    // Unexpected error
+                    console.error('Unexpected error:', error);
+                    showStatus('⚠️ Request sent but status unknown. Ragnar should be attempting to connect.', 'info');
                 }
-            } finally {
-                connectBtn.disabled = false;
-                connectBtnText.textContent = 'Connect to WiFi';
             }
+            
+            // Keep button disabled - AP mode is shutting down
+            connectBtnText.textContent = 'Credentials Sent';
         }
 
         // Exit AP Mode

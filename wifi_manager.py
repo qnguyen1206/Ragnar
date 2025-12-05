@@ -19,7 +19,7 @@ import re
 import signal
 from datetime import datetime, timedelta
 from logger import Logger
-from db_manager import DatabaseManager
+from db_manager import get_db
 
 
 class WiFiManager:
@@ -31,7 +31,7 @@ class WiFiManager:
         
         # Initialize database for WiFi caching and analytics
         try:
-            self.db = DatabaseManager()
+            self.db = get_db(currentdir=shared_data.currentdir)
             self.logger.info("WiFi database manager initialized")
         except Exception as e:
             self.logger.error(f"Failed to initialize WiFi database: {e}")
@@ -83,6 +83,11 @@ class WiFiManager:
         self.known_networks = []
         self.available_networks = []
         self.current_ssid = None
+        self._pending_ping_sweep_ssid = None
+        self._ping_sweep_thread = None
+        self._last_ping_sweep_time = 0
+        self._last_ping_sweep_ssid = None
+        self.ping_sweep_cooldown = shared_data.config.get('wifi_ping_sweep_cooldown', 120)
         # Failsafe cycle tracking (cycles with no WiFi and no AP clients)
         # This counter tracks prolonged disconnections (>5 minutes each) to prevent endless loops
         # It will only trigger a reboot after many consecutive long-term failures
@@ -123,6 +128,68 @@ class WiFiManager:
             
         except Exception as e:
             self.logger.error(f"Error loading Wi-Fi config: {e}")
+
+    def _set_current_ssid(self, ssid):
+        """Update current SSID and notify shared storage manager."""
+        self.current_ssid = ssid
+        if hasattr(self.shared_data, 'set_active_network'):
+            try:
+                self.shared_data.set_active_network(ssid)
+            except Exception as exc:
+                self.logger.warning(f"Failed to propagate network change to storage manager: {exc}")
+
+    def _trigger_initial_ping_sweep(self, ssid):
+        """Schedule a post-connection ping sweep to refresh network data."""
+        if not ssid:
+            self.logger.debug("Ping sweep trigger skipped - SSID unavailable")
+            return
+
+        now = time.time()
+        cooldown = max(0, self.ping_sweep_cooldown or 0)
+
+        if (self._last_ping_sweep_ssid == ssid and
+                now - self._last_ping_sweep_time < cooldown):
+            remaining = int(cooldown - (now - self._last_ping_sweep_time))
+            self.logger.info(f"Ping sweep for {ssid} suppressed - cooldown {remaining}s remaining")
+            return
+
+        if self._ping_sweep_thread and self._ping_sweep_thread.is_alive():
+            self.logger.info("Ping sweep already running - skipping additional trigger")
+            return
+
+        self.logger.info(f"Scheduling initial ping sweep for SSID '{ssid}'")
+        self._last_ping_sweep_time = now
+        self._last_ping_sweep_ssid = ssid
+        self._ping_sweep_thread = threading.Thread(
+            target=self._run_initial_ping_sweep,
+            args=(ssid,),
+            daemon=True
+        )
+        self._ping_sweep_thread.start()
+
+    def _run_initial_ping_sweep(self, ssid):
+        """Background worker that runs the lightweight NetworkScanner ping sweep."""
+        try:
+            from actions.scanning import NetworkScanner
+        except ImportError as import_error:
+            self.logger.error(f"Unable to import NetworkScanner for ping sweep: {import_error}")
+            return
+
+        try:
+            scanner = NetworkScanner(self.shared_data)
+            summary = scanner.run_initial_ping_sweep(include_arp_scan=True)
+            if summary:
+                total_hosts = summary.get('arp_hosts', 0) + summary.get('ping_hosts', 0)
+                cidrs = ', '.join(summary.get('target_cidrs', []))
+                self.logger.info(
+                    f"Initial ping sweep for {ssid} completed - {total_hosts} hosts touched across {cidrs}"
+                )
+            else:
+                self.logger.warning(f"Ping sweep for {ssid} finished without summary data")
+        except Exception as exc:
+            import traceback
+            self.logger.error(f"Ping sweep thread failed: {exc}")
+            self.logger.debug(traceback.format_exc())
     
     def save_wifi_config(self):
         """Save Wi-Fi configuration to shared data"""
@@ -327,16 +394,15 @@ class WiFiManager:
         if self.check_wifi_connection():
             self.wifi_connected = True
             self.shared_data.wifi_connected = True
-            self.current_ssid = self.get_current_ssid()
+            self._set_current_ssid(self.get_current_ssid())
+            self._trigger_initial_ping_sweep(self.current_ssid)
             self.logger.info(f"Already connected to Wi-Fi network: {self.current_ssid}")
             self._save_connection_state(self.current_ssid, True)
             self.last_wifi_validation = time.time()
             self.startup_complete = True
             self.endless_loop_active = True
             return
-        
         # Start the endless loop
-        self.endless_loop_active = True
         self.endless_loop_start_time = time.time()
         self.startup_complete = True
         self.logger.info("Endless Loop started - beginning WiFi search phase")
@@ -353,11 +419,12 @@ class WiFiManager:
         if self.check_wifi_connection():
             self.wifi_connected = True
             self.shared_data.wifi_connected = True
-            self.current_ssid = self.get_current_ssid()
+            self._set_current_ssid(self.get_current_ssid())
             self.logger.info(f"Endless Loop: Already connected to {self.current_ssid}")
             self._save_connection_state(self.current_ssid, True)
             self.last_wifi_validation = time.time()
             self.consecutive_validation_cycles_failed = 0
+            self._trigger_initial_ping_sweep(self.current_ssid)
             return True
         
         # Enable WiFi and let Linux/NetworkManager auto-reconnect to known networks
@@ -389,12 +456,13 @@ class WiFiManager:
             if self.check_wifi_connection():
                 self.wifi_connected = True
                 self.shared_data.wifi_connected = True
-                self.current_ssid = self.get_current_ssid()
+                self._set_current_ssid(self.get_current_ssid())
                 self.logger.info(f"Endless Loop: Successfully auto-connected to {self.current_ssid} after {elapsed}s")
                 self._save_connection_state(self.current_ssid, True)
                 self.last_wifi_validation = time.time()
                 self.consecutive_validation_cycles_failed = 0
                 self.no_connection_cycles = 0  # Reset failsafe counter on success
+                self._trigger_initial_ping_sweep(self.current_ssid)
                 return True
             else:
                 self.logger.debug(f"Endless Loop: Waiting for auto-connection... ({elapsed}s/{timeout}s)")
@@ -405,10 +473,11 @@ class WiFiManager:
             self.logger.info("Endless Loop: Strong check indicates WiFi connectivity; aborting AP fallback")
             self.wifi_connected = True
             self.shared_data.wifi_connected = True
-            self.current_ssid = self.get_current_ssid()
+            self._set_current_ssid(self.get_current_ssid())
             self._save_connection_state(self.current_ssid, True)
             self.last_wifi_validation = time.time()
             self.no_connection_cycles = 0
+            self._trigger_initial_ping_sweep(self.current_ssid)
             return True
 
         # No WiFi connected after 1 minute, switch to AP mode
@@ -455,6 +524,7 @@ class WiFiManager:
                     self.logger.warning("Endless Loop: Wi-Fi connection lost!")
                     self._save_connection_state(None, False)
                     self.wifi_validation_failures = 0  # Reset validation failures
+                    self._pending_ping_sweep_ssid = None
                     
                     # Only increment failsafe counter if we're in a problematic state:
                     # - Not in AP mode (as AP mode is the normal recovery mechanism)
@@ -485,6 +555,7 @@ class WiFiManager:
                     self.last_wifi_validation = current_time
                     self.wifi_validation_failures = 0
                     self.no_connection_cycles = 0  # Reset failsafe counter on success
+                    self._pending_ping_sweep_ssid = current_ssid
                     
                     # Clear disconnect timestamp when reconnected
                     if hasattr(self, '_disconnect_timestamp'):
@@ -512,7 +583,11 @@ class WiFiManager:
                 
                 # Update current SSID if connected
                 if self.wifi_connected:
-                    self.current_ssid = self.get_current_ssid()
+                    connected_ssid = self.get_current_ssid()
+                    self._set_current_ssid(connected_ssid)
+                    if self._pending_ping_sweep_ssid:
+                        self._trigger_initial_ping_sweep(self._pending_ping_sweep_ssid)
+                        self._pending_ping_sweep_ssid = None
                 
                 # Periodically save connection state (every 2 minutes)
                 if current_time - last_state_save > 120:
@@ -870,12 +945,35 @@ class WiFiManager:
     def get_current_ssid(self):
         """Get the current connected SSID"""
         try:
-            result = subprocess.run(['nmcli', '-t', '-f', 'ACTIVE,SSID', 'dev', 'wifi'], 
-                                  capture_output=True, text=True, timeout=30)
+            # Method 1: Get SSID from active connection on wlan0 device
+            result = subprocess.run(['nmcli', '-t', '-f', 'GENERAL.CONNECTION', 'dev', 'show', 'wlan0'], 
+                                  capture_output=True, text=True, timeout=10)
+            if result.returncode == 0 and result.stdout.strip():
+                # Extract connection name (which is usually the SSID for WiFi)
+                for line in result.stdout.strip().split('\n'):
+                    if line.startswith('GENERAL.CONNECTION:'):
+                        ssid = line.split(':', 1)[1].strip()
+                        if ssid and ssid != '--':
+                            return ssid
+            
+            # Method 2: Try using iwgetid as fallback
+            try:
+                result = subprocess.run(['iwgetid', '-r'], 
+                                      capture_output=True, text=True, timeout=5)
+                if result.returncode == 0 and result.stdout.strip():
+                    return result.stdout.strip()
+            except FileNotFoundError:
+                pass  # iwgetid not available
+            
+            # Method 3: Parse from nmcli connection show (active connections)
+            result = subprocess.run(['nmcli', '-t', '-f', 'ACTIVE,NAME,TYPE', 'con', 'show'], 
+                                  capture_output=True, text=True, timeout=10)
             if result.returncode == 0:
                 for line in result.stdout.strip().split('\n'):
-                    if line.startswith('yes:'):
-                        return line.split(':', 1)[1]
+                    parts = line.split(':')
+                    if len(parts) >= 3 and parts[0] == 'yes' and '802-11-wireless' in parts[2]:
+                        return parts[1]
+            
             return None
         except Exception as e:
             self.logger.error(f"Error getting current SSID: {e}")
@@ -1371,7 +1469,7 @@ class WiFiManager:
             
             if result.returncode == 0:
                 self.wifi_connected = False
-                self.current_ssid = None
+                self._set_current_ssid(None)
                 self.shared_data.wifi_connected = False
                 self.logger.info("Successfully disconnected from Wi-Fi")
                 return True
@@ -2074,9 +2172,9 @@ port=0
         # Update internal state
         self.wifi_connected = wifi_connected
         if current_ssid:
-            self.current_ssid = current_ssid
+            self._set_current_ssid(current_ssid)
         elif not wifi_connected:
-            self.current_ssid = None
+            self._set_current_ssid(None)
         
         status = {
             'wifi_connected': wifi_connected,

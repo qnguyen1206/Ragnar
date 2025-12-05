@@ -12,6 +12,36 @@ let pendingFileHighlight = null;
 let manualModeActive = false;
 let manualDataPrimed = false;
 let imagesLoaded = false;
+const PWN_STATUS_POLL_INTERVAL = 15000;
+const PWN_STATUS_FAST_INTERVAL = 4000;
+const PWN_LOG_POLL_INTERVAL = 2500;
+let pwnStatus = {
+    state: 'not_installed',
+    message: 'Waiting for status...',
+    phase: 'idle',
+    installed: false,
+    installing: false,
+    mode: 'ragnar',
+    target_mode: 'ragnar',
+    last_switch: '',
+    service_active: false,
+    service_enabled: false,
+    timestamp: null,
+    log_file: null
+};
+let lastPwnState = null;
+let currentPwnStatusInterval = PWN_STATUS_POLL_INTERVAL;
+let pwnLogCursor = 0;
+let pwnLogStreamTimer = null;
+let pwnLogStreaming = false;
+let pwnLogStopTimeout = null;
+let pwnLogActiveFile = null;
+let pwnLogFetchInFlight = false;
+let headlessMode = false;
+const RELEASE_GATE_DEFAULT_MESSAGE = 'A controlled release is rolling out. Updating manually may cause instability.';
+let releaseGateState = { enabled: false, message: RELEASE_GATE_DEFAULT_MESSAGE };
+let releaseGateResolver = null;
+let releaseGatePendingPromise = null;
 
 const configMetadata = {
     manual_mode: {
@@ -266,6 +296,10 @@ const configMetadata = {
         label: "Automatic Resolution",
         description: "Automatically resolve and enrich newly discovered or changed devices."
     },
+    network_max_failed_pings: {
+        label: "Max Failed Pings Before Offline",
+        description: "Number of consecutive failed ping/ARP checks before marking a host as offline (red dot). With ARP scans every 60s, setting this to 5 means ~5 minutes, 15 means ~15 minutes, 30 means ~30 minutes before offline status."
+    },
     ai_enabled: {
         label: "Enable AI Insights",
         description: "Enable AI-powered network analysis and vulnerability insights using OpenAI GPT."
@@ -325,6 +359,8 @@ document.addEventListener('DOMContentLoaded', function() {
     setupAutoRefresh();
     setupEpaperAutoRefresh();
     setupEventListeners();
+    initializePwnUI();
+    initializePwnagotchiVisibility();
 });
 
 
@@ -343,6 +379,7 @@ function initializeSocket() {
         
         socket.emit('request_status');
         socket.emit('request_logs');
+        refreshPwnagotchiStatus({ silent: true });
     });
 
     socket.on('disconnect', function() {
@@ -363,6 +400,14 @@ function initializeSocket() {
 
     socket.on('log_update', function(logs) {
         updateConsole(logs);
+    });
+
+    socket.on('pwnagotchi_status', function(statusPacket) {
+        const previousState = pwnStatus.state;
+        updatePwnagotchiUI(statusPacket);
+        if (statusPacket && statusPacket.state && statusPacket.state !== previousState) {
+            addConsoleMessage(`Pwnagotchi status changed: ${formatPwnStateLabel(statusPacket.state)}`, 'info');
+        }
     });
 
     socket.on('network_update', function(data) {
@@ -498,6 +543,11 @@ function setupEventListeners() {
             window.manualActionPreference = manualActionDropdown.value;
         });
     }
+
+    const automationToggleBtn = document.getElementById('automation-toggle-btn');
+    if (automationToggleBtn) {
+        automationToggleBtn.addEventListener('click', handleAutomationToggle);
+    }
 }
 
 function initializeTabs() {
@@ -597,6 +647,8 @@ function setupAutoRefresh() {
     setTimeout(() => {
         checkForUpdatesQuiet();
     }, 30000); // Check 30 seconds after page load (deferred from 5s)
+
+    setPwnStatusPollInterval(PWN_STATUS_POLL_INTERVAL);
 }
 
 function initializeMobileMenu() {
@@ -757,6 +809,9 @@ async function loadTabData(tabName) {
         case 'connect':
             if (!alreadyPreloaded) {
                 await loadConnectData();
+            } else {
+                await refreshWifiStatus().catch(err => console.warn('WiFi refresh failed:', err));
+                await refreshBluetoothStatus().catch(err => console.warn('Bluetooth refresh failed:', err));
             }
             break;
         case 'pentest':
@@ -776,6 +831,7 @@ async function loadTabData(tabName) {
                     loadVulnerabilityIntel()
                 ]);
             }
+            await refreshPwnagotchiStatus({ silent: true });
             break;
         case 'threat-intel':
             // Always refresh threat intel data when switching to this tab
@@ -804,6 +860,8 @@ async function loadTabData(tabName) {
         case 'config':
             if (!alreadyPreloaded) {
                 await loadConfigData();
+            } else {
+                await refreshPwnagotchiStatus({ silent: true });
             }
             break;
     }
@@ -814,7 +872,7 @@ async function loadDashboardData() {
         // OPTIMIZATION: Show loading state with pulse animation
         const statsElements = [
             'target-count', 'target-total-count', 'target-inactive-count',
-            'port-count', 'vuln-count', 'cred-count', 'level-count', 'points-count'
+            'port-count', 'vuln-count', 'cred-count', 'level-count', 'scanned-network-count', 'points-count'
         ];
         
         // Add subtle pulse animation to show loading
@@ -845,7 +903,7 @@ async function loadDashboardData() {
         // Remove pulse animation on error too
         const statsElements = [
             'target-count', 'target-total-count', 'target-inactive-count',
-            'port-count', 'vuln-count', 'cred-count', 'level-count', 'points-count'
+            'port-count', 'vuln-count', 'cred-count', 'level-count', 'scanned-network-count', 'points-count'
         ];
         statsElements.forEach(id => {
             const el = document.getElementById(id);
@@ -953,6 +1011,7 @@ function updateDashboardStats(stats) {
     const credCount = toNumber(stats.credential_count ?? stats.cred_count, 0);
     const level = toNumber(stats.level ?? stats.levelnbr, 0);
     const points = toNumber(stats.points ?? stats.coins, 0);
+    const scannedNetworks = Math.max(0, toNumber(stats.scanned_network_count ?? stats.networks_scanned, 0));
 
     updateElement('target-count', activeTargets);
     scaleStatNumber('target-count', activeTargets);
@@ -980,8 +1039,11 @@ function updateDashboardStats(stats) {
     scaleStatNumber('cred-count', credCount);
     updateElement('level-count', level);
     scaleStatNumber('level-count', level);
+    updateElement('scanned-network-count', scannedNetworks);
+    scaleStatNumber('scanned-network-count', scannedNetworks);
+    updateElement('dashboard-scanned-network-count', scannedNetworks);
+    scaleStatNumber('dashboard-scanned-network-count', scannedNetworks);
     updateElement('points-count', points);
-    scaleStatNumber('points-count', points);
 
     const activeSummary = totalTargets > 0 ? `${activeTargets}/${totalTargets} active` : `${activeTargets} active`;
     const newSummary = newTargets > 0 ? `${newTargets} new` : 'No new targets';
@@ -997,9 +1059,34 @@ async function loadNetworkData() {
     try {
         // Use the new stable network data endpoint
         await loadStableNetworkData();
+        
+        // Update the status detection info banner with current config
+        updateNetworkStatusBanner();
     } catch (error) {
         console.error('Error loading network data:', error);
         addConsoleMessage('Failed to load network data', 'error');
+    }
+}
+
+async function updateNetworkStatusBanner() {
+    try {
+        const configResponse = await fetchAPI('/api/config');
+        if (configResponse && configResponse.success) {
+            const maxFailedPings = configResponse.config.network_max_failed_pings || 15;
+            const offlineMinutes = Math.round((maxFailedPings * 60) / 60); // 60 second ARP scans
+            
+            const failedPingsEl = document.getElementById('network-status-failed-pings');
+            const offlineTimeEl = document.getElementById('network-status-offline-time');
+            
+            if (failedPingsEl) {
+                failedPingsEl.textContent = maxFailedPings;
+            }
+            if (offlineTimeEl) {
+                offlineTimeEl.textContent = `${offlineMinutes} minutes`;
+            }
+        }
+    } catch (error) {
+        console.debug('Could not update network status banner:', error);
     }
 }
 
@@ -2234,10 +2321,18 @@ function renderHostRow(normalized) {
     const hostname = normalized.hostname ? escapeHtml(normalized.hostname) : 'Unknown';
     const mac = normalized.mac ? escapeHtml(normalized.mac) : 'Unknown';
     const ip = escapeHtml(normalized.ip);
+    
+    // Add a visual status dot indicator
+    const isActive = normalized.statusClass.includes('green');
+    const isInactive = normalized.statusClass.includes('red');
+    const dotColor = isActive ? 'bg-green-500' : (isInactive ? 'bg-red-500' : 'bg-yellow-500');
+    const statusDot = `<span class="inline-block w-2 h-2 rounded-full ${dotColor} mr-1"></span>`;
 
     return `
         <td class="py-3 px-4" data-label="Status">
-            <span class="px-2 py-1 rounded text-xs ${normalized.statusClass}">${escapeHtml(normalized.statusText)}</span>
+            <span class="px-2 py-1 rounded text-xs ${normalized.statusClass} flex items-center">
+                ${statusDot}${escapeHtml(normalized.statusText)}
+            </span>
         </td>
         <td class="py-3 px-4 font-mono" data-label="IP Address">${ip}</td>
         <td class="py-3 px-4" data-label="Hostname">${hostname || 'Unknown'}</td>
@@ -2827,12 +2922,639 @@ async function loadConfigData() {
         
         // Update vulnerability count in data management card
         updateVulnerabilityCount();
+        await refreshPwnagotchiStatus({ silent: true });
         
         // Also check for updates when loading config tab
         checkForUpdates();
     } catch (error) {
         console.error('Error loading config:', error);
     }
+}
+
+function setPwnStatusPollInterval(intervalMs = PWN_STATUS_POLL_INTERVAL) {
+    const normalized = Math.max(2000, intervalMs || PWN_STATUS_POLL_INTERVAL);
+
+    if (currentPwnStatusInterval === normalized && autoRefreshIntervals.pwn) {
+        return;
+    }
+
+    if (autoRefreshIntervals.pwn) {
+        clearInterval(autoRefreshIntervals.pwn);
+    }
+
+    currentPwnStatusInterval = normalized;
+    autoRefreshIntervals.pwn = setInterval(() => {
+        if (currentTab === 'config' || currentTab === 'discovered') {
+            refreshPwnagotchiStatus({ silent: true });
+        }
+    }, normalized);
+}
+
+function initializePwnUI() {
+    const badge = document.getElementById('pwn-status-badge');
+    if (!badge) {
+        return;
+    }
+
+    const installBtn = document.getElementById('pwn-install-btn');
+    if (installBtn) {
+        installBtn.addEventListener('click', handlePwnInstallClick);
+    }
+
+    const swapToPwnBtn = document.getElementById('pwn-swap-to-pwn-btn');
+    if (swapToPwnBtn) {
+        swapToPwnBtn.addEventListener('click', () => handlePwnSwap('pwnagotchi'));
+    }
+
+    const refreshBtn = document.getElementById('pwn-refresh-btn');
+    if (refreshBtn) {
+        refreshBtn.addEventListener('click', () => refreshPwnagotchiStatus());
+    }
+
+    const logRefreshBtn = document.getElementById('pwn-log-refresh-btn');
+    if (logRefreshBtn) {
+        logRefreshBtn.addEventListener('click', () => fetchPwnLogs({ initial: pwnLogCursor === 0 }));
+    }
+
+    updatePwnButtons();
+    resetPwnLogState();
+    refreshPwnagotchiStatus({ silent: true });
+}
+
+async function refreshPwnagotchiStatus(options = {}) {
+    const silent = Boolean(options && options.silent);
+    try {
+        const response = await fetchAPI('/api/pwnagotchi/status');
+        if (response && response.success && response.status) {
+            updatePwnagotchiUI(response.status);
+            return response.status;
+        }
+        if (!silent) {
+            addConsoleMessage('Unable to load Pwnagotchi status', 'warning');
+        }
+    } catch (error) {
+        console.error('Error refreshing Pwnagotchi status:', error);
+        if (!silent) {
+            addConsoleMessage(`Pwnagotchi status error: ${error.message}`, 'error');
+        }
+    }
+    return null;
+}
+
+function updatePwnagotchiUI(status = {}) {
+    if (!status || typeof status !== 'object') {
+        return;
+    }
+
+    const wasInstalling = Boolean(pwnStatus.installing);
+
+    pwnStatus = {
+        ...pwnStatus,
+        ...status
+    };
+    pwnStatus.installing = Boolean(pwnStatus.installing);
+
+    const visuals = getPwnStateVisuals(pwnStatus);
+
+    const badge = document.getElementById('pwn-status-badge');
+    if (badge) {
+        badge.textContent = visuals.badgeText;
+        badge.className = `text-xs font-semibold uppercase tracking-wide px-3 py-1 rounded-full ${visuals.badgeClass}`;
+    }
+
+    updateElement('pwn-status-message', pwnStatus.message || 'Waiting for status...');
+
+    const modeLabel = formatPwnModeLabel(pwnStatus.mode);
+    updateElement('pwn-mode-value', modeLabel);
+    const modeElement = document.getElementById('pwn-mode-value');
+    if (modeElement) {
+        modeElement.className = `font-semibold ${pwnStatus.mode === 'pwnagotchi' ? 'text-fuchsia-300' : 'text-green-400'}`;
+    }
+
+    updateElement('pwn-target-value', formatPwnModeLabel(pwnStatus.target_mode));
+    updateElement('pwn-phase-value', formatPwnPhaseLabel(pwnStatus.phase));
+
+    updateElement('pwn-service-state', pwnStatus.service_active ? 'Running' : 'Stopped');
+    const serviceStateElement = document.getElementById('pwn-service-state');
+    if (serviceStateElement) {
+        serviceStateElement.className = `font-semibold ${pwnStatus.service_active ? 'text-green-400' : 'text-slate-200'}`;
+    }
+
+    updateElement('pwn-service-enabled', pwnStatus.service_enabled ? 'Enabled' : 'Disabled');
+    const serviceEnabledElement = document.getElementById('pwn-service-enabled');
+    if (serviceEnabledElement) {
+        serviceEnabledElement.className = `font-semibold ${pwnStatus.service_enabled ? 'text-green-300' : 'text-slate-200'}`;
+    }
+
+    updateElement('pwn-last-switch-value', pwnStatus.last_switch ? formatTimestamp(pwnStatus.last_switch) : 'Never');
+    updateElement('pwn-last-updated', pwnStatus.timestamp ? formatTimestamp(pwnStatus.timestamp) : new Date().toLocaleString());
+
+    const alertBox = document.getElementById('pwn-status-alert');
+    if (alertBox) {
+        if (pwnStatus.message) {
+            alertBox.className = `mt-4 p-4 rounded-lg border text-sm text-gray-200 ${visuals.alertClass}`;
+            alertBox.innerHTML = `
+                <div class="flex items-start gap-3">
+                    <div class="text-xl">${visuals.icon}</div>
+                    <div>
+                        <p class="font-semibold">${escapeHtml(pwnStatus.message)}</p>
+                        <p class="text-xs text-gray-300 mt-1">Phase: ${formatPwnPhaseLabel(pwnStatus.phase)} | Mode: ${modeLabel}</p>
+                    </div>
+                </div>
+            `;
+            alertBox.classList.remove('hidden');
+        } else {
+            alertBox.classList.add('hidden');
+        }
+    }
+
+    updatePwnDiscoveredCard(pwnStatus, visuals);
+    updatePwnButtons();
+    if (pwnStatus.installing && !wasInstalling) {
+        resetPwnLogState('Installer output will stream here during installation.');
+    }
+    ensurePwnLogStreamingForStatus(pwnStatus);
+    lastPwnState = pwnStatus.state;
+}
+
+function updatePwnButtons() {
+    const installBtn = document.getElementById('pwn-install-btn');
+    if (installBtn) {
+        const label = pwnStatus.installed ? 'Reinstall Pwnagotchi' : 'Install Pwnagotchi';
+        installBtn.textContent = pwnStatus.installing ? 'Installing...' : label;
+        installBtn.disabled = pwnStatus.installing;
+        installBtn.classList.toggle('opacity-70', pwnStatus.installing);
+        installBtn.classList.toggle('cursor-not-allowed', pwnStatus.installing);
+    }
+
+    const swapToPwnBtn = document.getElementById('pwn-swap-to-pwn-btn');
+    if (swapToPwnBtn) {
+        const busySwitching = pwnStatus.state === 'switching';
+        const switchingToPwn = busySwitching && pwnStatus.target_mode === 'pwnagotchi';
+        const disableSwapToPwn = !pwnStatus.installed || pwnStatus.installing || busySwitching;
+        swapToPwnBtn.disabled = disableSwapToPwn;
+        swapToPwnBtn.textContent = switchingToPwn ? 'Switch Scheduled...' : 'Switch to Pwnagotchi';
+        swapToPwnBtn.classList.toggle('opacity-60', disableSwapToPwn);
+        swapToPwnBtn.classList.toggle('cursor-not-allowed', disableSwapToPwn);
+    }
+
+    const swapHint = document.getElementById('pwn-swap-hint');
+    if (swapHint) {
+        let hint = 'Ragnar UI becomes unavailable once the service stops. Plan to reboot via SSH to come back.';
+        if (!pwnStatus.installed) {
+            hint = 'Install Pwnagotchi first to enable service swapping.';
+        } else if (pwnStatus.installing) {
+            hint = 'Installer is still running. Swapping will be available once it completes.';
+        } else if (pwnStatus.state === 'switching') {
+            hint = 'Switch scheduled. Wait for the service hand-off to complete before sending another request.';
+        }
+        swapHint.textContent = hint;
+    }
+}
+
+function updatePwnDiscoveredCard(status, visuals = null) {
+    if (!status || typeof status !== 'object') {
+        return;
+    }
+    const container = document.getElementById('pwn-discovered-card');
+    if (!container) {
+        return;
+    }
+
+    if (!arePwnFeaturesEnabled()) {
+        container.classList.add('hidden');
+        return;
+    }
+
+    const shouldShow = Boolean(status.installing || status.installed);
+    if (!shouldShow) {
+        container.classList.add('hidden');
+        return;
+    }
+
+    container.classList.remove('hidden');
+    const resolvedVisuals = visuals || getPwnStateVisuals(status);
+
+    const badge = document.getElementById('pwn-card-badge');
+    if (badge) {
+        badge.textContent = resolvedVisuals.badgeText;
+        badge.className = `text-xs font-semibold uppercase tracking-wide px-3 py-1 rounded-full ${resolvedVisuals.badgeClass}`;
+    }
+
+    updateElement('pwn-card-message', status.message || 'Waiting for status...');
+
+    const modeElement = document.getElementById('pwn-card-mode');
+    if (modeElement) {
+        modeElement.textContent = formatPwnModeLabel(status.mode);
+        modeElement.className = `text-xl font-semibold ${status.mode === 'pwnagotchi' ? 'text-fuchsia-300' : 'text-green-400'}`;
+    }
+
+    updateElement('pwn-card-phase', formatPwnPhaseLabel(status.phase));
+
+    const serviceEl = document.getElementById('pwn-card-service');
+    if (serviceEl) {
+        serviceEl.textContent = status.service_active ? 'Running' : 'Stopped';
+        serviceEl.className = `text-xl font-semibold ${status.service_active ? 'text-green-400' : 'text-slate-200'}`;
+    }
+
+    const enabledEl = document.getElementById('pwn-card-enabled');
+    if (enabledEl) {
+        enabledEl.textContent = status.service_enabled ? 'Yes' : 'No';
+        enabledEl.className = status.service_enabled ? 'text-green-300 font-semibold' : 'text-slate-200 font-semibold';
+    }
+
+    updateElement('pwn-card-target', formatPwnModeLabel(status.target_mode));
+    updateElement('pwn-card-last-switch', status.last_switch ? formatTimestamp(status.last_switch) : 'Never');
+    updateElement('pwn-card-updated', `Updated: ${status.timestamp ? formatTimestamp(status.timestamp) : new Date().toLocaleString()}`);
+}
+
+function resetPwnLogState(message) {
+    pwnLogCursor = 0;
+    pwnLogActiveFile = null;
+    clearPwnLogViewer(message || 'Installer output will stream here during installation.');
+    updatePwnLogPath(null);
+    setPwnLogIndicator(false);
+}
+
+function clearPwnLogViewer(message) {
+    const viewer = document.getElementById('pwn-log-viewer');
+    const placeholder = document.getElementById('pwn-log-empty');
+    if (!viewer || !placeholder) {
+        return;
+    }
+    viewer.querySelectorAll('[data-pwn-log-line="true"]').forEach(line => line.remove());
+    if (message) {
+        placeholder.textContent = message;
+    }
+    placeholder.classList.remove('hidden');
+}
+
+function setPwnLogIndicator(active) {
+    const indicator = document.getElementById('pwn-log-stream-indicator');
+    if (!indicator) {
+        return;
+    }
+    indicator.classList.toggle('hidden', !active);
+}
+
+function updatePwnLogPath(path) {
+    const pathElement = document.getElementById('pwn-log-path');
+    if (!pathElement) {
+        return;
+    }
+    if (path) {
+        pathElement.textContent = path;
+        pathElement.classList.remove('text-gray-500');
+    } else {
+        pathElement.textContent = 'Log path will appear once the installer starts.';
+        pathElement.classList.add('text-gray-500');
+    }
+}
+
+function appendPwnLogEntries(lines = []) {
+    const viewer = document.getElementById('pwn-log-viewer');
+    if (!viewer || !Array.isArray(lines) || lines.length === 0) {
+        return;
+    }
+    const placeholder = document.getElementById('pwn-log-empty');
+    if (placeholder) {
+        placeholder.classList.add('hidden');
+    }
+
+    const shouldStick = (viewer.scrollHeight - viewer.clientHeight - viewer.scrollTop) < 40;
+
+    lines.forEach(line => {
+        const row = document.createElement('div');
+        row.dataset.pwnLogLine = 'true';
+        row.className = `whitespace-pre-wrap break-words leading-snug ${getPwnLogLineClass(line)}`;
+        row.textContent = line || ' ';
+        viewer.appendChild(row);
+    });
+
+    trimPwnLogBuffer();
+
+    if (shouldStick) {
+        viewer.scrollTop = viewer.scrollHeight;
+    }
+}
+
+function trimPwnLogBuffer(limit = 600) {
+    const viewer = document.getElementById('pwn-log-viewer');
+    if (!viewer) {
+        return;
+    }
+    const lines = viewer.querySelectorAll('[data-pwn-log-line="true"]');
+    if (lines.length <= limit) {
+        return;
+    }
+    const removeCount = lines.length - limit;
+    for (let i = 0; i < removeCount; i++) {
+        lines[i].remove();
+    }
+}
+
+function getPwnLogLineClass(line = '') {
+    const normalized = line.toLowerCase();
+    if (normalized.includes('error') || normalized.includes('failed') || normalized.includes('[err')) {
+        return 'text-red-300';
+    }
+    if (normalized.includes('warn')) {
+        return 'text-yellow-200';
+    }
+    if (normalized.includes('info') || normalized.includes('[info')) {
+        return 'text-blue-200';
+    }
+    return 'text-gray-200';
+}
+
+function startPwnLogStreaming(options = {}) {
+    const viewer = document.getElementById('pwn-log-viewer');
+    if (!viewer) {
+        return;
+    }
+    if (pwnLogStreamTimer) {
+        return;
+    }
+    if (pwnLogStopTimeout) {
+        clearTimeout(pwnLogStopTimeout);
+        pwnLogStopTimeout = null;
+    }
+    pwnLogStreaming = true;
+    setPwnLogIndicator(true);
+    fetchPwnLogs({ initial: Boolean(options.initial) || pwnLogCursor === 0, silent: true });
+    pwnLogStreamTimer = setInterval(() => fetchPwnLogs({ silent: true }), PWN_LOG_POLL_INTERVAL);
+}
+
+function stopPwnLogStreaming() {
+    if (pwnLogStreamTimer) {
+        clearInterval(pwnLogStreamTimer);
+        pwnLogStreamTimer = null;
+    }
+    pwnLogStreaming = false;
+    setPwnLogIndicator(false);
+}
+
+function schedulePwnLogStop() {
+    if (pwnLogStopTimeout) {
+        return;
+    }
+    pwnLogStopTimeout = setTimeout(() => {
+        stopPwnLogStreaming();
+        pwnLogStopTimeout = null;
+    }, 12000);
+}
+
+function setPwnLogEmptyMessage(message) {
+    const placeholder = document.getElementById('pwn-log-empty');
+    if (!placeholder) {
+        return;
+    }
+    placeholder.textContent = message;
+    placeholder.classList.remove('hidden');
+}
+
+async function fetchPwnLogs(options = {}) {
+    if (pwnLogFetchInFlight) {
+        return;
+    }
+
+    const viewer = document.getElementById('pwn-log-viewer');
+    if (!viewer) {
+        return;
+    }
+
+    pwnLogFetchInFlight = true;
+
+    try {
+        const params = new URLSearchParams();
+        if (pwnLogCursor > 0 && !options.initial) {
+            params.set('cursor', pwnLogCursor.toString());
+        } else {
+            params.set('tail', '8192');
+        }
+
+        const result = await fetchAPI(`/api/pwnagotchi/logs?${params.toString()}`);
+
+        if (!result || result.success === false) {
+            if (!options.silent) {
+                setPwnLogEmptyMessage((result && result.error) ? result.error : 'Installer log not available yet');
+            }
+            if (!result || !result.installing) {
+                schedulePwnLogStop();
+            }
+            return;
+        }
+
+        if (typeof result.cursor === 'number') {
+            pwnLogCursor = result.cursor;
+        }
+
+        if (result.file && result.file !== pwnLogActiveFile) {
+            pwnLogActiveFile = result.file;
+            clearPwnLogViewer('Streaming installer output…');
+            updatePwnLogPath(result.file);
+        }
+
+        if (Array.isArray(result.entries) && result.entries.length > 0) {
+            appendPwnLogEntries(result.entries);
+        } else if (!options.silent && !pwnLogStreaming) {
+            setPwnLogEmptyMessage('No installer activity yet.');
+        }
+
+        if (!result.installing) {
+            schedulePwnLogStop();
+        }
+
+    } catch (error) {
+        console.error('Error fetching Pwnagotchi logs:', error);
+        if (!options.silent) {
+            setPwnLogEmptyMessage(`Failed to load installer log (${error.message})`);
+        }
+    } finally {
+        pwnLogFetchInFlight = false;
+    }
+}
+
+function ensurePwnLogStreamingForStatus(status) {
+    if (!status) {
+        return;
+    }
+
+    if (status.log_file && status.log_file !== pwnLogActiveFile) {
+        pwnLogActiveFile = status.log_file;
+        updatePwnLogPath(status.log_file);
+    }
+
+    if (status.installing) {
+        setPwnStatusPollInterval(PWN_STATUS_FAST_INTERVAL);
+        startPwnLogStreaming({ initial: pwnLogCursor === 0 });
+    } else {
+        setPwnStatusPollInterval(PWN_STATUS_POLL_INTERVAL);
+        if (pwnLogStreaming) {
+            schedulePwnLogStop();
+        }
+    }
+}
+
+function getPwnStateVisuals(status) {
+    const state = (status.state || 'not_installed').toLowerCase();
+    if (state.includes('fail') || state.includes('error')) {
+        return {
+            badgeText: 'Error',
+            badgeClass: 'bg-red-700 text-red-100',
+            alertClass: 'border-red-500 bg-red-900/30',
+            icon: '⚠️'
+        };
+    }
+    if (status.installing || ['preflight', 'dependencies', 'python', 'installing'].includes(state)) {
+        return {
+            badgeText: 'Installing',
+            badgeClass: 'bg-yellow-700 text-yellow-100',
+            alertClass: 'border-yellow-500 bg-yellow-900/30',
+            icon: '⏳'
+        };
+    }
+    if (state === 'switching') {
+        return {
+            badgeText: 'Switching',
+            badgeClass: 'bg-orange-700 text-orange-100',
+            alertClass: 'border-orange-500 bg-orange-900/30',
+            icon: '🔄'
+        };
+    }
+    if (state === 'running') {
+        return {
+            badgeText: 'Running',
+            badgeClass: 'bg-green-700 text-green-100',
+            alertClass: 'border-green-500 bg-green-900/30',
+            icon: '✅'
+        };
+    }
+    if (state === 'installed') {
+        return {
+            badgeText: 'Installed',
+            badgeClass: 'bg-blue-700 text-blue-100',
+            alertClass: 'border-blue-500 bg-blue-900/30',
+            icon: 'ℹ️'
+        };
+    }
+    return {
+        badgeText: 'Not Installed',
+        badgeClass: 'bg-slate-700 text-slate-200',
+        alertClass: 'border-slate-700 bg-slate-900',
+        icon: 'ℹ️'
+    };
+}
+
+function formatPwnStateLabel(state) {
+    if (!state) {
+        return 'Unknown';
+    }
+    return state.replace(/_/g, ' ').replace(/\b\w/g, char => char.toUpperCase());
+}
+
+function formatPwnModeLabel(mode) {
+    return mode === 'pwnagotchi' ? 'Pwnagotchi' : 'Ragnar';
+}
+
+function formatPwnPhaseLabel(phase) {
+    if (!phase) {
+        return 'Idle';
+    }
+    return phase.replace(/_/g, ' ').replace(/\b\w/g, char => char.toUpperCase());
+}
+
+async function handlePwnInstallClick() {
+    if (pwnStatus.installing) {
+        addConsoleMessage('Pwnagotchi installer already running', 'warning');
+        return;
+    }
+
+    const installBtn = document.getElementById('pwn-install-btn');
+    if (installBtn) {
+        installBtn.disabled = true;
+        installBtn.textContent = 'Starting installer...';
+        installBtn.classList.add('opacity-70', 'cursor-not-allowed');
+    }
+
+    resetPwnLogState('Installer requested. Waiting for output...');
+    startPwnLogStreaming({ initial: true });
+
+    try {
+        const result = await postPwnAPI('/api/pwnagotchi/install', {});
+        addConsoleMessage('Pwnagotchi installer started', 'success');
+        if (result && result.status) {
+            updatePwnagotchiUI(result.status);
+        } else {
+            refreshPwnagotchiStatus({ silent: true });
+        }
+    } catch (error) {
+        console.error('Failed to start Pwnagotchi installer:', error);
+        addConsoleMessage(`Install failed: ${error.message}`, 'error');
+        stopPwnLogStreaming();
+        setPwnLogEmptyMessage('Installer failed to start. Check Ragnar logs for details.');
+    } finally {
+        updatePwnButtons();
+    }
+}
+
+async function handlePwnSwap(targetMode) {
+    const normalized = targetMode === 'pwnagotchi' ? 'pwnagotchi' : 'ragnar';
+
+    if (normalized === 'pwnagotchi' && !pwnStatus.installed) {
+        addConsoleMessage('Install Pwnagotchi before swapping', 'warning');
+        return;
+    }
+
+    const buttonId = normalized === 'pwnagotchi' ? 'pwn-swap-to-pwn-btn' : 'pwn-swap-to-ragnar-btn';
+    const button = document.getElementById(buttonId);
+    if (button) {
+        button.disabled = true;
+        button.textContent = 'Scheduling switch...';
+        button.classList.add('opacity-60', 'cursor-not-allowed');
+    }
+
+    try {
+        const result = await postPwnAPI('/api/pwnagotchi/swap', { target: normalized });
+        const message = (result && result.message) ? result.message : `Switch scheduled to ${formatPwnModeLabel(normalized)}`;
+        addConsoleMessage(message, 'info');
+        if (result && result.status) {
+            updatePwnagotchiUI(result.status);
+        } else {
+            refreshPwnagotchiStatus({ silent: true });
+        }
+    } catch (error) {
+        console.error('Failed to schedule Pwnagotchi swap:', error);
+        addConsoleMessage(`Swap failed: ${error.message}`, 'error');
+    } finally {
+        updatePwnButtons();
+    }
+}
+
+async function postPwnAPI(endpoint, payload = {}) {
+    const response = await fetch(endpoint, {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json'
+        },
+        body: JSON.stringify(payload)
+    });
+
+    let data = null;
+    try {
+        data = await response.json();
+    } catch (error) {
+        data = null;
+    }
+
+    if (!response.ok || (data && data.success === false)) {
+        const errorMessage = data && (data.error || data.message)
+            ? (data.error || data.message)
+            : `Request failed (${response.status})`;
+        throw new Error(errorMessage);
+    }
+
+    return data || { success: true };
 }
 
 async function loadConnectData() {
@@ -2858,6 +3580,85 @@ async function loadFilesData() {
         // Don't automatically load images - user must click "Load Images" button
     } catch (error) {
         console.error('Error loading files data:', error);
+    }
+}
+
+// ============================================================================
+// PWNAGOTCHI VISIBILITY MANAGEMENT
+// ============================================================================
+
+function arePwnFeaturesEnabled() {
+    return localStorage.getItem('pwnagotchi-enabled') === 'true';
+}
+
+function applyPwnVisibilityPreference(isEnabled) {
+    const pwnSection = document.getElementById('pwnagotchi-section');
+    if (pwnSection) {
+        pwnSection.style.display = isEnabled ? 'block' : 'none';
+    }
+    updatePwnDiscoveredCard(pwnStatus);
+}
+
+function togglePwnagotchiVisibility() {
+    const checkbox = document.getElementById('pwnagotchi-enabled');
+    if (!checkbox) {
+        return;
+    }
+
+     if (checkbox.disabled) {
+         checkbox.checked = false;
+         return;
+     }
+
+    const isEnabled = checkbox.checked;
+    localStorage.setItem('pwnagotchi-enabled', isEnabled ? 'true' : 'false');
+    applyPwnVisibilityPreference(isEnabled);
+}
+
+function initializePwnagotchiVisibility() {
+    const checkbox = document.getElementById('pwnagotchi-enabled');
+    if (!checkbox) {
+        return;
+    }
+
+    const isEnabled = arePwnFeaturesEnabled();
+    checkbox.checked = isEnabled;
+    applyPwnVisibilityPreference(isEnabled);
+}
+
+function updatePwnToggleAvailability(isHeadless) {
+    headlessMode = Boolean(isHeadless);
+    const checkbox = document.getElementById('pwnagotchi-enabled');
+    if (!checkbox) {
+        return;
+    }
+
+    const wrapper = document.getElementById('pwn-toggle-wrapper');
+    const warning = document.getElementById('pwn-headless-warning');
+
+    if (headlessMode) {
+        if (checkbox.checked) {
+            checkbox.checked = false;
+            localStorage.setItem('pwnagotchi-enabled', 'false');
+            applyPwnVisibilityPreference(false);
+        }
+        checkbox.disabled = true;
+        checkbox.setAttribute('aria-disabled', 'true');
+        if (wrapper) {
+            wrapper.classList.add('cursor-not-allowed', 'opacity-60', 'pointer-events-none');
+        }
+        if (warning) {
+            warning.classList.remove('hidden');
+        }
+    } else {
+        checkbox.disabled = false;
+        checkbox.removeAttribute('aria-disabled');
+        if (wrapper) {
+            wrapper.classList.remove('cursor-not-allowed', 'opacity-60', 'pointer-events-none');
+        }
+        if (warning) {
+            warning.classList.add('hidden');
+        }
     }
 }
 
@@ -3051,6 +3852,80 @@ function displayCurrentProfile(config) {
 // SYSTEM MANAGEMENT FUNCTIONS
 // ============================================================================
 
+function updateReleaseGateState(payload = {}) {
+    const enabled = Boolean(payload && payload.enabled);
+    const incomingMessage = typeof (payload && payload.message) === 'string' ? payload.message.trim() : '';
+    const message = incomingMessage || RELEASE_GATE_DEFAULT_MESSAGE;
+    releaseGateState = { enabled, message };
+
+    const updateBtn = document.getElementById('update-btn');
+    if (updateBtn) {
+        updateBtn.dataset.releaseGate = enabled ? 'true' : 'false';
+        ['ring-2', 'ring-yellow-500/50', 'ring-offset-2', 'ring-offset-slate-900'].forEach(cls => {
+            if (enabled) {
+                updateBtn.classList.add(cls);
+            } else {
+                updateBtn.classList.remove(cls);
+            }
+        });
+    }
+
+    if (!enabled && releaseGateResolver) {
+        const resolver = releaseGateResolver;
+        releaseGateResolver = null;
+        releaseGatePendingPromise = null;
+        hideReleaseGateModal();
+        resolver(true);
+    }
+}
+
+function showReleaseGateModal() {
+    const modal = document.getElementById('release-gate-modal');
+    const messageEl = document.getElementById('release-gate-modal-message');
+    if (messageEl) {
+        messageEl.textContent = releaseGateState.message || RELEASE_GATE_DEFAULT_MESSAGE;
+    }
+    if (modal) {
+        modal.classList.remove('hidden');
+        modal.classList.add('flex');
+    }
+}
+
+function hideReleaseGateModal() {
+    const modal = document.getElementById('release-gate-modal');
+    if (modal) {
+        modal.classList.add('hidden');
+        modal.classList.remove('flex');
+    }
+}
+
+function ensureReleaseGateAcknowledged() {
+    if (!releaseGateState.enabled) {
+        return Promise.resolve(true);
+    }
+
+    if (releaseGatePendingPromise) {
+        showReleaseGateModal();
+        return releaseGatePendingPromise;
+    }
+
+    releaseGatePendingPromise = new Promise(resolve => {
+        releaseGateResolver = resolve;
+        showReleaseGateModal();
+    });
+    return releaseGatePendingPromise;
+}
+
+function handleReleaseGateDecision(allowUpdate) {
+    hideReleaseGateModal();
+    if (releaseGateResolver) {
+        const resolver = releaseGateResolver;
+        releaseGateResolver = null;
+        releaseGatePendingPromise = null;
+        resolver(Boolean(allowUpdate));
+    }
+}
+
 async function checkForUpdates() {
     try {
         const updateBtn = document.getElementById('update-btn');
@@ -3114,17 +3989,8 @@ async function checkForUpdates() {
             localStateMessages.push(`${modifiedCount} local change${modifiedCount === 1 ? '' : 's'}`);
         }
 
-        if (gitStatus.has_stash) {
-            const stashCount = gitStatus.stash_entries || 0;
-            localStateMessages.push(`${stashCount} stash entr${stashCount === 1 ? 'y' : 'ies'}`);
-        }
-
         if (gitStatus.status_error) {
             localStateMessages.push(`git status error: ${gitStatus.status_error}`);
-        }
-
-        if (localStateMessages.length) {
-            infoMessage = `${infoMessage} Local state: ${localStateMessages.join(' • ')}.`;
         }
 
         updateElement('update-info', infoMessage);
@@ -3147,15 +4013,13 @@ async function checkForUpdates() {
         if (data.updates_available && data.commits_behind > 0 && updateBtn) {
             if (gitStatus.is_dirty) {
                 updateBtn.onclick = autoStashAndUpdate;
-                updateBtn.className = 'w-full bg-yellow-600 hover:bg-yellow-700 text-white py-2 px-4 rounded transition-colors';
-                updateElement('update-btn-text', 'Update');
-                addConsoleMessage('Local edits detected. Ragnar can stash them automatically before updating.', 'info');
+                updateBtn.className = 'w-full bg-green-600 hover:bg-green-700 text-white py-2 px-4 rounded transition-colors';
+                updateElement('update-btn-text', 'Update System');
+                addConsoleMessage('Local edits detected. Ragnar will handle them automatically during the update.', 'info');
             } else {
                 updateBtn.onclick = performUpdate;
-                updateElement('update-btn-text', gitStatus.has_stash ? 'Update' : 'Update System');
+                updateElement('update-btn-text', 'Update System');
             }
-        } else if (gitStatus.has_stash && updateBtn) {
-            updateElement('update-btn-text', 'Update');
         }
         
     } catch (error) {
@@ -3218,6 +4082,12 @@ async function fixGitConfig() {
 }
 
 async function performUpdate() {
+    const gateApproved = await ensureReleaseGateAcknowledged();
+    if (!gateApproved) {
+        addConsoleMessage('Update postponed until the release window opens.', 'info');
+        return;
+    }
+
     if (!confirm('This will update the system and restart the service. Continue?')) {
         return;
     }
@@ -3259,7 +4129,13 @@ async function performUpdate() {
 }
 
 async function autoStashAndUpdate() {
-    if (!confirm('This will stash local changes (including untracked files), update Ragnar, and drop the temporary stash. Continue?')) {
+    const gateApproved = await ensureReleaseGateAcknowledged();
+    if (!gateApproved) {
+        addConsoleMessage('Update postponed until the release window opens.', 'info');
+        return;
+    }
+
+    if (!confirm('This will update the system and restart the service. Continue?')) {
         return;
     }
 
@@ -3272,40 +4148,37 @@ async function autoStashAndUpdate() {
         updateBtn.disabled = !!busy;
         updateBtn.className = busy
             ? 'w-full bg-gray-600 text-white py-2 px-4 rounded cursor-wait'
-            : 'w-full bg-yellow-600 hover:bg-yellow-700 text-white py-2 px-4 rounded transition-colors';
+            : 'w-full bg-green-600 hover:bg-green-700 text-white py-2 px-4 rounded transition-colors';
         updateElement('update-btn-text', label);
     };
 
     try {
-        setButtonState(true, 'Stashing & Updating...');
-        addConsoleMessage('Preparing auto stash before update...', 'info');
+        setButtonState(true, 'Updating...');
+        addConsoleMessage('Applying update...', 'info');
 
         const response = await postAPI('/api/system/stash-update', {});
 
         if (response.success) {
-            if (response.stash_created) {
-                addConsoleMessage('Local changes stashed temporarily for update.', 'info');
-            } else {
-                addConsoleMessage('No local changes detected; continuing with update.', 'info');
-            }
-            addConsoleMessage('Update completed successfully via auto stash.', 'success');
-            updateElement('update-info', 'Local changes stored safely. Update applied and system restarting...');
+            addConsoleMessage('Update completed successfully.', 'success');
+            addConsoleMessage('System will restart automatically...', 'info');
+            updateElement('update-info', 'Update applied. System restarting...');
 
-            // Keep button disabled while service restarts
-            updateBtn.className = 'w-full bg-gray-600 text-white py-2 px-4 rounded cursor-not-allowed';
-            updateElement('update-btn-text', 'Auto Stash + Update');
+            if (updateBtn) {
+                updateBtn.className = 'w-full bg-gray-600 text-white py-2 px-4 rounded cursor-not-allowed';
+                updateElement('update-btn-text', 'Updating...');
+            }
 
             setTimeout(async () => {
                 await verifyServiceRestart();
             }, 10000);
         } else {
-            throw new Error(response.error || 'Auto stash update failed');
+            throw new Error(response.error || 'Update failed');
         }
     } catch (error) {
-        console.error('Auto stash update error:', error);
-        addConsoleMessage(`Auto stash update failed: ${error.message}`, 'error');
-        setButtonState(false, 'Auto Stash + Update');
-        updateElement('update-info', 'Auto stash update failed. Fix issues and retry.');
+        console.error('Auto update error:', error);
+        addConsoleMessage(`Update failed: ${error.message}`, 'error');
+        setButtonState(false, 'Update System');
+        updateElement('update-info', 'Update failed. Fix issues and retry.');
     }
 }
 
@@ -5299,22 +6172,29 @@ async function startOrchestrator() {
         // Show status and start progress
         if (statusEl) {
             statusEl.classList.remove('hidden');
-            statusEl.textContent = 'Starting automatic mode...';
+            statusEl.textContent = 'Enabling automation...';
             statusEl.className = 'text-sm text-blue-600 mt-4';
         }
         
-        addConsoleMessage('Starting automatic mode...', 'info');
+        addConsoleMessage('Enabling automation...', 'info');
         
-        const data = await postAPI('/api/manual/orchestrator/start', {});
+        const data = await postAPI('/api/automation/orchestrator/start', {});
         
         if (data.success) {
-            addConsoleMessage('Automatic mode started successfully', 'success');
-            updateElement('ragnar-mode', 'Auto');
-            document.getElementById('ragnar-mode').className = 'text-green-400 font-semibold';
+            const automationActive = data.automation_enabled !== false;
+            const modeLabelText = automationActive ? 'Auto' : 'Sleeping';
+            const modeClass = automationActive ? 'text-green-400 font-semibold' : 'text-purple-300 font-semibold';
+
+            addConsoleMessage('Automation enabled successfully', 'success');
+            updateElement('Ragnar-mode', modeLabelText);
+            const modeLabel = document.getElementById('Ragnar-mode');
+            if (modeLabel) {
+                modeLabel.className = modeClass;
+            }
             
             if (statusEl) {
-                statusEl.textContent = 'Automatic mode activated - Orchestrator running';
-                statusEl.className = 'text-sm text-green-600 mt-4';
+                statusEl.textContent = automationActive ? 'Automation enabled - Orchestrator running' : 'Automation queued - waiting for Wi-Fi';
+                statusEl.className = automationActive ? 'text-sm text-green-600 mt-4' : 'text-sm text-yellow-500 mt-4';
                 
                 // Hide status after 3 seconds
                 setTimeout(() => {
@@ -5353,17 +6233,20 @@ async function stopOrchestrator() {
             statusEl.className = 'text-sm text-orange-600 mt-4';
         }
         
-        addConsoleMessage('Stopping automatic mode...', 'info');
+        addConsoleMessage('Disabling automation...', 'info');
         
-        const data = await postAPI('/api/manual/orchestrator/stop', {});
+        const data = await postAPI('/api/automation/orchestrator/stop', {});
         
         if (data.success) {
-            addConsoleMessage('Automatic mode stopped - Pentest Mode activated', 'warning');
-            updateElement('ragnar-mode', 'Manual');
-            document.getElementById('ragnar-mode').className = 'text-orange-400 font-semibold';
+            addConsoleMessage('Automation disabled - Orchestrator sleeping', 'warning');
+            updateElement('Ragnar-mode', 'Sleeping');
+            const modeLabel = document.getElementById('Ragnar-mode');
+            if (modeLabel) {
+                modeLabel.className = 'text-purple-300 font-semibold';
+            }
             
             if (statusEl) {
-                statusEl.textContent = 'Pentest Mode activated - Manual control enabled';
+                statusEl.textContent = 'Automation disabled - Ragnar is sleeping';
                 statusEl.className = 'text-sm text-orange-600 mt-4';
                 
                 // Hide status after 3 seconds
@@ -5662,26 +6545,105 @@ function updateDashboardStatus(data) {
     updateElement('Ragnar-says', (data.ragnar_says || 'Hacking away...'));
     
     // Update mode and handle manual controls
+    const automationEnabled = typeof data.automation_enabled === 'boolean' ? data.automation_enabled : !Boolean(data.manual_mode);
     const isManualMode = Boolean(data.manual_mode);
-    updateElement('Ragnar-mode', isManualMode ? 'Manual' : 'Auto');
     
-    // Update mode styling
+    let modeLabel = 'Auto';
+    let modeClass = 'text-green-400 font-semibold';
+    if (!automationEnabled) {
+        modeLabel = 'Sleeping';
+        modeClass = 'text-purple-300 font-semibold';
+    } else if (isManualMode) {
+        modeLabel = 'Manual';
+        modeClass = 'text-orange-400 font-semibold';
+    }
+
+    updateElement('Ragnar-mode', modeLabel);
+    
     const modeElement = document.getElementById('Ragnar-mode');
     if (modeElement) {
-        if (isManualMode) {
-            modeElement.className = 'text-orange-400 font-semibold';
-        } else {
-            modeElement.className = 'text-green-400 font-semibold';
-        }
+        modeElement.className = modeClass;
     }
     
     syncManualModeUI(isManualMode);
+    updateAutomationToggleButton(automationEnabled);
     
     // Update connectivity status with WiFi SSID
     updateConnectivityIndicator('wifi-status', data.wifi_connected, data.current_ssid, data.ap_mode_active);
     updateConnectivityIndicator('bluetooth-status', data.bluetooth_active);
     updateConnectivityIndicator('usb-status', data.usb_active);
     updateConnectivityIndicator('pan-status', data.pan_connected);
+
+    updateReleaseGateState(data.release_gate);
+    updatePwnToggleAvailability(Boolean(data.headless_mode));
+}
+
+function updateAutomationToggleButton(automationEnabled, options = {}) {
+    const button = document.getElementById('automation-toggle-btn');
+    if (!button) {
+        return;
+    }
+
+    const { force = false } = options;
+    if (button.dataset.busy === 'true' && !force) {
+        button.dataset.pendingState = automationEnabled ? 'enabled' : 'disabled';
+        return;
+    }
+
+    if (force) {
+        delete button.dataset.pendingState;
+    }
+
+    const baseClasses = 'w-full sm:w-auto px-4 py-2 rounded-lg font-semibold transition-colors focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-offset-slate-900';
+    if (automationEnabled) {
+        button.textContent = 'Disable Automation';
+        button.className = `${baseClasses} bg-orange-600 hover:bg-orange-500 text-white focus:ring-orange-500`;
+        button.dataset.action = 'stop';
+    } else {
+        button.textContent = 'Enable Automation';
+        button.className = `${baseClasses} bg-green-600 hover:bg-green-500 text-white focus:ring-green-500`;
+        button.dataset.action = 'start';
+    }
+}
+
+async function handleAutomationToggle() {
+    const button = document.getElementById('automation-toggle-btn');
+    if (!button || button.dataset.busy === 'true') {
+        return;
+    }
+
+    const action = button.dataset.action || 'stop';
+    const targetStateEnabled = action === 'start';
+    button.dataset.busy = 'true';
+    button.disabled = true;
+    button.classList.add('opacity-70');
+    button.textContent = action === 'start' ? 'Enabling...' : 'Disabling...';
+
+    try {
+        if (action === 'start') {
+            await startOrchestrator();
+            updateAutomationToggleButton(true, { force: true });
+        } else {
+            await stopOrchestrator();
+            updateAutomationToggleButton(false, { force: true });
+        }
+
+        refreshDashboard().catch(() => {/* best effort */});
+    } catch (error) {
+        console.error('Automation toggle failed:', error);
+        addConsoleMessage('Failed to toggle automation', 'error');
+        updateAutomationToggleButton(!targetStateEnabled, { force: true });
+    } finally {
+        button.dataset.busy = 'false';
+        button.disabled = false;
+        button.classList.remove('opacity-70');
+
+        if (button.dataset.pendingState) {
+            const pendingEnabled = button.dataset.pendingState === 'enabled';
+            delete button.dataset.pendingState;
+            updateAutomationToggleButton(pendingEnabled, { force: true });
+        }
+    }
 }
 
 function updateElement(id, value) {
@@ -6184,11 +7146,16 @@ function displayConfigForm(config) {
     // Group config by sections
     const sections = {
         'General': ['manual_mode', 'debug_mode', 'scan_vuln_running', 'scan_vuln_no_ports', 'enable_attacks', 'blacklistcheck'],
+        'Network': ['network_max_failed_pings'],
         'Timing': ['startup_delay', 'web_delay', 'screen_delay', 'scan_interval'],
         'Display': ['epd_type', 'screen_reversed']
     };
     
     const knownBooleans = ['manual_mode', 'debug_mode', 'scan_vuln_running', 'scan_vuln_no_ports', 'enable_attacks', 'blacklistcheck', 'screen_reversed'];
+    const alwaysShowKeys = new Set(['network_max_failed_pings']);
+    const fallbackValues = {
+        network_max_failed_pings: 15
+    };
     const checkboxHandlers = {
         scan_vuln_running: 'handleVulnScanToggle(this)',
         enable_attacks: 'handleEnableAttacksToggle(this)'
@@ -6202,15 +7169,20 @@ function displayConfigForm(config) {
         `;
         
         keys.forEach(key => {
+            const hasKey = Object.prototype.hasOwnProperty.call(config, key);
             // Check if config has the key, or provide defaults for known boolean settings
             let value = config[key];
             
             // If key is missing and it's a known boolean, default to true (except manual_mode)
-            if (!config.hasOwnProperty(key) && knownBooleans.includes(key)) {
+            if (!hasKey && knownBooleans.includes(key)) {
                 value = (key === 'manual_mode') ? false : true;
             }
             
-            if (config.hasOwnProperty(key) || knownBooleans.includes(key)) {
+            if (!hasKey && alwaysShowKeys.has(key)) {
+                value = fallbackValues[key];
+            }
+            
+            if (hasKey || knownBooleans.includes(key) || alwaysShowKeys.has(key)) {
                 const selectOptions = displaySelectOptions[key];
                 const type = typeof value === 'boolean' ? 'checkbox' : 'text';
                 const label = getConfigLabel(key);
@@ -7607,6 +8579,7 @@ window.toggleEpaperSize = toggleEpaperSize;
 window.checkForUpdates = checkForUpdates;
 window.checkForUpdatesQuiet = checkForUpdatesQuiet;
 window.performUpdate = performUpdate;
+window.handleReleaseGateDecision = handleReleaseGateDecision;
 window.restartService = restartService;
 window.rebootSystem = rebootSystem;
 window.startAPMode = startAPMode;

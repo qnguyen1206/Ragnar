@@ -49,6 +49,7 @@ class Ragnar:
         
         # Set reference to this instance in shared_data for other modules
         self.shared_data.ragnar_instance = self
+        self.shared_data.headless_mode = False
         
         # Reference to display instance (will be set when display is started)
         self.display = None

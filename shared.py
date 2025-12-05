@@ -10,7 +10,7 @@
 # - Loading and managing fonts and images required for the application's display.
 # - Handling the creation and management of a live status file to store the current status of network scans.
 # - Managing configuration settings, including loading default settings, updating, and saving configurations to a JSON file.
-# - Providing utility functions for reading and writing data to CSV files, updating statistics, and wrapping text for display purposes.
+# - Providing utility functions for reading and writing data to CSV files and DB, updating statistics, and wrapping text for display purposes.
 
 import os
 import re
@@ -28,6 +28,7 @@ from PIL import Image, ImageFont
 from logger import Logger
 from epd_helper import EPDHelper
 from db_manager import get_db
+from network_storage import NetworkStorageManager
 
 DEFAULT_EPD_TYPE = "epd2in13_V4"
 DISPLAY_PROFILES = {
@@ -44,6 +45,17 @@ class SharedData:
     """Shared data between the different modules."""
     def __init__(self):
         self.initialize_paths() # Initialize the paths used by the application
+        self.storage_manager = NetworkStorageManager(self.datadir)
+        self.active_network_ssid = None
+        self.active_network_slug = None
+        self.current_network_dir = None
+        self.current_network_db_path = None
+        self.network_intelligence_dir = None
+        self.network_threat_dir = None
+        self._apply_network_context(
+            self.storage_manager.get_active_context(),
+            configure_db=False
+        )
         self.status_list = [] 
         self.last_comment_time = time.time() # Last time a comment was displayed
         self._stats_lock = threading.Lock()  # Thread-safe lock for update_stats()
@@ -59,6 +71,7 @@ class SharedData:
 
         # Initialize SQLite database manager
         self.db = get_db(currentdir=self.currentdir)
+        self._configure_database()
         
         # Update MAC blacklist without immediate save
         self.update_mac_blacklist()
@@ -69,10 +82,14 @@ class SharedData:
         # Initialize network intelligence (after paths and config are ready)
         self.network_intelligence = None
         self.initialize_network_intelligence()
+        self.threat_intelligence = None  # type: ignore
         
         # Initialize AI service (after paths and config are ready)
         self.ai_service = None
         self.initialize_ai_service()
+        
+        # Initialize counters for dashboard
+        self.scanned_networks_count = self._calculate_scanned_networks_count()
         
         self.create_livestatusfile() 
         self.load_fonts() # Load the fonts used by the application
@@ -117,6 +134,47 @@ class SharedData:
             logger.error(traceback.format_exc())
             self.ai_service = None
 
+    def _calculate_scanned_networks_count(self) -> int:
+        """Calculate the number of scanned networks (excluding defaults)."""
+        manager = getattr(self, 'storage_manager', None)
+        networks_dir = None
+        default_slug = 'default'
+
+        if manager is not None:
+            networks_dir = getattr(manager, 'networks_dir', None)
+            default_ssid = getattr(manager, 'default_ssid', None)
+            slugify = getattr(manager, '_slugify', None)
+            if callable(slugify) and default_ssid is not None:
+                try:
+                    default_slug = slugify(default_ssid)
+                except Exception:
+                    default_slug = 'default'
+
+        if not networks_dir:
+            networks_dir = os.path.join(self.datadir, 'networks')
+
+        logger.debug(f"SCANNED_NETWORKS: Calculating using directory {networks_dir}, default_slug={default_slug}")
+
+        try:
+            entries = os.listdir(networks_dir)
+        except OSError as exc:
+            logger.warning(f"SCANNED_NETWORKS: Unable to read {networks_dir}: {exc}")
+            return 0
+
+        count = 0
+        for entry in entries:
+            if entry.startswith('.'):
+                continue
+            path = os.path.join(networks_dir, entry)
+            if not os.path.isdir(path):
+                continue
+            if entry in (default_slug, 'default'):
+                continue
+            count += 1
+
+        logger.info(f"SCANNED_NETWORKS: Calculated count {count} (excluding {default_slug})")
+        return count
+
     def initialize_paths(self):
         """Initialize the paths used by the application."""
         """Folders paths"""
@@ -137,8 +195,10 @@ class SharedData:
         self.output_dir = os.path.join(self.datadir, 'output')
         self.input_dir = os.path.join(self.datadir, 'input')
         # Directories under output_dir
-        self.crackedpwddir = os.path.join(self.output_dir, 'crackedpwd')
-        self.datastolendir = os.path.join(self.output_dir, 'data_stolen')
+        self._default_crackedpwddir = os.path.join(self.output_dir, 'crackedpwd')
+        self._default_datastolendir = os.path.join(self.output_dir, 'data_stolen')
+        self.crackedpwddir = self._default_crackedpwddir
+        self.datastolendir = self._default_datastolendir
         self.zombiesdir = os.path.join(self.output_dir, 'zombies')
         self.vulnerabilities_dir = os.path.join(self.output_dir, 'vulnerabilities')
         self.scan_results_dir = os.path.join(self.output_dir, "scan_results")
@@ -161,6 +221,7 @@ class SharedData:
         self.netkbfile = os.path.join(self.datadir, "netkb.csv")
         self.livestatusfile = os.path.join(self.datadir, 'livestatus.csv')
         self.gamification_file = os.path.join(self.datadir, 'gamification.json')
+        self.pwnagotchi_status_file = os.path.join(self.datadir, 'pwnagotchi_status.json')
         # Files directly under vulnerabilities_dir
         self.vuln_summary_file = os.path.join(self.vulnerabilities_dir, 'vulnerability_summary.csv')
         self.vuln_scan_progress_file = os.path.join(self.vulnerabilities_dir, 'scan_progress.json')
@@ -168,14 +229,92 @@ class SharedData:
         self.usersfile = os.path.join(self.dictionarydir, "users.txt")
         self.passwordsfile = os.path.join(self.dictionarydir, "passwords.txt")
         # Files directly under crackedpwddir
+        self._refresh_credential_files()
+        self.crackedpwd_dir = self.crackedpwddir
+        #Files directly under logsdir
+        self.webconsolelog = os.path.join(self.logsdir, 'temp_log.txt')
+
+    def _apply_network_context(self, context, configure_db=True):
+        """Store active network metadata and optionally reconfigure storage."""
+        if not context:
+            return
+        self.active_network_ssid = context.get('ssid')
+        self.active_network_slug = context.get('slug')
+        self.current_network_dir = context.get('network_dir')
+        self.current_network_db_path = context.get('db_path')
+        self.network_intelligence_dir = context.get('intelligence_dir')
+        self.network_threat_dir = context.get('threat_intelligence_dir')
+        loot_data_dir = context.get('data_stolen_dir') or self._default_datastolendir
+        loot_credentials_dir = context.get('credentials_dir') or self._default_crackedpwddir
+        self._update_loot_paths(loot_data_dir, loot_credentials_dir)
+        if configure_db and hasattr(self, 'db'):
+            self._configure_database()
+
+    def _configure_database(self):
+        """Point the singleton database at the active network store."""
+        if not self.current_network_dir or not self.current_network_db_path:
+            return
+        db = get_db(currentdir=self.currentdir)
+        db.configure_storage(self.current_network_dir, self.current_network_db_path)
+        self.db = db
+
+    def _refresh_network_components(self):
+        """Ensure dependent subsystems follow the current network context."""
+        self._configure_database()
+        if self.network_intelligence and self.network_intelligence_dir:
+            self.network_intelligence.set_storage_root(self.network_intelligence_dir)
+        if self.threat_intelligence and self.network_threat_dir:
+            self.threat_intelligence.set_storage_root(self.network_threat_dir)
+
+    def _update_loot_paths(self, data_stolen_dir, credentials_dir):
+        """Ensure per-network loot directories exist and refresh file pointers."""
+        if data_stolen_dir:
+            os.makedirs(data_stolen_dir, exist_ok=True)
+            self.datastolendir = data_stolen_dir
+        if credentials_dir:
+            os.makedirs(credentials_dir, exist_ok=True)
+            self.crackedpwddir = credentials_dir
+        self.crackedpwd_dir = self.crackedpwddir  # legacy attribute name used by web UI
+        self._refresh_credential_files()
+
+    def _refresh_credential_files(self):
+        """Keep credential CSV paths aligned with the active credential directory."""
         self.sshfile = os.path.join(self.crackedpwddir, 'ssh.csv')
         self.smbfile = os.path.join(self.crackedpwddir, "smb.csv")
         self.telnetfile = os.path.join(self.crackedpwddir, "telnet.csv")
         self.ftpfile = os.path.join(self.crackedpwddir, "ftp.csv")
         self.sqlfile = os.path.join(self.crackedpwddir, "sql.csv")
         self.rdpfile = os.path.join(self.crackedpwddir, "rdp.csv")
-        #Files directly under logsdir
-        self.webconsolelog = os.path.join(self.logsdir, 'temp_log.txt')
+
+    def set_active_network(self, ssid):
+        """Public entry point for Wi-Fi manager to switch all storage."""
+        if not hasattr(self, 'storage_manager'):
+            return
+        try:
+            if self.network_intelligence:
+                self.network_intelligence.save_intelligence_data()
+            if self.threat_intelligence:
+                self.threat_intelligence.persist_state()
+        except Exception as exc:
+            logger.warning(f"Failed to persist data before network switch: {exc}")
+
+        try:
+            context = self.storage_manager.activate_network(ssid)
+        except Exception as exc:
+            logger.error(f"Unable to activate network storage for '{ssid}': {exc}")
+            return
+
+        # Skip reconfiguration if the slug did not change
+        if (context.get('slug') == self.active_network_slug and
+                context.get('ssid') == self.active_network_ssid):
+            return
+
+        self._apply_network_context(context, configure_db=False)
+        self._refresh_network_components()
+        logger.info(
+            f"Active network context updated: ssid={self.active_network_ssid or 'default'} "
+            f"slug={self.active_network_slug}"
+        )
 
     def get_default_config(self):
         """ The configuration below is used to set the default values of the configuration settings."""
@@ -191,6 +330,8 @@ class SharedData:
             "scan_vuln_running": True,
             "scan_vuln_no_ports": False,
             "enable_attacks": False,
+            "release_gate_enabled": False,
+            "release_gate_message": "",
             "retry_success_actions": True,
             "retry_failed_actions": True,
             "blacklistcheck": True,
@@ -281,6 +422,12 @@ class SharedData:
             "ai_network_insights": True,
             "ai_max_tokens": 500,
             "ai_temperature": 0.7,
+
+            "__title_pwnagotchi__": "Pwnagotchi Integration",
+            "pwnagotchi_installed": False,
+            "pwnagotchi_mode": "ragnar",
+            "pwnagotchi_last_switch": "",
+            "pwnagotchi_last_status": "Not installed"
         }
 
     def apply_display_profile(self, epd_type=None, set_orientation_if_missing=False, persist=False):
@@ -459,7 +606,8 @@ class SharedData:
             # Set default values and continue without EPD
             self.epd_helper = None
             fallback_profile = DISPLAY_PROFILES.get(DEFAULT_EPD_TYPE, {"ref_width": 122, "ref_height": 250, "default_flip": False})
-            profile = DISPLAY_PROFILES.get(self.config.get('epd_type'), fallback_profile) or fallback_profile
+            epd_type = self.config.get('epd_type') or DEFAULT_EPD_TYPE
+            profile = DISPLAY_PROFILES.get(epd_type, fallback_profile) or fallback_profile
             self.width = self.config.get('ref_width', profile['ref_width'])
             self.height = self.config.get('ref_height', profile['ref_height'])
             self.screen_reversed = bool(self.config.get('screen_reversed', False))
@@ -489,6 +637,8 @@ class SharedData:
         self.bluetooth_scan_active = False
         self.bluetooth_scan_start_time = 0.0
         self.wifi_connected = False
+        self.wifi_signal_dbm = None  # Latest RSSI value for display
+        self.wifi_signal_quality = None  # Normalized 0-100 quality percentage
         self.pan_connected = False
         self.usb_active = False
         self.ragnarsays = "Hacking away..."

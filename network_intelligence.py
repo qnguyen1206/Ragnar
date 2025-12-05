@@ -36,10 +36,8 @@ class NetworkIntelligence:
         self.network_history = {}
         
         # Intelligence storage paths
-        self.intelligence_dir = os.path.join(shared_data.datadir, 'intelligence')
-        self.network_profiles_file = os.path.join(self.intelligence_dir, 'network_profiles.json')
-        self.active_findings_file = os.path.join(self.intelligence_dir, 'active_findings.json')
-        self.resolved_findings_file = os.path.join(self.intelligence_dir, 'resolved_findings.json')
+        self.intelligence_dir = self._resolve_intelligence_dir()
+        self._rebuild_file_paths()
         
         # State management
         self.active_vulnerabilities = {}  # network_id -> {vuln_id: vuln_data}
@@ -56,6 +54,28 @@ class NetworkIntelligence:
         # Initialize intelligence system
         self.setup_intelligence_directory()
         self.load_intelligence_data()
+
+    def _resolve_intelligence_dir(self) -> str:
+        candidate = getattr(self.shared_data, 'network_intelligence_dir', None)
+        if candidate:
+            return candidate
+        return os.path.join(self.shared_data.datadir, 'intelligence')
+
+    def _rebuild_file_paths(self):
+        self.network_profiles_file = os.path.join(self.intelligence_dir, 'network_profiles.json')
+        self.active_findings_file = os.path.join(self.intelligence_dir, 'active_findings.json')
+        self.resolved_findings_file = os.path.join(self.intelligence_dir, 'resolved_findings.json')
+
+    def set_storage_root(self, intelligence_dir: str):
+        """Switch to a new intelligence directory (per-network)."""
+        if not intelligence_dir or intelligence_dir == self.intelligence_dir:
+            return
+        self.save_intelligence_data()
+        self.intelligence_dir = intelligence_dir
+        self._rebuild_file_paths()
+        self.setup_intelligence_directory()
+        self.load_intelligence_data()
+        self.logger.info(f"Network intelligence storage switched to: {self.intelligence_dir}")
         
     def setup_intelligence_directory(self):
         """Create intelligence directory structure"""

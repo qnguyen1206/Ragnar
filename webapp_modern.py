@@ -28,6 +28,7 @@ import ipaddress
 import socket
 import traceback
 from datetime import datetime, timedelta, timezone
+from typing import Optional
 from email.utils import format_datetime
 from flask import Flask, render_template, jsonify, request, send_from_directory, Response, make_response
 from flask_socketio import SocketIO, emit
@@ -53,6 +54,7 @@ from threat_intelligence import ThreatIntelligenceFusion
 from lynis_parser import parse_lynis_dat
 from actions.lynis_pentest_ssh import LynisPentestSSH
 from actions.connector_utils import CredentialChecker
+from db_manager import get_db
 
 # Initialize logger
 logger = Logger(name="webapp_modern.py", level=logging.DEBUG)
@@ -78,10 +80,12 @@ web_utils = WebUtils(shared_data, logger)
 # Initialize threat intelligence system
 try:
     threat_intelligence = ThreatIntelligenceFusion(shared_data)
+    shared_data.threat_intelligence = threat_intelligence  # type: ignore
     logger.info("Threat intelligence system initialized")
 except Exception as e:
     logger.error(f"Failed to initialize threat intelligence: {e}")
     threat_intelligence = None
+    shared_data.threat_intelligence = None  # type: ignore
 
 # Global state
 clients_connected = 0
@@ -98,6 +102,14 @@ processed_scan_files = {}  # Track which files we've already processed: {filenam
 DEFAULT_ARP_SCAN_INTERFACE = 'wlan0'
 SEP_SCAN_COMMAND = ['sudo', 'sep-scan']
 MAC_REGEX = re.compile(r'^([0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2}$')
+PWN_INSTALL_SCRIPT = os.path.join(shared_data.currentdir, 'scripts', 'install_pwnagotchi.sh')
+PWN_SERVICE_FILE = '/etc/systemd/system/pwnagotchi.service'
+PWN_SWAP_DELAY_SECONDS = 5
+PWN_INSTALL_STALE_SECONDS = 600  # Treat installer as stale after 10 minutes
+PWN_SWITCH_STALE_SECONDS = 60  # Consider switch stuck after 60 seconds
+RELEASE_GATE_DEFAULT_MESSAGE = (
+    "A controlled release is rolling out. Proceeding with a manual update may cause instability."
+)
 
 
 def _normalize_value(value, default='Unknown'):
@@ -215,6 +227,504 @@ def run_targeted_arp_scan(ip, interface=DEFAULT_ARP_SCAN_INTERFACE):
         logger.error(f"Error running targeted arp-scan for {ip}: {e}")
         return ''
 
+
+def _update_pwn_config(updates: dict) -> None:
+    if not updates:
+        return
+
+    changed = False
+    for key, value in updates.items():
+        if shared_data.config.get(key) != value:
+            shared_data.config[key] = value
+            setattr(shared_data, key, value)
+            changed = True
+
+    if changed:
+        try:
+            shared_data.save_config()
+        except Exception as exc:
+            logger.error(f"Failed to persist Pwnagotchi config updates: {exc}")
+
+
+def _read_pwn_status_file() -> dict:
+    status_path = getattr(shared_data, 'pwnagotchi_status_file', os.path.join(shared_data.datadir, 'pwnagotchi_status.json'))
+    if not os.path.exists(status_path):
+        return {}
+
+    try:
+        with open(status_path, 'r', encoding='utf-8') as handle:
+            return json.load(handle)
+    except json.JSONDecodeError as exc:
+        logger.warning(f"Malformed Pwnagotchi status file: {exc}")
+    except Exception as exc:
+        logger.debug(f"Unable to read Pwnagotchi status file: {exc}")
+    return {}
+
+
+def _parse_iso_timestamp(value: Optional[str]) -> Optional[datetime]:
+    if not value:
+        return None
+    try:
+        normalized = value.replace('Z', '+00:00')
+        parsed = datetime.fromisoformat(normalized)
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=timezone.utc)
+        return parsed
+    except Exception as exc:
+        logger.debug(f"Failed to parse Pwnagotchi status timestamp '{value}': {exc}")
+    return None
+
+
+def _write_pwn_status_file(state: str, message: str, phase: str = 'dashboard', extra: Optional[dict] = None) -> dict:
+    payload = _read_pwn_status_file()
+    payload.update(extra or {})
+    payload.update({
+        'state': state,
+        'message': message,
+        'phase': phase,
+        'timestamp': datetime.utcnow().isoformat() + 'Z'
+    })
+
+    status_path = getattr(shared_data, 'pwnagotchi_status_file', os.path.join(shared_data.datadir, 'pwnagotchi_status.json'))
+    os.makedirs(os.path.dirname(status_path), exist_ok=True)
+
+    try:
+        with open(status_path, 'w', encoding='utf-8') as handle:
+            json.dump(payload, handle, indent=2)
+    except Exception as exc:
+        logger.error(f"Failed to update Pwnagotchi status file: {exc}")
+
+    return payload
+
+
+def _systemctl_check(command: list[str]) -> bool:
+    try:
+        result = subprocess.run(command, capture_output=True, text=True)
+        return result.returncode == 0
+    except FileNotFoundError:
+        logger.warning(f"systemctl not available when running: {' '.join(command)}")
+    except Exception as exc:
+        logger.debug(f"systemctl check failed for {' '.join(command)}: {exc}")
+    return False
+
+
+def _systemctl_state_label(service_name: str) -> str:
+    try:
+        result = subprocess.run(
+            ['systemctl', 'is-active', service_name],
+            capture_output=True,
+            text=True
+        )
+        label = result.stdout.strip() or result.stderr.strip() or 'unknown'
+        return label
+    except FileNotFoundError:
+        logger.warning(f"systemctl not available while querying {service_name}")
+    except Exception as exc:
+        logger.debug(f"systemctl state query failed for {service_name}: {exc}")
+    return 'unknown'
+
+
+def _build_pwnagotchi_status(persist: bool = True) -> dict:
+    status = {
+        'state': 'not_installed',
+        'message': 'Pwnagotchi is not installed',
+        'phase': 'idle',
+        'installed': bool(shared_data.config.get('pwnagotchi_installed', False)),
+        'installing': False,
+        'mode': shared_data.config.get('pwnagotchi_mode', 'ragnar'),
+        'last_switch': shared_data.config.get('pwnagotchi_last_switch', ''),
+        'service_active': False,
+        'service_enabled': False,
+        'log_file': None,
+        'config_file': None,
+        'target_mode': shared_data.config.get('pwnagotchi_mode', 'ragnar'),
+        'timestamp': datetime.utcnow().isoformat() + 'Z'
+    }
+
+    file_data = _read_pwn_status_file()
+    if file_data:
+        for key, value in file_data.items():
+            # Only update known keys to avoid leaking arbitrary data
+            if key in {'state', 'message', 'phase', 'log_file', 'config_file', 'repo_dir', 'target_mode', 'timestamp'}:
+                status[key] = value
+
+    state = status.get('state', 'not_installed')
+    status['installing'] = state in {'preflight', 'dependencies', 'python', 'installing'}
+
+    if status['installing'] and not _pwn_install_process_running() and _is_pwn_install_stale(file_data):
+        stale_message = 'Pwnagotchi installer stopped unexpectedly. Press Install again to retry.'
+        status['installing'] = False
+        status['state'] = 'error'
+        status['phase'] = 'error'
+        status['message'] = stale_message
+        _write_pwn_status_file('error', stale_message, 'error', {
+            'log_file': status.get('log_file'),
+            'target_mode': status.get('target_mode', 'ragnar')
+        })
+
+    pwn_service_state = _systemctl_state_label('pwnagotchi')
+    status['service_state'] = pwn_service_state
+    status['service_active'] = pwn_service_state == 'active'
+    status['service_enabled'] = _systemctl_check(['systemctl', 'is-enabled', 'pwnagotchi'])
+
+    ragnar_service_state = _systemctl_state_label('ragnar')
+    status['ragnar_service_state'] = ragnar_service_state
+    ragnar_service_active = ragnar_service_state == 'active'
+
+    service_file_exists = os.path.exists(PWN_SERVICE_FILE)
+    status['service_file_exists'] = service_file_exists
+    if service_file_exists and not status.get('service_file'):
+        status['service_file'] = PWN_SERVICE_FILE
+
+    if status['service_active']:
+        status['state'] = 'running'
+        status['message'] = 'Pwnagotchi service is running'
+        status['mode'] = 'pwnagotchi'
+    elif ragnar_service_active:
+        status['mode'] = 'ragnar'
+        if status['state'] not in {'error', 'installing'}:
+            status['state'] = 'running'
+            status['message'] = 'Ragnar service is running'
+    else:
+        status['mode'] = status.get('mode', shared_data.config.get('pwnagotchi_mode', 'ragnar'))
+
+    state = status.get('state', state)
+
+    stale_switch = False
+    if state == 'switching' and not status['installing']:
+        timestamp_obj = _parse_iso_timestamp(status.get('timestamp'))
+        if not timestamp_obj:
+            stale_switch = True
+        else:
+            age = datetime.now(timezone.utc) - timestamp_obj
+            stale_switch = age.total_seconds() >= PWN_SWITCH_STALE_SECONDS
+
+    if stale_switch:
+        target_mode = (status.get('target_mode') or shared_data.config.get('pwnagotchi_mode', 'ragnar')).lower()
+        if target_mode not in {'pwnagotchi', 'ragnar'}:
+            target_mode = 'ragnar'
+
+        if target_mode == 'pwnagotchi':
+            if status['service_active']:
+                status['state'] = 'running'
+                status['phase'] = 'active'
+                status['message'] = 'Pwnagotchi service is running'
+                status['mode'] = 'pwnagotchi'
+                status['target_mode'] = 'pwnagotchi'
+            else:
+                status['state'] = 'error'
+                status['phase'] = 'error'
+                status['mode'] = 'ragnar' if ragnar_service_active else 'ragnar'
+                status['target_mode'] = 'ragnar'
+                status['message'] = (
+                    f"Switch to Pwnagotchi failed: pwnagotchi.service is {pwn_service_state}. "
+                    f"Ragnar service is {ragnar_service_state}."
+                )
+        else:  # target_mode == 'ragnar'
+            if ragnar_service_active:
+                status['state'] = 'running'
+                status['phase'] = 'idle'
+                status['message'] = 'Ragnar service is running'
+                status['mode'] = 'ragnar'
+                status['target_mode'] = 'ragnar'
+            else:
+                status['state'] = 'error'
+                status['phase'] = 'error'
+                status['mode'] = 'pwnagotchi' if status['service_active'] else 'ragnar'
+                status['target_mode'] = 'pwnagotchi'
+                status['message'] = (
+                    f"Switch to Ragnar failed: ragnar.service is {ragnar_service_state}. "
+                    f"Pwnagotchi service is {pwn_service_state}."
+                )
+
+        updated_payload = _write_pwn_status_file(
+            status['state'],
+            status['message'],
+            status.get('phase', 'dashboard'),
+            {
+                'target_mode': status.get('target_mode'),
+                'log_file': status.get('log_file'),
+                'config_file': status.get('config_file'),
+                'service_state': status.get('service_state')
+            }
+        )
+        for key in ('state', 'message', 'phase', 'timestamp', 'target_mode'):
+            if key in updated_payload:
+                status[key] = updated_payload[key]
+        state = status['state']
+
+    status['installed'] = (
+        status['installed']
+        or state in {'installed', 'running'}
+        or status['service_enabled']
+        or service_file_exists
+    )
+
+    config_updates = {}
+    if status['installed'] != bool(shared_data.config.get('pwnagotchi_installed', False)):
+        config_updates['pwnagotchi_installed'] = status['installed']
+
+    if status.get('mode') and status['mode'] != shared_data.config.get('pwnagotchi_mode'):
+        config_updates['pwnagotchi_mode'] = status['mode']
+
+    if status.get('message') and status['message'] != shared_data.config.get('pwnagotchi_last_status'):
+        config_updates['pwnagotchi_last_status'] = status['message']
+
+    if persist and config_updates:
+        _update_pwn_config(config_updates)
+
+    return status
+
+
+def _emit_pwn_status_update(status: Optional[dict] = None) -> dict:
+    payload = status or _build_pwnagotchi_status()
+    try:
+        socketio.emit('pwnagotchi_status', payload)
+    except Exception as exc:
+        logger.debug(f"Failed to emit pwnagotchi_status event: {exc}")
+    return payload
+
+
+def _pwn_install_process_running() -> bool:
+    script_name = os.path.basename(PWN_INSTALL_SCRIPT)
+    try:
+        result = subprocess.run(['pgrep', '-f', script_name], capture_output=True, text=True)
+        return result.returncode == 0
+    except FileNotFoundError:
+        logger.debug('pgrep not available to verify Pwnagotchi installer state')
+    except Exception as exc:
+        logger.debug(f"Unable to determine installer process state: {exc}")
+    return False
+
+
+def _is_pwn_install_stale(status: Optional[dict], max_age_seconds: int = PWN_INSTALL_STALE_SECONDS) -> bool:
+    if not status:
+        return True
+
+    timestamp = status.get('timestamp')
+    if not timestamp:
+        return True
+
+    normalized = timestamp.replace('Z', '+00:00')
+    try:
+        parsed = datetime.fromisoformat(normalized)
+    except ValueError:
+        logger.debug(f"Unable to parse Pwnagotchi installer timestamp: {timestamp}")
+        return True
+
+    age = datetime.now(timezone.utc) - parsed
+    return age.total_seconds() > max_age_seconds
+
+
+def _read_pwn_log_chunk(cursor: Optional[int] = None, tail_bytes: int = 4096, max_bytes: int = 8192):
+    """Return a slice of the installer log starting at cursor or tail bytes from end."""
+    status = _build_pwnagotchi_status(persist=False)
+    log_file = status.get('log_file')
+
+    if not log_file or not os.path.exists(log_file):
+        return status, None, 0, []
+
+    try:
+        file_size = os.path.getsize(log_file)
+    except OSError:
+        return status, None, 0, []
+
+    if cursor is None or cursor < 0:
+        tail_bytes = max(0, min(tail_bytes, 65536))
+        start = max(file_size - tail_bytes, 0)
+    else:
+        start = max(0, min(cursor, file_size))
+
+    max_bytes = max(1024, min(max_bytes, 65536))
+
+    entries: list[str] = []
+    new_cursor = start
+
+    try:
+        with open(log_file, 'r', encoding='utf-8', errors='replace') as handle:
+            handle.seek(start)
+            chunk = handle.read(max_bytes)
+            new_cursor = handle.tell()
+    except Exception as exc:
+        logger.debug(f"Failed reading Pwnagotchi installer log: {exc}")
+        return status, log_file, new_cursor, []
+
+    if chunk:
+        entries = chunk.splitlines()
+
+    return status, log_file, new_cursor, entries
+
+
+def _schedule_pwn_mode_switch(target_mode: str) -> None:
+    if target_mode not in {'pwnagotchi', 'ragnar'}:
+        logger.warning(f"Invalid Pwnagotchi target mode requested: {target_mode}")
+        return
+
+    def _thread_target():
+        try:
+            _execute_pwn_mode_switch(target_mode)
+        except Exception as exc:  # pragma: no cover - defensive guard
+            logger.error(f"Unhandled error during Pwnagotchi handoff to {target_mode}: {exc}")
+
+    thread = threading.Thread(
+        target=_thread_target,
+        name=f"pwn-switch-{target_mode}",
+        daemon=True,
+    )
+    thread.start()
+
+
+def _run_systemctl(args: list[str], *, timeout: int = 60) -> subprocess.CompletedProcess:
+    """Execute systemctl with sudo and capture output."""
+    return subprocess.run(
+        ['sudo', 'systemctl', *args],
+        capture_output=True,
+        text=True,
+        timeout=timeout,
+        check=False,
+    )
+
+
+def _summarize_status_output(output: str, limit: int = 600) -> str:
+    """Condense systemctl status output into a single readable line."""
+    if not output:
+        return ''
+    collapsed = ' | '.join(line.strip() for line in output.splitlines() if line.strip())
+    return (collapsed[:limit].rstrip() + ('…' if len(collapsed) > limit else ''))
+
+
+def _collect_service_status(service_name: str) -> str:
+    try:
+        status_proc = _run_systemctl(['status', service_name, '--no-pager'], timeout=10)
+        status_output = status_proc.stdout.strip() or status_proc.stderr.strip()
+        return _summarize_status_output(status_output)
+    except Exception as exc:  # pragma: no cover - best effort
+        return f"Unable to collect status for {service_name}: {exc}"
+
+
+def _ensure_pwn_launcher() -> None:
+    """Ensure /usr/bin/pwnagotchi-launcher exists and is executable."""
+    launcher_path = '/usr/bin/pwnagotchi-launcher'
+    try:
+        if os.path.exists(launcher_path):
+            if os.access(launcher_path, os.X_OK):
+                return
+            os.chmod(launcher_path, 0o755)
+            logger.info(f"Repaired permissions for {launcher_path}")
+            return
+
+        candidates = [
+            shutil.which('pwnagotchi'),
+            shutil.which('pwnagotchi-launcher'),
+            '/usr/local/bin/pwnagotchi',
+            '/usr/local/bin/pwnagotchi-launcher'
+        ]
+        target = next((c for c in candidates if c and os.path.exists(c)), None)
+        if not target:
+            logger.warning("Unable to locate pwnagotchi binary; launcher shim not created")
+            return
+
+        script = f"#!/bin/bash\nexec {target} \"$@\"\n"
+        with open(launcher_path, 'w', encoding='utf-8') as handle:
+            handle.write(script)
+        os.chmod(launcher_path, 0o755)
+        logger.info(f"Created pwnagotchi launcher shim at {launcher_path} → {target}")
+    except PermissionError as exc:
+        logger.error(f"Permission error while ensuring pwnagotchi launcher: {exc}")
+    except Exception as exc:  # pragma: no cover - defensive guard
+        logger.error(f"Failed to prepare pwnagotchi launcher: {exc}")
+
+
+def _unit_name(service_name: str) -> str:
+    unit = service_name.strip()
+    if unit.endswith('.service'):
+        unit = unit[:-8]
+    return unit or service_name
+
+
+def _format_service_failure_message(service_name: str) -> str:
+    unit = _unit_name(service_name)
+    readable = unit.replace('_', ' ').replace('-', ' ').title()
+    return f"Failed to start {readable} service. Review journalctl -u {unit} -f for details."
+
+
+def _wait_for_service_active(service_name: str, timeout: int = 45, poll_interval: int = 3) -> tuple[bool, str]:
+    deadline = time.monotonic() + timeout
+    last_state = ''
+    while time.monotonic() < deadline:
+        state_proc = _run_systemctl(['is-active', service_name], timeout=10)
+        state = state_proc.stdout.strip() or state_proc.stderr.strip()
+        last_state = state or last_state or 'unknown'
+        if state == 'active':
+            return True, 'active'
+        if state in {'failed', 'inactive'}:
+            return False, _collect_service_status(service_name) or f"{service_name} reported state {state}"
+        time.sleep(poll_interval)
+    return False, _collect_service_status(service_name) or f"{service_name} did not become active within {timeout}s (last state: {last_state})"
+
+
+def _start_service_with_monitor(service_name: str, timeout: int = 45) -> tuple[bool, str]:
+    start_proc = _run_systemctl(['start', service_name])
+    if start_proc.returncode != 0:
+        detail = start_proc.stderr.strip() or start_proc.stdout.strip() or f"systemctl start {service_name} failed with {start_proc.returncode}"
+        status_excerpt = _collect_service_status(service_name)
+        summary = status_excerpt or detail
+        return False, summary
+    return _wait_for_service_active(service_name, timeout=timeout)
+
+
+def _stop_service(service_name: str) -> tuple[bool, str]:
+    stop_proc = _run_systemctl(['stop', service_name])
+    if stop_proc.returncode != 0:
+        detail = stop_proc.stderr.strip() or stop_proc.stdout.strip() or f"systemctl stop {service_name} failed with {stop_proc.returncode}"
+        logger.warning(detail)
+        return False, detail
+    return True, 'stopped'
+
+
+def _execute_pwn_mode_switch(target_mode: str) -> None:
+    logger.info(f"Preparing service handoff to {target_mode}")
+    time.sleep(PWN_SWAP_DELAY_SECONDS)
+
+    if target_mode == 'pwnagotchi':
+        _ensure_pwn_launcher()
+        success, detail = _start_service_with_monitor('pwnagotchi.service')
+        if success:
+            logger.info("Pwnagotchi service reported active; starting bettercap and stopping Ragnar service")
+            _start_service_with_monitor('bettercap.service')
+            _stop_service('ragnar.service')
+            message = 'Pwnagotchi service is running'
+            _write_pwn_status_file('running', message, 'swap', {'target_mode': 'pwnagotchi'})
+            _update_pwn_config({'pwnagotchi_mode': 'pwnagotchi', 'pwnagotchi_last_status': message})
+        else:
+            logger.error(f"Pwnagotchi service failed to start: {detail}")
+            failure_message = _format_service_failure_message('pwnagotchi.service')
+            extra = {'target_mode': 'ragnar'}
+            if detail:
+                extra['service_error_detail'] = detail
+            _write_pwn_status_file('error', failure_message, 'error', extra)
+            _update_pwn_config({'pwnagotchi_mode': 'ragnar', 'pwnagotchi_last_status': failure_message})
+            _start_service_with_monitor('ragnar.service', timeout=30)
+    else:
+        success, detail = _start_service_with_monitor('ragnar.service')
+        if success:
+            logger.info("Ragnar service reported active; stopping Pwnagotchi and bettercap services")
+            _stop_service('pwnagotchi.service')
+            _stop_service('bettercap.service')
+            message = 'Ragnar service is running'
+            _write_pwn_status_file('running', message, 'swap', {'target_mode': 'ragnar'})
+            _update_pwn_config({'pwnagotchi_mode': 'ragnar', 'pwnagotchi_last_status': message})
+        else:
+            logger.error(f"Ragnar service failed to start: {detail}")
+            failure_message = _format_service_failure_message('ragnar.service')
+            extra = {'target_mode': 'pwnagotchi'}
+            if detail:
+                extra['service_error_detail'] = detail
+            _write_pwn_status_file('error', failure_message, 'error', extra)
+            _update_pwn_config({'pwnagotchi_mode': 'pwnagotchi', 'pwnagotchi_last_status': failure_message})
+            _start_service_with_monitor('pwnagotchi.service', timeout=30)
+
+    _emit_pwn_status_update()
 
 def resolve_ip_hostname(ip):
     try:
@@ -345,6 +855,22 @@ def broadcast_status_update():
             logger.debug(f"Broadcasted status update: {status_data.get('ragnar_status', 'unknown')}")
     except Exception as e:
         logger.error(f"Error broadcasting status update: {e}")
+
+
+def is_orchestrator_running() -> bool:
+    """Determine whether the orchestrator thread is currently alive."""
+    try:
+        ragnar_instance = getattr(shared_data, 'ragnar_instance', None)
+        if not ragnar_instance:
+            return False
+
+        orchestrator_thread = getattr(ragnar_instance, 'orchestrator_thread', None)
+        if orchestrator_thread and orchestrator_thread.is_alive():
+            return not getattr(shared_data, 'orchestrator_should_exit', False)
+        return False
+    except Exception as exc:
+        logger.debug(f"Unable to determine automation state: {exc}")
+        return False
 
 
 def sync_vulnerability_count():
@@ -508,8 +1034,7 @@ def sync_all_counts():
             
             # Read from SQLite database
             try:
-                from db_manager import DatabaseManager
-                db = DatabaseManager()
+                db = get_db(currentdir=shared_data.currentdir)
                 hosts = db.get_all_hosts()
                 
                 logger.info(f"[SQLITE SYNC] Reading from SQLite database")
@@ -636,9 +1161,10 @@ def sync_all_counts():
                         f"[GAMIFICATION] Registered {new_mac_count} new MAC(s), awarded {points_awarded} points"
                     )
 
+            # Use network-specific credential directory
             cred_results_dir = getattr(shared_data, 'crackedpwd_dir', os.path.join('data', 'output', 'crackedpwd'))
 
-            logger.debug(f"Syncing credentials from directory: {cred_results_dir}")
+            logger.debug(f"Syncing credentials from network-specific directory: {cred_results_dir}")
 
             try:
                 os.makedirs(cred_results_dir, exist_ok=True)
@@ -649,29 +1175,62 @@ def sync_all_counts():
             if os.path.exists(cred_results_dir):
                 cred_count = 0
                 try:
+                    # Get stable file list (excludes temporary/hidden files) - only CSV files for network storage
                     cred_files_found = []
-                    for filename in os.listdir(cred_results_dir):
-                        if (filename.endswith('.txt') or filename.endswith('.csv')) and not filename.startswith('.'):
-                            cred_files_found.append(filename)
+                    for filename in sorted(os.listdir(cred_results_dir)):
+                        if filename.endswith('.csv') and not filename.startswith('.') and not filename.endswith('.tmp'):
                             filepath = os.path.join(cred_results_dir, filename)
+                            # Only count files that exist and aren't being written to
                             try:
-                                with open(filepath, 'r', encoding='utf-8', errors='ignore') as f:
-                                    content = f.read()
-                                    for line in content.split('\n'):
-                                        if ':' in line and line.strip():
-                                            cred_count += 1
-                            except Exception as e:
-                                logger.debug(f"Could not read credential file {filepath}: {e}")
-                                continue
+                                stat_info = os.stat(filepath)
+                                if stat_info.st_size > 0:  # Skip empty files
+                                    cred_files_found.append(filename)
+                            except (OSError, IOError):
+                                continue  # Skip files that can't be accessed
+                    
+                    # Count credentials from stable file list
+                    for filename in cred_files_found:
+                        filepath = os.path.join(cred_results_dir, filename)
+                        try:
+                            # Use more robust file reading with retry for locked files
+                            max_retries = 2
+                            for attempt in range(max_retries):
+                                try:
+                                    with open(filepath, 'r', encoding='utf-8', errors='ignore') as f:
+                                        lines = f.readlines()
+                                        # Skip header row and count data rows only
+                                        data_rows = 0
+                                        for i, line in enumerate(lines):
+                                            line = line.strip()
+                                            if line:
+                                                # Skip first line if it contains CSV headers
+                                                if i == 0 and ('MAC Address' in line or 'IP Address' in line or 'User' in line or 'Password' in line):
+                                                    continue
+                                                # Count non-empty data rows
+                                                data_rows += 1
+                                        cred_count += data_rows
+                                    break  # Success, exit retry loop
+                                except (IOError, OSError) as e:
+                                    if attempt == max_retries - 1:  # Last attempt
+                                        logger.debug(f"Could not read credential file {filepath} after {max_retries} attempts: {e}")
+                                    else:
+                                        time.sleep(0.1)  # Brief pause before retry
+                        except Exception as e:
+                            logger.debug(f"Error processing credential file {filepath}: {e}")
+                            continue
 
-                    if cred_count > 0:
-                        logger.debug(f"Total credential count: {cred_count} from {len(cred_files_found)} files")
+                    if cred_count > 0 or len(cred_files_found) > 0:
+                        logger.debug(f"Credential count: {cred_count} from {len(cred_files_found)} files")
                 except Exception as e:
                     logger.warning(f"Could not list crackedpwd directory: {e}")
 
+                # Only update if we have a stable count (prevent flickering)
                 old_creds = shared_data.crednbr
-                shared_data.crednbr = cred_count
-                logger.debug(f"Updated credentials: {old_creds} -> {cred_count}")
+                if old_creds != cred_count:
+                    shared_data.crednbr = cred_count
+                    logger.info(f"WEBAPP: Updated credentials: {old_creds} -> {cred_count} from {len(cred_files_found)} files")
+                else:
+                    logger.debug(f"WEBAPP: Credentials stable at: {cred_count} from {len(cred_files_found)} files")
             else:
                 logger.warning(f"Crackedpwd directory does not exist: {cred_results_dir}")
 
@@ -713,7 +1272,20 @@ def sync_all_counts():
             except Exception as e:
                 logger.warning(f"Could not update gamification stats: {e}")
 
-            logger.debug(f"Completed sync_all_counts() - Active Targets: {shared_data.targetnbr}, Total Targets: {shared_data.total_targetnbr}, Inactive Targets: {shared_data.inactive_targetnbr}, Ports: {shared_data.portnbr}, Vulns: {shared_data.vulnnbr}, Creds: {shared_data.crednbr}, Level: {shared_data.levelnbr}, Coins: {shared_data.coinnbr}")
+            # Cache scanned network count (calculate once per sync cycle)
+            try:
+                # Recalculate scanned networks count
+                scanned_networks = shared_data._calculate_scanned_networks_count()
+                shared_data.scanned_networks_count = scanned_networks
+                logger.info(f"SYNC: Updated scanned networks count: {scanned_networks}")
+            except Exception as e:
+                logger.error(f"SYNC: Could not update scanned networks count: {e}")
+                import traceback
+                logger.error(f"SYNC: Scanned networks error traceback: {traceback.format_exc()}")
+                if not hasattr(shared_data, 'scanned_networks_count'):
+                    shared_data.scanned_networks_count = 0
+
+            logger.debug(f"Completed sync_all_counts() - Active Targets: {shared_data.targetnbr}, Total Targets: {shared_data.total_targetnbr}, Inactive Targets: {shared_data.inactive_targetnbr}, Ports: {shared_data.portnbr}, Vulns: {shared_data.vulnnbr}, Creds: {shared_data.crednbr}, Networks: {getattr(shared_data, 'scanned_networks_count', 0)}, Level: {shared_data.levelnbr}, Coins: {shared_data.coinnbr}")
             
             if shared_data.targetnbr > shared_data.total_targetnbr:
                 logger.warning(f"CONSISTENCY WARNING: Active targets ({shared_data.targetnbr}) > Total targets ({shared_data.total_targetnbr}). Adjusting total.")
@@ -746,11 +1318,33 @@ def safe_str(value, default=""):
         return default
 
 def safe_bool(value, default=False):
-    """Safely convert value to boolean"""
+    """Safely convert value to boolean, supporting common string inputs."""
+    if value is None:
+        return default
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return value != 0
+    if isinstance(value, str):
+        normalized = value.strip().lower()
+        if normalized in {"true", "1", "yes", "on"}:
+            return True
+        if normalized in {"false", "0", "no", "off", ""}:
+            return False
+        return default
     try:
-        return bool(value) if value is not None else default
+        return bool(value)
     except (ValueError, TypeError):
         return default
+
+
+def _build_release_gate_payload():
+    enabled = safe_bool(shared_data.config.get('release_gate_enabled', False))
+    message = shared_data.config.get('release_gate_message') or RELEASE_GATE_DEFAULT_MESSAGE
+    return {
+        'enabled': enabled,
+        'message': safe_str(message or RELEASE_GATE_DEFAULT_MESSAGE)
+    }
 
 
 def ensure_recent_sync(max_age=SYNC_BACKGROUND_INTERVAL):
@@ -1467,6 +2061,7 @@ def get_status():
             'ragnar_status2': safe_str(shared_data.ragnarstatustext2),
             'ragnar_says': safe_str(shared_data.ragnarsays),
             'orchestrator_status': safe_str(shared_data.ragnarorch_status),
+            'automation_enabled': is_orchestrator_running(),
             'target_count': safe_int(shared_data.targetnbr),
             'port_count': safe_int(shared_data.portnbr),
             'vulnerability_count': safe_int(shared_data.vulnnbr),
@@ -1475,11 +2070,16 @@ def get_status():
             'level': safe_int(shared_data.levelnbr),
             'points': safe_int(shared_data.coinnbr),
             'coins': safe_int(shared_data.coinnbr),
+            'scanned_network_count': safe_int(getattr(shared_data, 'scanned_networks_count', 0)),
             'wifi_connected': safe_bool(shared_data.wifi_connected),
             'bluetooth_active': safe_bool(shared_data.bluetooth_active),
             'pan_connected': safe_bool(shared_data.pan_connected),
             'usb_active': safe_bool(shared_data.usb_active),
             'manual_mode': safe_bool(shared_data.config.get('manual_mode', False)),
+            'headless_mode': safe_bool(getattr(shared_data, 'headless_mode', False)),
+            'pwnagotchi_mode': shared_data.config.get('pwnagotchi_mode', 'ragnar'),
+            'pwnagotchi_installed': safe_bool(shared_data.config.get('pwnagotchi_installed', False)),
+            'release_gate': _build_release_gate_payload(),
             'timestamp': datetime.now().isoformat()
         }
         
@@ -1988,8 +2588,7 @@ def load_persistent_network_data():
 def get_stable_network_data():
     """Get stable, aggregated network data for the Network tab from SQLite database"""
     try:
-        from db_manager import DatabaseManager
-        db = DatabaseManager()
+        db = get_db(currentdir=shared_data.currentdir)
         
         # Get all hosts from SQLite database
         hosts = db.get_all_hosts()
@@ -4737,37 +5336,34 @@ def stash_and_update():
             'success': False,
             'error': update_result['error'] or 'Unknown error during git pull',
             'warnings': update_result['warnings'],
-            'stash_created': stash_created,
-            'stash_retained': stash_created
+            'local_changes_preserved': stash_created
         }), 500
 
-    stash_drop_output = ''
-    stash_drop_warning = ''
     if stash_created and stash_ref:
         try:
-            drop_proc = subprocess.run(
-                ['git', 'stash', 'drop', stash_ref],
+            pop_proc = subprocess.run(
+                ['git', 'stash', 'pop', stash_ref],
                 cwd=repo_path,
                 capture_output=True,
                 text=True,
                 check=True
             )
-            stash_drop_output = drop_proc.stdout.strip() or drop_proc.stderr.strip() or ''
-            logger.info(f"Dropped temporary auto stash {stash_ref}")
+            pop_msg = pop_proc.stdout.strip() or pop_proc.stderr.strip() or ''
+            if pop_msg:
+                logger.debug(f"Stash pop output: {pop_msg}")
+            logger.info(f"Reapplied local changes from {stash_ref}")
         except subprocess.CalledProcessError as e:
-            stash_drop_warning = e.stderr.strip() or e.stdout.strip() or str(e)
-            logger.warning(f"Failed to drop stash {stash_ref}: {stash_drop_warning}")
-            update_result['warnings'].append(f"Failed to drop auto stash {stash_ref}. Please clean manually.")
+            stash_pop_warning = e.stderr.strip() or e.stdout.strip() or str(e)
+            logger.warning(f"Failed to reapply stash {stash_ref}: {stash_pop_warning}")
+            update_result['warnings'].append(
+                "Local changes were saved but could not be re-applied automatically. Resolve conflicts and run 'git stash pop' manually."
+            )
 
     _schedule_service_restart()
 
     return jsonify({
         'success': True,
-        'message': 'Local changes stashed, update applied, stash dropped.' if stash_created else 'Update applied (no local changes were stashed).',
-        'stash_created': stash_created,
-        'stash_dropped': bool(stash_created and not stash_drop_warning),
-        'stash_output': stash_stdout,
-        'stash_drop_output': stash_drop_output,
+        'message': 'Update applied successfully.',
         'warnings': update_result['warnings'],
         'update_output': update_result['output']
     })
@@ -4806,6 +5402,123 @@ def fix_git_safe_directory():
     except Exception as e:
         logger.error(f"Error fixing git safe directory: {e}")
         return jsonify({'success': False, 'error': str(e)}), 500
+
+
+# ============================================================================
+# PWNAGOTCHI INTEGRATION ENDPOINTS
+# ============================================================================
+
+@app.route('/api/pwnagotchi/status')
+def get_pwnagotchi_status():
+    try:
+        status = _build_pwnagotchi_status()
+        return jsonify({'success': True, 'status': status})
+    except Exception as e:
+        logger.error(f"Error retrieving Pwnagotchi status: {e}")
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@app.route('/api/pwnagotchi/install', methods=['POST'])
+def install_pwnagotchi_from_dashboard():
+    try:
+        if not os.path.exists(PWN_INSTALL_SCRIPT):
+            return jsonify({'success': False, 'error': 'Installer script not found', 'script': PWN_INSTALL_SCRIPT}), 404
+
+        current_status = _build_pwnagotchi_status(persist=False)
+        if current_status.get('installing'):
+            if _pwn_install_process_running() and not _is_pwn_install_stale(current_status):
+                return jsonify({'success': False, 'error': 'Installation already in progress'}), 409
+            logger.info('Previous Pwnagotchi install attempt appears stale. Restarting installer.')
+
+        logger.info("Launching Pwnagotchi installer from dashboard request")
+        _write_pwn_status_file('installing', 'Launching Pwnagotchi installer…', 'install')
+
+        try:
+            subprocess.Popen(
+                ['sudo', '/bin/bash', PWN_INSTALL_SCRIPT],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                start_new_session=True
+            )
+        except Exception as exc:
+            logger.error(f"Failed to spawn installer: {exc}")
+            return jsonify({'success': False, 'error': f'Failed to start installer: {exc}'}), 500
+
+        status = _emit_pwn_status_update()
+        return jsonify({'success': True, 'message': 'Installer started in background', 'status': status})
+
+    except Exception as e:
+        logger.error(f"Error starting Pwnagotchi install: {e}")
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@app.route('/api/pwnagotchi/logs')
+def stream_pwnagotchi_logs():
+    try:
+        cursor_arg = request.args.get('cursor', default=None, type=int)
+        tail_bytes = request.args.get('tail', default=4096, type=int)
+        max_bytes = request.args.get('max_bytes', default=8192, type=int)
+
+        status, log_file, cursor, entries = _read_pwn_log_chunk(cursor=cursor_arg, tail_bytes=tail_bytes, max_bytes=max_bytes)
+
+        response = {
+            'success': bool(log_file),
+            'entries': entries,
+            'cursor': cursor,
+            'file': log_file,
+            'state': status.get('state'),
+            'installing': status.get('installing', False)
+        }
+
+        if not log_file:
+            response['error'] = 'Installer log not available yet'
+
+        return jsonify(response)
+
+    except Exception as exc:
+        logger.error(f"Error streaming Pwnagotchi logs: {exc}")
+        return jsonify({'success': False, 'error': 'Failed to read installer logs'}), 500
+
+
+@app.route('/api/pwnagotchi/swap', methods=['POST'])
+def swap_to_pwnagotchi_mode():
+    try:
+        data = request.get_json(silent=True) or {}
+        target_mode = (data.get('target') or 'pwnagotchi').strip().lower()
+
+        if target_mode not in {'pwnagotchi', 'ragnar'}:
+            return jsonify({'success': False, 'error': f'Invalid target mode: {target_mode}'}), 400
+
+        status = _build_pwnagotchi_status()
+        if not status.get('installed'):
+            return jsonify({'success': False, 'error': 'Pwnagotchi is not installed'}), 409
+
+        if target_mode == status.get('mode', 'ragnar') and target_mode == 'pwnagotchi':
+            return jsonify({'success': False, 'error': 'Already scheduled for Pwnagotchi mode'}), 409
+
+        if target_mode == 'pwnagotchi':
+            message = 'Ragnar service will stop and Pwnagotchi will start. Reboot to return to Ragnar.'
+        else:
+            message = 'Switching back to Ragnar service. This is typically triggered after reboot.'
+
+        _write_pwn_status_file('switching', message, 'swap', {'target_mode': target_mode})
+
+        timestamp = datetime.utcnow().isoformat() + 'Z'
+        _update_pwn_config({
+            'pwnagotchi_mode': target_mode,
+            'pwnagotchi_last_switch': timestamp,
+            'pwnagotchi_last_status': message
+        })
+
+        status_payload = _emit_pwn_status_update()
+        _schedule_pwn_mode_switch(target_mode)
+
+        return jsonify({'success': True, 'message': message, 'status': status_payload})
+
+    except Exception as e:
+        logger.error(f"Error scheduling Pwnagotchi swap: {e}")
+        return jsonify({'success': False, 'error': str(e)}), 500
+
 
 @app.route('/api/kill', methods=['POST'])
 def kill_switch():
@@ -7450,8 +8163,7 @@ def handle_log_request():
 def handle_network_request():
     """Handle request for network data"""
     try:
-        from db_manager import DatabaseManager
-        db = DatabaseManager()
+        db = get_db(currentdir=shared_data.currentdir)
         data = db.get_all_hosts()
         emit('network_update', data)
     except Exception as e:
@@ -7620,6 +8332,7 @@ def get_current_status():
         'ragnar_status2': safe_str(shared_data.ragnarstatustext2),
         'ragnar_says': safe_str(shared_data.ragnarsays),
         'orchestrator_status': safe_str(shared_data.ragnarorch_status),
+        'automation_enabled': is_orchestrator_running(),
         'target_count': safe_int(shared_data.targetnbr),
         'port_count': safe_int(shared_data.portnbr),
         'vulnerability_count': safe_int(shared_data.vulnnbr),
@@ -7630,6 +8343,7 @@ def get_current_status():
         'level': safe_int(shared_data.levelnbr),
         'points': safe_int(shared_data.coinnbr),
         'coins': safe_int(shared_data.coinnbr),
+        'scanned_network_count': safe_int(getattr(shared_data, 'scanned_networks_count', 0)),
         'wifi_connected': wifi_status.get('wifi_connected', safe_bool(shared_data.wifi_connected)),
         'current_ssid': wifi_status.get('current_ssid'),
         'ap_mode_active': wifi_status.get('ap_mode_active', False),
@@ -7638,6 +8352,8 @@ def get_current_status():
         'pan_connected': safe_bool(shared_data.pan_connected),
         'usb_active': safe_bool(shared_data.usb_active),
         'manual_mode': safe_bool(shared_data.config.get('manual_mode', False)),
+        'headless_mode': safe_bool(getattr(shared_data, 'headless_mode', False)),
+        'release_gate': _build_release_gate_payload(),
         'timestamp': datetime.now().isoformat()
     }
 
@@ -7992,8 +8708,7 @@ def _collect_manual_targets():
 
     # Read from SQLite database (primary source)
     try:
-        from db_manager import DatabaseManager
-        db = DatabaseManager()
+        db = get_db(currentdir=shared_data.currentdir)
         all_hosts = db.get_all_hosts()
         
         for host in all_hosts:
@@ -8144,11 +8859,7 @@ def _get_existing_credentials_snapshot(action, ip):
         return []
 
 
-def _normalize_port_value(port_value):
-    try:
-        return str(int(port_value))
-    except (TypeError, ValueError):
-        return None
+
 
 
 def _is_port_allowed_for_action(action, port_value):
@@ -8352,6 +9063,69 @@ def execute_manual_attack():
         logger.error(f"Error executing manual attack: {e}")
         return jsonify({'success': False, 'error': str(e)}), 500
 
+@app.route('/api/automation/orchestrator/start', methods=['POST'])
+def start_orchestrator_automation():
+    """Start the orchestrator thread to enable automation."""
+    try:
+        ragnar_instance = getattr(shared_data, 'ragnar_instance', None)
+        if not ragnar_instance:
+            return jsonify({'success': False, 'error': 'Core Ragnar instance is not initialized yet'}), 503
+
+        if is_orchestrator_running():
+            return jsonify({
+                'success': True,
+                'message': 'Automation already running',
+                'automation_enabled': True
+            })
+
+        ragnar_instance.start_orchestrator()
+        automation_enabled = is_orchestrator_running()
+
+        broadcast_status_update()
+
+        message = 'Automation enabled - orchestrator awake' if automation_enabled else 'Automation start requested - waiting for Wi-Fi'
+        return jsonify({
+            'success': True,
+            'message': message,
+            'automation_enabled': automation_enabled
+        })
+
+    except Exception as e:
+        logger.error(f"Error enabling automation: {e}")
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@app.route('/api/automation/orchestrator/stop', methods=['POST'])
+def stop_orchestrator_automation():
+    """Stop the orchestrator thread so automation sleeps."""
+    try:
+        ragnar_instance = getattr(shared_data, 'ragnar_instance', None)
+        if not ragnar_instance:
+            return jsonify({'success': False, 'error': 'Core Ragnar instance is not initialized yet'}), 503
+
+        if not is_orchestrator_running():
+            broadcast_status_update()
+            return jsonify({
+                'success': True,
+                'message': 'Automation already sleeping',
+                'automation_enabled': False
+            })
+
+        ragnar_instance.stop_orchestrator()
+        automation_enabled = is_orchestrator_running()
+        broadcast_status_update()
+
+        return jsonify({
+            'success': True,
+            'message': 'Automation disabled - orchestrator sleeping',
+            'automation_enabled': automation_enabled
+        })
+
+    except Exception as e:
+        logger.error(f"Error disabling automation: {e}")
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
 @app.route('/api/manual/orchestrator/start', methods=['POST'])
 def start_orchestrator_manual():
     """Start the orchestrator in manual mode"""
@@ -8370,6 +9144,7 @@ def start_orchestrator_manual():
     except Exception as e:
         logger.error(f"Error enabling manual mode: {e}")
         return jsonify({'success': False, 'error': str(e)}), 500
+
 
 @app.route('/api/manual/orchestrator/stop', methods=['POST'])
 def stop_orchestrator_manual():
@@ -9224,6 +9999,71 @@ def format_uptime(seconds):
 # DASHBOARD API ENDPOINTS
 # ============================================================================
 
+def _count_scanned_networks() -> int:
+    """Return the number of distinct Wi-Fi networks Ragnar has stored (excluding default)."""
+    try:
+        return shared_data._calculate_scanned_networks_count()
+    except Exception as exc:
+        logger.error(f"SCANNED_NETWORKS: Failed to calculate via shared_data: {exc}")
+        return 0
+
+@app.route('/api/debug/scanned-networks')
+def debug_scanned_networks():
+    """DEBUG: Test endpoint to check scanned networks counting"""
+    try:
+        manager = getattr(shared_data, 'storage_manager', None)
+        networks_dir = getattr(manager, 'networks_dir', None) if manager else None
+        default_slug = 'default'
+
+        if manager is not None:
+            default_ssid = getattr(manager, 'default_ssid', None)
+            slugify = getattr(manager, '_slugify', None)
+            if callable(slugify) and default_ssid is not None:
+                try:
+                    default_slug = slugify(default_ssid)
+                except Exception:
+                    default_slug = 'default'
+
+        if not networks_dir:
+            networks_dir = os.path.join(shared_data.datadir, 'networks')
+
+        debug_info = {
+            'networks_dir': networks_dir,
+            'dir_exists': os.path.exists(networks_dir),
+            'entries': [],
+            'count': 0,
+            'cached_count': getattr(shared_data, 'scanned_networks_count', 0),
+            'default_slug': default_slug,
+        }
+
+        if os.path.exists(networks_dir):
+            try:
+                entries = os.listdir(networks_dir)
+                debug_info['raw_entries'] = entries
+                count = 0
+                for entry in entries:
+                    entry_info = {
+                        'name': entry,
+                        'is_hidden': entry.startswith('.'),
+                        'is_dir': os.path.isdir(os.path.join(networks_dir, entry)),
+                        'is_default': entry in ('default', default_slug),
+                        'counted': False
+                    }
+                    if (not entry.startswith('.')
+                            and os.path.isdir(os.path.join(networks_dir, entry))
+                            and entry not in ('default', default_slug)):
+                        count += 1
+                        entry_info['counted'] = True
+                    debug_info['entries'].append(entry_info)
+                debug_info['count'] = count
+                debug_info['recalculated_count'] = shared_data._calculate_scanned_networks_count()
+            except OSError as e:
+                debug_info['error'] = str(e)
+        
+        return jsonify(debug_info)
+    except Exception as e:
+        return jsonify({'error': str(e), 'traceback': traceback.format_exc()})
+
 @app.route('/api/dashboard/quick')
 def get_dashboard_quick():
     """OPTIMIZED: Combined fast endpoint that returns all essential dashboard data in one call.
@@ -9285,6 +10125,7 @@ def get_dashboard_quick():
             'points': safe_int(shared_data.coinnbr),
             'coins': safe_int(shared_data.coinnbr),
             'data_count': safe_int(shared_data.datanbr),
+            'scanned_network_count': safe_int(getattr(shared_data, 'scanned_networks_count', 0)),
             'last_sync_timestamp': last_sync_ts,
             'last_sync_iso': last_sync_iso,
             'last_sync_age_seconds': last_sync_age,
@@ -9294,6 +10135,7 @@ def get_dashboard_quick():
             'ragnar_status2': safe_str(shared_data.ragnarstatustext2),
             'ragnar_says': safe_str(shared_data.ragnarsays),
             'orchestrator_status': safe_str(shared_data.ragnarorch_status),
+            'automation_enabled': is_orchestrator_running(),
             'wifi_connected': wifi_status.get('wifi_connected', safe_bool(shared_data.wifi_connected)),
             'current_ssid': wifi_status.get('current_ssid'),
             'ap_mode_active': wifi_status.get('ap_mode_active', False),
@@ -9302,6 +10144,7 @@ def get_dashboard_quick():
             'pan_connected': safe_bool(shared_data.pan_connected),
             'usb_active': safe_bool(shared_data.usb_active),
             'manual_mode': safe_bool(shared_data.config.get('manual_mode', False)),
+            'release_gate': _build_release_gate_payload(),
             'timestamp': datetime.now().isoformat()
         }
 
@@ -9370,6 +10213,7 @@ def get_dashboard_stats():
             'level': safe_int(shared_data.levelnbr),
             'points': safe_int(shared_data.coinnbr),
             'coins': safe_int(shared_data.coinnbr),
+            'scanned_network_count': safe_int(getattr(shared_data, 'scanned_networks_count', 0)),
             'last_sync_timestamp': last_sync_ts,
             'last_sync_iso': last_sync_iso,
             'last_sync_age_seconds': last_sync_age

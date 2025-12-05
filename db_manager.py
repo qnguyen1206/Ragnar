@@ -81,7 +81,7 @@ class DatabaseManager:
     - CSV migration and backward compatibility
     """
     
-    def __init__(self, db_path: str = None, currentdir: str = None):
+    def __init__(self, db_path: str = None, currentdir: str = None, data_root: str = None):
         """
         Initialize the database manager.
         
@@ -90,8 +90,8 @@ class DatabaseManager:
             currentdir: Root directory of Ragnar installation
         """
         self.currentdir = currentdir or os.path.dirname(os.path.abspath(__file__))
-        self.datadir = os.path.join(self.currentdir, 'data')
-        
+        self.datadir = data_root or os.path.join(self.currentdir, 'data')
+
         # Database file location
         if db_path is None:
             db_path = os.path.join(self.datadir, 'ragnar.db')
@@ -106,6 +106,24 @@ class DatabaseManager:
         self._init_database()
         
         logger.info(f"DatabaseManager initialized: {self.db_path}")
+
+    def configure_storage(self, data_root: Optional[str], db_path: Optional[str]):
+        """Update the storage root and database path when network context changes."""
+        updated = False
+        with self.lock:
+            if data_root and data_root != self.datadir:
+                self.datadir = data_root
+                updated = True
+            if db_path and db_path != self.db_path:
+                self.db_path = db_path
+                updated = True
+            self.netkb_csv = os.path.join(self.datadir, 'netkb.csv')
+            if updated:
+                os.makedirs(os.path.dirname(self.db_path), exist_ok=True)
+
+        if updated:
+            self._init_database()
+            logger.info(f"Database storage configured: root={self.datadir}, db={self.db_path}")
     
     @contextmanager
     def get_connection(self):

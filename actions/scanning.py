@@ -15,13 +15,14 @@ import pandas as pd
 import socket
 import subprocess
 import re
+# Try to import network interface library
+netifaces = None
 try:
-    import netifaces_plus as netifaces
+    import netifaces  # type: ignore
 except ImportError:
     try:
-        import netifaces
+        import netifaces_plus as netifaces  # type: ignore
     except ImportError:
-        netifaces = None
         print("Warning: Neither netifaces nor netifaces-plus found. Network discovery may be limited.")
 import time
 import glob
@@ -31,18 +32,19 @@ from rich.console import Console
 from rich.table import Table
 from rich.text import Text
 from rich.progress import Progress
-try:
-    # Try the old import format first
-    from getmac import get_mac_address as gma
-except ImportError:
+# MAC address getter with fallback
+def gma(*args, **kwargs):
     try:
-        # Try the new format
-        import getmac
-        gma = getmac.get_mac_address
-    except (ImportError, AttributeError):
-        # Final fallback
-        def gma(*args, **kwargs):
-            return "00:00:00:00:00:00"
+        from getmac import get_mac_address
+        result = get_mac_address(*args, **kwargs)
+        return result if result else '00:00:00:00:00:00'
+    except ImportError:
+        try:
+            import getmac
+            result = getmac.get_mac_address(*args, **kwargs)
+            return result if result else '00:00:00:00:00:00'
+        except (ImportError, AttributeError):
+            return '00:00:00:00:00:00'
 import sys
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from shared import SharedData
@@ -317,19 +319,17 @@ class NetworkScanner:
         
         return nmap_results
 
-    def _ping_sweep_missing_hosts(self, arp_hosts):
-        """
-        Ping sweep to find hosts that don't respond to arp-scan but are alive.
-        Expands CIDR ranges like '192.168.1.0/24' into individual IPs.
-        """
+    def _ping_sweep_missing_hosts(self, arp_hosts, target_cidrs=None, priority_targets=None):
+        """Ping sweep to find hosts that don't respond to arp-scan but are alive."""
         ping_discovered = {}
         known_ips = set(arp_hosts.keys())
-        
-        # Define CIDRs to scan
-        target_cidrs = ['192.168.1.0/24']
-        
-        # CRITICAL TARGET: Always ensure 192.168.1.192 is checked explicitly
-        priority_targets = ['192.168.1.192']
+
+        if not target_cidrs:
+            target_cidrs = ['192.168.1.0/24']
+
+        # CRITICAL TARGET: Always ensure 192.168.1.192 is checked explicitly unless overridden
+        if priority_targets is None:
+            priority_targets = ['192.168.1.192']
 
         self.logger.info(f"🔍 Starting ping sweep - ARP found {len(arp_hosts)} hosts, checking {254} additional IPs")
 
@@ -452,6 +452,43 @@ class NetworkScanner:
             self.logger.warning(f"❌ Ping sweep found no additional hosts beyond ARP scan results")
 
         return ping_discovered
+
+    def run_initial_ping_sweep(self, include_arp_scan=True, cidrs=None):
+        """Run a lightweight ARP + ping discovery, typically after Wi-Fi connects."""
+        try:
+            target_cidrs = list(cidrs) if cidrs else []
+            if not target_cidrs:
+                network = None
+                try:
+                    network = self.get_network()
+                except Exception as network_error:
+                    self.logger.warning(f"Unable to determine current network for ping sweep: {network_error}")
+                if network:
+                    target_cidrs.append(str(network))
+                else:
+                    target_cidrs.append('192.168.1.0/24')
+
+            self.logger.info(f"🚀 Initial ping sweep requested across {', '.join(target_cidrs)}")
+            arp_hosts = self.run_arp_scan() if include_arp_scan else {}
+            ping_results = self._ping_sweep_missing_hosts(
+                arp_hosts,
+                target_cidrs=target_cidrs
+            )
+
+            summary = {
+                'arp_hosts': len(arp_hosts),
+                'ping_hosts': len(ping_results),
+                'target_cidrs': target_cidrs
+            }
+            self.logger.info(
+                f"📡 Initial ping sweep complete: {summary['arp_hosts']} ARP hosts, "
+                f"{summary['ping_hosts']} ping-only hosts"
+            )
+            return summary
+        except Exception as exc:
+            self.logger.error(f"Initial ping sweep failed: {exc}")
+            self.logger.debug(f"Full traceback: {traceback.format_exc()}")
+            return None
 
     def get_current_timestamp(self):
         """
@@ -1698,7 +1735,7 @@ class NetworkScanner:
                     try:
                         df = pd.read_csv(wifi_network_file, on_bad_lines='warn', encoding='utf-8', encoding_errors='ignore')
                     except TypeError:  # pandas < 1.3
-                        df = pd.read_csv(wifi_network_file, error_bad_lines=False, warn_bad_lines=True, encoding='utf-8', encoding_errors='ignore')
+                        df = pd.read_csv(wifi_network_file, on_bad_lines='skip', encoding='utf-8', encoding_errors='ignore')
                     
                     wifi_headers = list(df.columns)
                     wifi_entries = df.to_dict('records')
@@ -1755,7 +1792,7 @@ class NetworkScanner:
                             with os.fdopen(temp_fd, 'w', newline='', encoding='utf-8') as file:
                                 writer = csv.DictWriter(file, fieldnames=wifi_headers)
                                 writer.writeheader()
-                                writer.writerows(wifi_entries)
+                                writer.writerows(wifi_entries)  # type: ignore
                             
                             # Verify temp file has reasonable size before replacing original
                             if os.path.getsize(temp_path) > 50:

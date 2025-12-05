@@ -49,6 +49,17 @@ else
     echo -e "${GREEN}Local changes backed up.${NC}"
 fi
 
+echo -e "${BLUE}Step 2.5: Preserving local runtime data...${NC}"
+BACKUP_DIR=".local_backup"
+mkdir -p "$BACKUP_DIR"
+PRESERVE_FILES=("data/ragnar.db" "data/livestatus.csv" "data/netkb.csv" "data/pwnagotchi_status.json")
+for file in "${PRESERVE_FILES[@]}"; do
+    if [ -f "$file" ]; then
+        cp -p "$file" "$BACKUP_DIR/$(basename $file)"
+        echo -e "  ${GREEN}✓${NC} Backed up: $file"
+    fi
+done
+
 echo -e "${BLUE}Step 3: Fetching latest updates...${NC}"
 git fetch origin
 
@@ -64,6 +75,21 @@ fi
 
 echo -e "${BLUE}Step 5: Updating Python dependencies...${NC}"
 pip3 install --break-system-packages -r requirements.txt --upgrade
+
+echo -e "${BLUE}Step 5.5: Restoring local runtime data...${NC}"
+for file in "${PRESERVE_FILES[@]}"; do
+    backup_file="$BACKUP_DIR/$(basename $file)"
+    if [ -f "$backup_file" ]; then
+        mkdir -p "$(dirname $file)"
+        cp -p "$backup_file" "$file"
+        echo -e "  ${GREEN}✓${NC} Restored: $file"
+    fi
+done
+rm -rf "$BACKUP_DIR"
+echo -e "${GREEN}Local runtime data restored.${NC}"
+
+echo -e "${BLUE}Step 5.6: Initializing data files from templates...${NC}"
+bash "$ragnar_PATH/init_data_files.sh"
 
 echo -e "${BLUE}Step 6: Setting correct permissions...${NC}"
 chown -R ragnar:ragnar "$ragnar_PATH"
