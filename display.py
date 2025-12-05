@@ -451,7 +451,7 @@ class Display:
         if quality is None:
             return 0
 
-        thresholds = [15, 35, 65, 85]
+        thresholds = [8, 28, 52, 70]
         waves = 0
         for threshold in thresholds:
             if quality >= threshold:
