@@ -41,7 +41,7 @@ write_status() {
 EOF
 }
 
-select_monitor_interface() {
+select_station_interface() {
     local attempt=0
     while true; do
         attempt=$((attempt + 1))
@@ -72,6 +72,60 @@ set_or_update_config_value() {
     else
         echo "$key = \"$value\"" >> "$CONFIG_FILE"
     fi
+}
+
+install_monitor_scripts() {
+    local station_if="$1"
+    local monitor_if="$2"
+
+    cat > /usr/bin/monstart <<EOF
+#!/bin/bash
+set -euo pipefail
+
+STA_IF="$station_if"
+MON_IF="$monitor_if"
+
+log() {
+    echo "[monstart] \$*"
+}
+
+if ip link show "\$MON_IF" >/dev/null 2>&1; then
+    ip link set "\$MON_IF" down >/dev/null 2>&1 || true
+    iw "\$MON_IF" del >/dev/null 2>&1 || true
+fi
+
+ip link set "\$STA_IF" down >/dev/null 2>&1 || true
+iw dev "\$STA_IF" set type managed >/dev/null 2>&1 || true
+ip link set "\$STA_IF" up >/dev/null 2>&1 || true
+
+if ! iw dev "\$STA_IF" interface add "\$MON_IF" type monitor >/dev/null 2>&1; then
+    log "Failed to create monitor interface from \$STA_IF"
+    exit 1
+fi
+
+ip link set "\$MON_IF" up >/dev/null 2>&1 || true
+log "Monitor interface \$MON_IF ready (parent: \$STA_IF)"
+exit 0
+EOF
+
+    cat > /usr/bin/monstop <<EOF
+#!/bin/bash
+set -euo pipefail
+
+STA_IF="$station_if"
+MON_IF="$monitor_if"
+
+if ip link show "\$MON_IF" >/dev/null 2>&1; then
+    ip link set "\$MON_IF" down >/dev/null 2>&1 || true
+    iw "\$MON_IF" del >/dev/null 2>&1 || true
+fi
+
+ip link set "\$STA_IF" up >/dev/null 2>&1 || true
+exit 0
+EOF
+
+    chmod 755 /usr/bin/monstart /usr/bin/monstop
+    chown root:root /usr/bin/monstart /usr/bin/monstop
 }
 
 trap 'write_status "error" "Installation failed (line ${LINENO}). Check ${LOG_FILE}." "error"' ERR
@@ -209,15 +263,17 @@ mkdir -p "$CONFIG_DIR"
 chmod 700 "$CONFIG_DIR"
 chown root:root "$CONFIG_DIR"
 
-MONITOR_IFACE="${PWN_MON_IFACE:-}"
-if [[ -z "$MONITOR_IFACE" ]]; then
-    if ! MONITOR_IFACE=$(select_monitor_interface); then
+STATION_IFACE="${PWN_DATA_IFACE:-}"
+if [[ -z "$STATION_IFACE" ]]; then
+    if ! STATION_IFACE=$(select_station_interface); then
         echo "[ERROR] Unable to detect a wlan interface other than wlan0. Exiting." >&2
         write_status "error" "Missing dedicated WiFi adapter for monitor mode" "preflight"
         exit 1
     fi
 fi
-echo "[INFO] Using monitor interface: ${MONITOR_IFACE}"
+MONITOR_IFACE_NAME="${PWN_MON_IFACE:-mon0}"
+echo "[INFO] Using managed iface: ${STATION_IFACE} (monitor alias: ${MONITOR_IFACE_NAME})"
+install_monitor_scripts "$STATION_IFACE" "$MONITOR_IFACE_NAME"
 
 # -------------------------------------------------------------------
 # RSA KEY VALIDATION + AUTO-GENERATION
@@ -240,7 +296,8 @@ if [[ ! -f "$CONFIG_FILE" ]]; then
 main.name = "RagnarPwn"
 main.confd = "/etc/pwnagotchi/conf.d"
 main.custom_plugins = "/etc/pwnagotchi/custom_plugins"
-main.iface = "${MONITOR_IFACE}"
+main.iface = "${STATION_IFACE}"
+main.mon_iface = "${MONITOR_IFACE_NAME}"
 main.mon_start_cmd = "/usr/bin/monstart"
 main.mon_stop_cmd = "/usr/bin/monstop"
 ui.display.enabled = false
@@ -252,7 +309,8 @@ plugins.grid.enabled = false
 EOF
     echo "[INFO] Created default config at ${CONFIG_FILE}"
 else
-    set_or_update_config_value "main.iface" "${MONITOR_IFACE}"
+    set_or_update_config_value "main.iface" "${STATION_IFACE}"
+    set_or_update_config_value "main.mon_iface" "${MONITOR_IFACE_NAME}"
     set_or_update_config_value "main.mon_start_cmd" "/usr/bin/monstart"
     set_or_update_config_value "main.mon_stop_cmd" "/usr/bin/monstop"
 fi
