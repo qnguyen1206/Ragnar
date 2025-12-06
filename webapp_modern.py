@@ -5854,6 +5854,17 @@ def reset_threat_intelligence():
 # WI-FI MANAGEMENT ENDPOINTS
 # ============================================================================
 
+def _parse_wifi_interface_arg(raw_value):
+    """Validate and sanitize a requested Wi-Fi interface name."""
+    if raw_value is None:
+        return None
+    candidate = str(raw_value).strip()
+    if not candidate:
+        return None
+    if not re.match(r'^[A-Za-z0-9_.:-]+$', candidate):
+        raise ValueError("Invalid interface name")
+    return candidate
+
 @app.route('/api/wifi/interfaces')
 def get_wifi_interfaces():
     """Get available Wi-Fi interfaces"""
@@ -5939,13 +5950,20 @@ def get_wifi_status():
 def scan_wifi_networks():
     """Scan for available Wi-Fi networks with AP mode considerations for Pi Zero W2"""
     try:
+        payload = request.get_json(silent=True) or {}
+        try:
+            requested_interface = _parse_wifi_interface_arg(payload.get('interface'))
+        except ValueError as invalid_iface:
+            return jsonify({'success': False, 'error': str(invalid_iface)}), 400
         wifi_manager = getattr(shared_data, 'ragnar_instance', None)
         if wifi_manager and hasattr(wifi_manager, 'wifi_manager'):
+            manager = wifi_manager.wifi_manager
+            effective_interface = requested_interface or getattr(manager, 'default_wifi_interface', 'wlan0')
             # Check if we're in AP mode and handle accordingly
-            if wifi_manager.wifi_manager.ap_mode_active:
+            if manager.ap_mode_active:
                 logger.info("Scanning networks while in AP mode (Pi Zero W2 compatible)")
                 # Use specialized AP mode scanning
-                networks = wifi_manager.wifi_manager.scan_networks_while_ap()
+                networks = manager.scan_networks_while_ap(interface=requested_interface)
                 
                 # Check if we got instructional networks (scan failed)
                 if networks and any(net.get('instruction') for net in networks):
@@ -5953,21 +5971,24 @@ def scan_wifi_networks():
                         'networks': networks,
                         'warning': 'Live scanning limited in AP mode. Manual entry recommended.',
                         'manual_entry_available': True,
-                        'ap_mode': True
+                        'ap_mode': True,
+                        'interface': effective_interface
                     })
                 else:
                     return jsonify({
                         'networks': networks,
                         'success': True,
-                        'ap_mode': True
+                        'ap_mode': True,
+                        'interface': effective_interface
                     })
             else:
                 # Regular scanning when not in AP mode
-                networks = wifi_manager.wifi_manager.scan_networks()
+                networks = manager.scan_networks(interface=requested_interface)
                 return jsonify({
                     'networks': networks,
                     'success': True,
-                    'ap_mode': False
+                    'ap_mode': False,
+                    'interface': effective_interface
                 })
         else:
             return jsonify({
@@ -5999,17 +6020,23 @@ def scan_wifi_networks():
 def get_wifi_networks():
     """Get available and known Wi-Fi networks - optimized for Pi Zero W2 AP mode"""
     try:
+        try:
+            requested_interface = _parse_wifi_interface_arg(request.args.get('interface'))
+        except ValueError as invalid_iface:
+            return jsonify({'success': False, 'error': str(invalid_iface)}), 400
         wifi_manager = getattr(shared_data, 'ragnar_instance', None)
         if wifi_manager and hasattr(wifi_manager, 'wifi_manager'):
+            manager = wifi_manager.wifi_manager
+            effective_interface = requested_interface or getattr(manager, 'default_wifi_interface', 'wlan0')
             
             # For captive portal/AP clients, use lightweight response
             if is_ap_client_request():
                 logger.info("Serving networks to AP client - using optimized response")
                 try:
-                    if wifi_manager.wifi_manager.ap_mode_active:
-                        available = wifi_manager.wifi_manager.scan_networks_while_ap()
+                    if manager.ap_mode_active:
+                        available = manager.scan_networks_while_ap(interface=requested_interface)
                     else:
-                        available = wifi_manager.wifi_manager.get_available_networks()
+                        available = manager.get_available_networks(interface=requested_interface or '')
                     
                     # Limit to top 10 strongest signals to reduce memory usage on Pi Zero W2
                     if available:
@@ -6026,47 +6053,51 @@ def get_wifi_networks():
                     return jsonify({
                         'success': True,
                         'networks': available if available else [],
-                        'ap_mode': wifi_manager.wifi_manager.ap_mode_active,
-                        'manual_entry_available': True
+                        'ap_mode': manager.ap_mode_active,
+                        'manual_entry_available': True,
+                        'interface': effective_interface
                     })
                 except Exception as e:
                     logger.warning(f"Limited scan failed for AP client: {e}")
                     # Fallback to known networks for AP clients
-                    known_networks = wifi_manager.wifi_manager.get_known_networks()
+                    known_networks = manager.get_known_networks()
                     return jsonify({
                         'success': True,
                         'networks': known_networks[:5],  # Limit for memory
                         'error': 'Scanning limited in AP mode',
                         'manual_entry_available': True,
-                        'ap_mode': True
+                        'ap_mode': True,
+                        'interface': effective_interface
                     })
             else:
                 # Full response for regular interface
                 try:
-                    if wifi_manager.wifi_manager.ap_mode_active:
-                        available = wifi_manager.wifi_manager.scan_networks_while_ap()
+                    if manager.ap_mode_active:
+                        available = manager.scan_networks_while_ap(interface=requested_interface)
                     else:
-                        available = wifi_manager.wifi_manager.get_available_networks()
+                        available = manager.get_available_networks(interface=requested_interface or '')
                     
-                    known = wifi_manager.wifi_manager.get_known_networks()
+                    known = manager.get_known_networks()
                     
                     return jsonify({
                         'success': True,
                         'available': available,
                         'known': known,
-                        'ap_mode': wifi_manager.wifi_manager.ap_mode_active,
-                        'manual_entry_available': True
+                        'ap_mode': manager.ap_mode_active,
+                        'manual_entry_available': True,
+                        'interface': effective_interface
                     })
                 except Exception as e:
                     logger.warning(f"Network scan failed: {e}")
                     # Fallback to known networks only
-                    known = wifi_manager.wifi_manager.get_known_networks()
+                    known = manager.get_known_networks()
                     return jsonify({
                         'success': True,
                         'available': [],
                         'known': known,
                         'error': 'Scanning failed, showing known networks only',
-                        'manual_entry_available': True
+                        'manual_entry_available': True,
+                        'interface': effective_interface
                     })
         else:
             return jsonify({

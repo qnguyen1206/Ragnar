@@ -4526,6 +4526,34 @@ function updateWifiStatus(message, type = '') {
 
 let currentWifiNetworks = [];
 let selectedWifiNetwork = null;
+const WIFI_INTERFACE_STORAGE_KEY = 'wifi-selected-interface';
+let selectedWifiInterface = null;
+
+function handleWifiInterfaceChange(event) {
+    selectedWifiInterface = (event?.target?.value || '').trim() || null;
+    if (selectedWifiInterface) {
+        localStorage.setItem(WIFI_INTERFACE_STORAGE_KEY, selectedWifiInterface);
+    } else {
+        localStorage.removeItem(WIFI_INTERFACE_STORAGE_KEY);
+    }
+}
+
+function getActiveWifiInterface() {
+    if (selectedWifiInterface) {
+        return selectedWifiInterface;
+    }
+    const saved = localStorage.getItem(WIFI_INTERFACE_STORAGE_KEY);
+    if (saved) {
+        selectedWifiInterface = saved;
+        return selectedWifiInterface;
+    }
+    const interfaceSelect = document.getElementById('wifi-interface-select');
+    if (interfaceSelect && interfaceSelect.value) {
+        selectedWifiInterface = interfaceSelect.value;
+        return selectedWifiInterface;
+    }
+    return null;
+}
 
 async function loadWifiInterfaces() {
     try {
@@ -4533,6 +4561,8 @@ async function loadWifiInterfaces() {
         const interfaceSelect = document.getElementById('wifi-interface-select');
         
         if (!interfaceSelect) return;
+        const savedInterface = localStorage.getItem(WIFI_INTERFACE_STORAGE_KEY);
+        let selectionApplied = false;
         
         if (data.success && data.interfaces && data.interfaces.length > 0) {
             interfaceSelect.innerHTML = '';
@@ -4540,15 +4570,32 @@ async function loadWifiInterfaces() {
                 const option = document.createElement('option');
                 option.value = iface.name;
                 option.textContent = `${iface.name}${iface.is_default ? ' (default)' : ''} - ${iface.state}`;
-                if (iface.is_default) {
+                if (!selectionApplied && savedInterface && iface.name === savedInterface) {
                     option.selected = true;
+                    selectionApplied = true;
+                } else if (!selectionApplied && iface.is_default) {
+                    option.selected = true;
+                    selectionApplied = true;
                 }
                 interfaceSelect.appendChild(option);
             });
             console.log('Loaded Wi-Fi interfaces:', data.interfaces);
         } else {
             interfaceSelect.innerHTML = '<option value="wlan0">wlan0 (default)</option>';
+            selectionApplied = true;
         }
+
+        if (!selectionApplied && interfaceSelect.options.length > 0) {
+            interfaceSelect.options[0].selected = true;
+        }
+
+        selectedWifiInterface = interfaceSelect.value || null;
+        if (selectedWifiInterface) {
+            localStorage.setItem(WIFI_INTERFACE_STORAGE_KEY, selectedWifiInterface);
+        }
+
+        interfaceSelect.removeEventListener('change', handleWifiInterfaceChange);
+        interfaceSelect.addEventListener('change', handleWifiInterfaceChange);
     } catch (error) {
         console.error('Error loading Wi-Fi interfaces:', error);
         const interfaceSelect = document.getElementById('wifi-interface-select');
@@ -4563,6 +4610,7 @@ async function scanWifiNetworks() {
     const networksList = document.getElementById('wifi-networks-list');
     
     if (!networksList) return;
+    const interfaceName = getActiveWifiInterface();
     
     try {
         // Disable button and show scanning message
@@ -4586,13 +4634,15 @@ async function scanWifiNetworks() {
         `;
         
         // Trigger scan
-        await postAPI('/api/wifi/scan', {});
+    const scanPayload = interfaceName ? { interface: interfaceName } : {};
+    await postAPI('/api/wifi/scan', scanPayload);
         
         // Wait a bit for scan to complete
         await new Promise(resolve => setTimeout(resolve, 3000));
         
         // Get networks
-        const data = await fetchAPI('/api/wifi/networks');
+    const query = interfaceName ? `/api/wifi/networks?interface=${encodeURIComponent(interfaceName)}` : '/api/wifi/networks';
+    const data = await fetchAPI(query);
         
         console.log('Wi-Fi networks data:', data);
         
@@ -4627,6 +4677,17 @@ function displayWifiNetworks(data) {
     
     let networks = [];
     let knownNetworks = [];
+    const interfaceName = data.interface || getActiveWifiInterface();
+    const sectionHeader = interfaceName ? `
+        <div class="text-xs text-gray-400 mb-3">
+            Showing results for interface <span class="font-semibold text-gray-100">${interfaceName}</span>
+        </div>
+    ` : '';
+    if (interfaceName) {
+        networksList.dataset.interface = interfaceName;
+    } else {
+        delete networksList.dataset.interface;
+    }
     
     // Extract networks from response
     if (data.available) {
@@ -4645,6 +4706,7 @@ function displayWifiNetworks(data) {
     
     if (!networks || networks.length === 0) {
         networksList.innerHTML = `
+            ${sectionHeader}
             <div class="text-center text-gray-400 py-8">
                 <p>No Wi-Fi networks found</p>
                 <p class="text-sm mt-2">Try scanning again or check your Wi-Fi interface</p>
@@ -4660,7 +4722,7 @@ function displayWifiNetworks(data) {
     currentWifiNetworks = networks;
     
     // Build network list HTML
-    networksList.innerHTML = networks.map(network => {
+    networksList.innerHTML = sectionHeader + networks.map(network => {
         const ssid = network.ssid || network.SSID || 'Unknown Network';
         const signal = network.signal || 0;
         const isSecure = network.security !== 'open' && network.security !== 'Open';
