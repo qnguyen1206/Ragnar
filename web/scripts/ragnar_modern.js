@@ -4467,6 +4467,7 @@ async function refreshWifiStatus() {
         
         const statusIndicator = document.getElementById('wifi-status-indicator');
         const wifiInfo = document.getElementById('wifi-info');
+        const connectedList = document.getElementById('wifi-connected-list');
         
         if (!statusIndicator || !wifiInfo) {
             console.error('Wi-Fi status elements not found in DOM');
@@ -4512,6 +4513,48 @@ async function refreshWifiStatus() {
             statusIndicator.className = 'text-sm px-2 py-1 rounded bg-red-700 text-red-300';
             wifiInfo.textContent = disconnectedMessage;
         }
+        if (connectedList) {
+            const interfaces = Array.isArray(data.interfaces) ? data.interfaces : [];
+            const connectedAdapters = interfaces.filter(iface => iface && iface.connected);
+            const offlineAdapters = interfaces.filter(iface => iface && !iface.connected);
+
+            const renderRow = (iface, isOnline = false) => {
+                const ssid = iface && (iface.connected_ssid || iface.connection) ? escapeHtml(iface.connected_ssid || iface.connection) : 'No SSID';
+                const ipLabel = iface && iface.ip_address ? `<div class="text-[11px] text-gray-400">${escapeHtml(iface.ip_address)}</div>` : '';
+                const statusClass = isOnline ? 'text-green-400' : 'text-gray-500';
+                const statusLabel = isOnline ? 'Online' : 'Offline';
+                const detailLabel = isOnline
+                    ? `SSID: ${ssid}`
+                    : escapeHtml(iface?.state || 'Unavailable');
+                return `
+                    <div class="flex items-center justify-between gap-3">
+                        <div>
+                            <div class="text-sm font-semibold text-white">${escapeHtml(iface?.name || 'Unknown')}</div>
+                            <div class="text-xs text-gray-400">${detailLabel}</div>
+                        </div>
+                        <div class="text-right">
+                            <div class="text-xs ${statusClass}">${statusLabel}</div>
+                            ${ipLabel}
+                        </div>
+                    </div>
+                `;
+            };
+
+            let listMarkup = '<div class="text-[11px] uppercase tracking-wide text-gray-400">Connected Adapters</div>';
+            if (connectedAdapters.length > 0) {
+                listMarkup += connectedAdapters.map(iface => renderRow(iface, true)).join('');
+            } else {
+                listMarkup += '<div class="text-xs text-gray-500">No active Wi-Fi connections</div>';
+            }
+
+            if (offlineAdapters.length > 0) {
+                listMarkup += '<div class="text-[11px] uppercase tracking-wide text-gray-400 mt-3 border-t border-slate-700 pt-2">Other Adapters</div>';
+                listMarkup += offlineAdapters.map(iface => renderRow(iface, false)).join('');
+            }
+
+            connectedList.innerHTML = listMarkup;
+            connectedList.classList.remove('hidden');
+        }
         
         console.log('Wi-Fi status updated successfully');
             
@@ -4528,6 +4571,11 @@ async function refreshWifiStatus() {
         }
         if (wifiInfo) {
             wifiInfo.textContent = 'Error checking Wi-Fi status';
+        }
+        const connectedList = document.getElementById('wifi-connected-list');
+        if (connectedList) {
+            connectedList.innerHTML = '<div class="text-xs text-red-300">Unable to load adapter list</div>';
+            connectedList.classList.remove('hidden');
         }
     }
 }
