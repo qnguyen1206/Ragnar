@@ -4567,6 +4567,19 @@ function getCachedWifiNetworkResult(interfaceName) {
     return cached ? cached.payload : null;
 }
 
+function hasCachedWifiNetworks(interfaceName) {
+    return Boolean(getCachedWifiNetworkResult(interfaceName));
+}
+
+function displayCachedWifiNetworks(interfaceName) {
+    const cached = getCachedWifiNetworkResult(interfaceName);
+    if (!cached) {
+        return false;
+    }
+    displayWifiNetworks(cached, { forceInterface: interfaceName, skipInterfaceCheck: true, fromCache: true });
+    return true;
+}
+
 function handleWifiInterfaceChange(event) {
     const nextInterface = (event?.target?.value || '').trim() || null;
     setSelectedWifiInterface(nextInterface);
@@ -4662,11 +4675,12 @@ async function refreshWifiNetworksForInterface(interfaceName) {
     if (!networksList) {
         return;
     }
+    displayCachedWifiNetworks(interfaceName);
     try {
         const query = `/api/wifi/networks?interface=${encodeURIComponent(interfaceName)}`;
         const data = await fetchAPI(query);
         if (data) {
-            displayWifiNetworks(data);
+            displayWifiNetworks(data, { forceInterface: interfaceName, skipInterfaceCheck: true });
         }
     } catch (error) {
         console.warn('Unable to refresh Wi-Fi networks for interface', interfaceName, error);
@@ -4692,6 +4706,17 @@ function setSelectedWifiInterface(interfaceName, options = {}) {
     updateWifiInterfaceSwitchActiveState(selectedWifiInterface);
 
     if (!options.skipRefresh && hasChanged) {
+        if (!displayCachedWifiNetworks(selectedWifiInterface)) {
+            const networksList = document.getElementById('wifi-networks-list');
+            if (networksList) {
+                networksList.innerHTML = `
+                    <div class="text-center text-gray-400 py-8">
+                        <p>No cached Wi-Fi data for <span class="font-semibold text-gray-100">${escapeHtml(selectedWifiInterface || 'default')}</span>.</p>
+                        <p class="text-sm mt-2">Fetching fresh scan results...</p>
+                    </div>
+                `;
+            }
+        }
         refreshWifiStatus().catch(err => console.warn('Wi-Fi status refresh failed for interface change', err));
         refreshWifiNetworksForInterface(selectedWifiInterface).catch(err => console.warn('Wi-Fi networks refresh failed for interface change', err));
     }
@@ -4823,7 +4848,7 @@ async function scanWifiNetworks() {
             throw scanError;
         }
         if (scanResponse && (hasNetworkEntries(scanResponse) || scanResponse.warning || scanResponse.error)) {
-            displayWifiNetworks(scanResponse);
+            displayWifiNetworks(scanResponse, { forceInterface: interfaceName, skipInterfaceCheck: true });
             displayedFromScan = true;
         }
         
@@ -4837,7 +4862,7 @@ async function scanWifiNetworks() {
         console.log('Wi-Fi networks data:', data);
         
         if (!displayedFromScan || hasNetworkEntries(data)) {
-            displayWifiNetworks(data);
+            displayWifiNetworks(data, { forceInterface: interfaceName, skipInterfaceCheck: true });
             displayedFromScan = true;
         }
         
