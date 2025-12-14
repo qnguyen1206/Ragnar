@@ -1409,6 +1409,15 @@ def _count_credentials_in_dir(directory: Optional[str]) -> int:
     return total
 
 
+def _count_files_in_tree(directory: Optional[str]) -> int:
+    if not directory or not os.path.isdir(directory):
+        return 0
+    total = 0
+    for _root, _dirs, files in os.walk(directory):
+        total += len(files)
+    return total
+
+
 def _load_intelligence_vulnerability_counts(intelligence_dir: Optional[str]) -> Tuple[Optional[int], Optional[int]]:
     # Prefer live, in-memory data from the intelligence engine when available so
     # dashboard cards stay aligned with the Threat Intel tab.
@@ -1485,6 +1494,7 @@ def _calculate_dashboard_stats_from_context(context: Dict[str, str]) -> Dict:
         'vulnerability_count': 0,
         'vulnerable_hosts_count': 0,
         'credential_count': 0,
+        'data_count': 0,
         'level': safe_int(shared_data.levelnbr),
         'points': safe_int(shared_data.coinnbr),
         'scanned_network_count': safe_int(getattr(shared_data, 'scanned_networks_count', shared_data._calculate_scanned_networks_count()), 0),
@@ -1536,6 +1546,7 @@ def _calculate_dashboard_stats_from_context(context: Dict[str, str]) -> Dict:
         stats['vulnerable_hosts_count'] = len(vulnerable_hosts)
 
     stats['credential_count'] = _count_credentials_in_dir(credentials_dir)
+    stats['data_count'] = _count_files_in_tree(context.get('data_stolen_dir'))
     stats['target_count'] = stats['active_target_count']
 
     # Derive timestamps from DB modification time when available
@@ -10490,9 +10501,16 @@ def get_dashboard_quick():
     """OPTIMIZED: Combined fast endpoint that returns all essential dashboard data in one call.
     This eliminates multiple round-trips and significantly speeds up dashboard loading on Pi Zero."""
     try:
-        # OPTIMIZATION: Use cached data from background sync - no expensive operations here!
-        # Background thread keeps data fresh every SYNC_BACKGROUND_INTERVAL seconds
-        
+        requested_identifier = _extract_requested_network_identifier()
+        stats_payload = None
+
+        if requested_identifier:
+            try:
+                stats_payload = _collect_dashboard_stats_for_network(requested_identifier)
+            except Exception as exc:
+                logger.error(f"Unable to collect dashboard stats for '{requested_identifier}': {exc}")
+                stats_payload = None
+
         current_time = time.time()
         last_sync_ts = getattr(shared_data, 'last_sync_timestamp', last_sync_time)
         last_sync_iso = None
@@ -10505,19 +10523,56 @@ def get_dashboard_quick():
             except Exception:
                 last_sync_iso = None
 
-        # Get all counts from cached shared_data (fast!)
-        active_target_count = safe_int(shared_data.targetnbr)
-        total_target_count = safe_int(shared_data.total_targetnbr)
-        inactive_target_count = safe_int(shared_data.inactive_targetnbr)
-        
-        # If we don't have proper total/inactive counts, calculate them from active count
+        if stats_payload:
+            ts_override = stats_payload.get('last_sync_timestamp')
+            if ts_override:
+                last_sync_ts = ts_override
+                last_sync_iso = stats_payload.get('last_sync_iso', last_sync_iso)
+                last_sync_age = stats_payload.get('last_sync_age_seconds', last_sync_age)
+
+        if stats_payload:
+            active_target_count = safe_int(stats_payload.get('active_target_count', stats_payload.get('target_count', 0)))
+            total_target_count = safe_int(stats_payload.get('total_target_count', active_target_count))
+            inactive_target_count = safe_int(stats_payload.get('inactive_target_count', total_target_count - active_target_count))
+            port_count = safe_int(stats_payload.get('port_count', shared_data.portnbr))
+            vulnerability_count = safe_int(stats_payload.get('vulnerability_count', shared_data.vulnnbr))
+            vulnerable_hosts_count = safe_int(stats_payload.get('vulnerable_hosts_count', stats_payload.get('vulnerable_host_count', 0)))
+            credential_count = safe_int(stats_payload.get('credential_count', shared_data.crednbr))
+            data_count = safe_int(stats_payload.get('data_count', shared_data.datanbr))
+            scanned_network_count = safe_int(stats_payload.get('scanned_network_count', getattr(shared_data, 'scanned_networks_count', 0)))
+            new_target_ips = stats_payload.get('new_target_ips', []) or []
+            lost_target_ips = stats_payload.get('lost_target_ips', []) or []
+            new_target_count = safe_int(stats_payload.get('new_target_count', len(new_target_ips)))
+            lost_target_count = safe_int(stats_payload.get('lost_target_count', len(lost_target_ips)))
+            level = safe_int(stats_payload.get('level', shared_data.levelnbr))
+            points = safe_int(stats_payload.get('points', shared_data.coinnbr))
+            network_ssid = stats_payload.get('network_ssid') or shared_data.active_network_ssid or 'default'
+            network_slug = stats_payload.get('network_slug') or getattr(shared_data, 'active_network_slug', None)
+        else:
+            active_target_count = safe_int(shared_data.targetnbr)
+            total_target_count = safe_int(shared_data.total_targetnbr)
+            inactive_target_count = safe_int(shared_data.inactive_targetnbr)
+            port_count = safe_int(shared_data.portnbr)
+            vulnerability_count = safe_int(shared_data.vulnnbr)
+            vulnerable_hosts_count = safe_int(getattr(shared_data, 'vulnerable_host_count', 0))
+            credential_count = safe_int(shared_data.crednbr)
+            data_count = safe_int(shared_data.datanbr)
+            scanned_network_count = safe_int(getattr(shared_data, 'scanned_networks_count', 0))
+            new_target_ips = getattr(shared_data, 'new_target_ips', [])
+            lost_target_ips = getattr(shared_data, 'lost_target_ips', [])
+            new_target_count = safe_int(getattr(shared_data, 'new_targets', len(new_target_ips)))
+            lost_target_count = safe_int(getattr(shared_data, 'lost_targets', len(lost_target_ips)))
+            level = safe_int(shared_data.levelnbr)
+            points = safe_int(shared_data.coinnbr)
+            network_ssid = shared_data.active_network_ssid or 'default'
+            network_slug = getattr(shared_data, 'active_network_slug', None)
+
         if total_target_count == 0 and active_target_count > 0:
             total_target_count = active_target_count
             inactive_target_count = 0
         elif inactive_target_count == 0 and total_target_count > active_target_count:
             inactive_target_count = total_target_count - active_target_count
 
-        # Get WiFi status (fast - from cache or quick check)
         wifi_status = {}
         try:
             wifi_manager = getattr(shared_data, 'ragnar_instance', None)
@@ -10526,32 +10581,31 @@ def get_dashboard_quick():
         except Exception:
             pass  # Silently fail - non-critical for dashboard
 
-        # Combine stats and status in single response (eliminates separate /api/status call)
         combined_data = {
-            # Stats
+            'network_ssid': network_ssid,
+            'network_slug': network_slug,
+            'requested_network': requested_identifier,
             'target_count': active_target_count,
             'active_target_count': active_target_count,
             'inactive_target_count': inactive_target_count,
             'total_target_count': total_target_count,
-            'new_target_count': safe_int(getattr(shared_data, 'new_targets', 0)),
-            'lost_target_count': safe_int(getattr(shared_data, 'lost_targets', 0)),
-            'new_target_ips': getattr(shared_data, 'new_target_ips', []),
-            'lost_target_ips': getattr(shared_data, 'lost_target_ips', []),
-            'port_count': safe_int(shared_data.portnbr),
-            'vulnerability_count': safe_int(shared_data.vulnnbr),
-            'vulnerable_hosts_count': safe_int(getattr(shared_data, 'vulnerable_host_count', 0)),
-            'vulnerable_host_count': safe_int(getattr(shared_data, 'vulnerable_host_count', 0)),
-            'credential_count': safe_int(shared_data.crednbr),
-            'level': safe_int(shared_data.levelnbr),
-            'points': safe_int(shared_data.coinnbr),
-            'coins': safe_int(shared_data.coinnbr),
-            'data_count': safe_int(shared_data.datanbr),
-            'scanned_network_count': safe_int(getattr(shared_data, 'scanned_networks_count', 0)),
+            'new_target_count': new_target_count,
+            'lost_target_count': lost_target_count,
+            'new_target_ips': new_target_ips,
+            'lost_target_ips': lost_target_ips,
+            'port_count': port_count,
+            'vulnerability_count': vulnerability_count,
+            'vulnerable_hosts_count': vulnerable_hosts_count,
+            'vulnerable_host_count': vulnerable_hosts_count,
+            'credential_count': credential_count,
+            'level': level,
+            'points': points,
+            'coins': points,
+            'data_count': data_count,
+            'scanned_network_count': scanned_network_count,
             'last_sync_timestamp': last_sync_ts,
             'last_sync_iso': last_sync_iso,
             'last_sync_age_seconds': last_sync_age,
-            
-            # Status
             'ragnar_status': safe_str(shared_data.ragnarstatustext),
             'ragnar_status2': safe_str(shared_data.ragnarstatustext2),
             'ragnar_says': safe_str(shared_data.ragnarsays),
@@ -10570,7 +10624,6 @@ def get_dashboard_quick():
         }
 
         response = jsonify(combined_data)
-        # Cache for 3 seconds - balance between freshness and performance
         response.headers['Cache-Control'] = 'public, max-age=3'
         return response
     except Exception as e:
