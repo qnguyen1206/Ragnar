@@ -403,6 +403,8 @@ class SharedData:
             "wifi_auto_ap_fallback": True,
             "wifi_ap_timeout": 180,
             "wifi_multi_network_scans_enabled": False,
+            "wifi_multi_scan_mode": "single",
+            "wifi_multi_scan_focus_interface": "",
             "wifi_multi_scan_max_interfaces": 2,
             "wifi_multi_scan_max_parallel": 1,
             "wifi_allowed_scan_interfaces": [],

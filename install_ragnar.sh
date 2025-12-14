@@ -281,6 +281,7 @@ install_dependencies() {
         "iputils-ping"
         "rfkill"
         "sqlite3"
+        "arp-scan"
     )
     
     # Optional packages that may not be available in all distributions

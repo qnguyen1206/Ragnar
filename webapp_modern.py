@@ -6283,12 +6283,11 @@ def _toggle_scan_interface(enable: bool):
     if not interface:
         return jsonify({'success': False, 'error': 'interface is required'}), 400
 
-    if enable and not shared_data.config.get('wifi_multi_network_scans_enabled', False):
-        shared_data.config['wifi_multi_network_scans_enabled'] = True
+    if enable and not state.is_multi_mode_enabled():
         try:
-            shared_data.save_config()
+            state.update_scan_mode(mode=state.MODE_MULTI)
         except Exception as exc:
-            logger.warning(f"Failed to persist global scan enable: {exc}")
+            logger.warning(f"Unable to switch to multi-interface mode automatically: {exc}")
 
     updated = state.set_scan_enabled(interface, enable)
     if not updated:
@@ -6304,6 +6303,22 @@ def enable_wifi_scan_control():
 @app.route('/api/wifi/scan-control/stop', methods=['POST'])
 def disable_wifi_scan_control():
     return _toggle_scan_interface(False)
+
+
+@app.route('/api/wifi/scan-control/mode', methods=['POST'])
+def update_wifi_scan_mode():
+    state = _get_multi_interface_state()
+    payload = request.get_json(silent=True) or {}
+    mode = payload.get('mode')
+    focus_interface = payload.get('focus_interface')
+    try:
+        updated = state.update_scan_mode(mode=mode, focus_interface=focus_interface)
+    except ValueError as exc:
+        return jsonify({'success': False, 'error': str(exc)}), 400
+    except Exception as exc:  # pragma: no cover - defensive logging
+        logger.error(f"Failed to update scan mode: {exc}")
+        return jsonify({'success': False, 'error': 'Unable to update scan mode'}), 500
+    return jsonify({'success': True, 'state': updated})
 
 @app.route('/api/wifi/scan', methods=['POST'])
 def scan_wifi_networks():

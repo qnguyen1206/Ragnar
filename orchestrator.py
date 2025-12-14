@@ -395,9 +395,7 @@ class Orchestrator:
         if not self.network_scanner:
             return
         multi_state = getattr(self.shared_data, 'multi_interface_state', None)
-        multi_enabled = bool(self.shared_data.config.get('wifi_multi_network_scans_enabled', False))
-
-        if not multi_state or not multi_enabled:
+        if not multi_state:
             self.network_scanner.scan()
             return
 
@@ -406,39 +404,61 @@ class Orchestrator:
         except Exception as exc:
             logger.debug(f"Unable to refresh multi-interface state: {exc}")
 
-        jobs = multi_state.get_scan_jobs()
-        if not jobs:
-            logger.info("Multi-network scanning enabled but no eligible interfaces detected - running default scan")
-            self.network_scanner.scan()
+        if multi_state.is_multi_mode_enabled():
+            jobs = multi_state.get_scan_jobs()
+            if not jobs:
+                logger.info("Multi-network scanning enabled but no eligible interfaces detected - running default scan")
+                self.network_scanner.scan()
+                return
+
+            for job in jobs:
+                context_ssid = getattr(job, 'ssid', None)
+                label = context_ssid or 'unknown'
+                with self.shared_data.context_registry.activate(context_ssid):
+                    self.shared_data.ragnarstatustext2 = f"{reason}: {label}"
+                    logger.info(f"→ Running network scan on {job.interface} ({label})")
+                    self.network_scanner.scan(job=job)
+            self.shared_data.ragnarstatustext2 = ""
             return
 
-        for job in jobs:
-            context_ssid = getattr(job, 'ssid', None)
-            label = context_ssid or 'unknown'
-            with self.shared_data.context_registry.activate(context_ssid):
-                self.shared_data.ragnarstatustext2 = f"{reason}: {label}"
-                logger.info(f"→ Running network scan on {job.interface} ({label})")
-                self.network_scanner.scan(job=job)
-        self.shared_data.ragnarstatustext2 = ""
+        focus_job = multi_state.get_focus_job()
+        if focus_job:
+            focus_label = focus_job.ssid or focus_job.interface
+            with self.shared_data.context_registry.activate(focus_job.ssid):
+                self.shared_data.ragnarstatustext2 = f"{reason}: {focus_label}"
+                logger.info(f"→ Running focused scan on {focus_job.interface} ({focus_label})")
+                self.network_scanner.scan(job=focus_job)
+            self.shared_data.ragnarstatustext2 = ""
+            return
+
+        self.network_scanner.scan()
 
     def _iter_action_contexts(self):
         multi_state = getattr(self.shared_data, 'multi_interface_state', None)
-        multi_enabled = bool(self.shared_data.config.get('wifi_multi_network_scans_enabled', False))
-        if not multi_state or not multi_enabled:
+        if not multi_state:
             yield self.shared_data.active_network_ssid
             return
 
-        jobs = multi_state.get_scan_jobs()
-        seen = set()
-        if not jobs:
-            yield self.shared_data.active_network_ssid
+        if multi_state.is_multi_mode_enabled():
+            jobs = multi_state.get_scan_jobs()
+            seen = set()
+            if not jobs:
+                yield self.shared_data.active_network_ssid
+                return
+            for job in jobs:
+                ssid = getattr(job, 'ssid', None)
+                if not ssid or ssid in seen:
+                    continue
+                seen.add(ssid)
+                yield ssid
             return
-        for job in jobs:
-            ssid = getattr(job, 'ssid', None)
-            if not ssid or ssid in seen:
-                continue
-            seen.add(ssid)
-            yield ssid
+
+        focus_job = multi_state.get_focus_job()
+        if focus_job and focus_job.ssid:
+            yield focus_job.ssid
+            return
+
+        yield self.shared_data.active_network_ssid
 
 
     def execute_action(self, action, ip, ports, row, action_key, current_data):

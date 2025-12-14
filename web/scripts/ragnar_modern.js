@@ -4836,24 +4836,36 @@ function renderConnectTabMultiInterface(state) {
     }
 
     const interfaces = Array.isArray(state.interfaces) ? state.interfaces : [];
-    const globalEnabled = Boolean(state.global_enabled);
-    pillEl.textContent = globalEnabled ? 'Enabled' : 'Disabled';
-    pillEl.className = `text-xs px-2 py-1 rounded ${globalEnabled ? 'bg-green-700 text-green-100' : 'bg-slate-700 text-gray-200'}`;
+    const scanMode = (state.scan_mode || 'single').toLowerCase();
+    const focusInterface = state.focus_interface || '';
+    const focusSsid = state.focus_interface_ssid || '';
+    const globalEnabled = scanMode === 'multi';
+    pillEl.textContent = globalEnabled ? 'All adapters' : 'Single focus';
+    pillEl.className = `text-xs px-2 py-1 rounded ${globalEnabled ? 'bg-green-700 text-green-100' : 'bg-amber-700 text-amber-100'}`;
     if (noteEl) {
         const maxAdapters = state.max_interfaces || 1;
-        noteEl.textContent = `Monitoring up to ${maxAdapters} adapter${maxAdapters === 1 ? '' : 's'} simultaneously.`;
+        noteEl.textContent = globalEnabled
+            ? `Monitoring up to ${maxAdapters} adapter${maxAdapters === 1 ? '' : 's'} simultaneously.`
+            : 'Automation locks onto the focused adapter to prevent context drift.';
     }
 
     if (interfaces.length === 0) {
         summaryEl.textContent = 'Waiting for eligible adapters...';
         listEl.innerHTML = '<div class="text-xs text-gray-400 bg-slate-900/60 border border-dashed border-slate-700 rounded-lg p-3">Connect adapters to begin multi-interface scanning.</div>';
+        updateMultiInterfaceModeControls(state);
         return;
     }
 
     const activeCount = interfaces.filter(entry => entry.scan_enabled && entry.connected && entry.connected_ssid).length;
-    summaryEl.textContent = activeCount > 0
-        ? `Actively scanning ${activeCount} adapter${activeCount === 1 ? '' : 's'}.`
-        : 'All adapters are currently paused.';
+    if (scanMode === 'single') {
+        const focusLabel = focusInterface ? escapeHtml(focusInterface) : 'Select an adapter to focus on';
+        const ssidTag = focusSsid ? `<span class="text-emerald-300 ml-2">${escapeHtml(focusSsid)}</span>` : '';
+        summaryEl.innerHTML = `Single-adapter focus: <span class="text-white font-semibold">${focusLabel}</span>${ssidTag}`;
+    } else {
+        summaryEl.textContent = activeCount > 0
+            ? `Actively scanning ${activeCount} adapter${activeCount === 1 ? '' : 's'}.`
+            : 'All adapters are currently paused.';
+    }
 
     listEl.innerHTML = interfaces.map(entry => {
         const scanning = Boolean(entry.scan_enabled && entry.connected && entry.connected_ssid);
@@ -4868,6 +4880,9 @@ function renderConnectTabMultiInterface(state) {
         const scanClass = scanning ? 'text-green-300' : 'text-gray-400';
         const ipLabel = entry.ip_address ? ` • ${escapeHtml(entry.ip_address)}` : '';
         const roleClass = entry.role === 'external' ? 'bg-indigo-900 text-indigo-200' : 'bg-slate-800 text-slate-200';
+        const focusChip = entry.focus_selected
+            ? '<span class="text-[10px] px-2 py-0.5 rounded bg-amber-700/60 text-amber-200">Focus</span>'
+            : '';
         return `
             <div class="border border-slate-700 rounded-lg p-3 bg-slate-900/50 flex flex-col gap-3">
                 <div class="flex items-center justify-between gap-3">
@@ -4875,6 +4890,7 @@ function renderConnectTabMultiInterface(state) {
                         <div class="flex items-center gap-2 text-sm font-semibold text-white">
                             <span>${escapeHtml(entry.name || 'iface')}</span>
                             <span class="text-[10px] px-2 py-0.5 rounded ${roleClass}">${formatInterfaceRole(entry.role)}</span>
+                            ${focusChip}
                         </div>
                         <div class="text-[11px] text-gray-400">${connectionLabel}</div>
                     </div>
@@ -4888,6 +4904,104 @@ function renderConnectTabMultiInterface(state) {
     listEl.querySelectorAll('button[data-interface]').forEach(button => {
         button.addEventListener('click', handleScanControlToggle);
     });
+
+    updateMultiInterfaceModeControls(state);
+}
+
+function updateMultiInterfaceModeControls(state) {
+    const buttonsContainer = document.getElementById('wifi-multi-mode-buttons');
+    const focusWrapper = document.getElementById('wifi-multi-focus-controls');
+    const focusSelect = document.getElementById('wifi-multi-focus-select');
+    if (!buttonsContainer || !focusWrapper || !focusSelect) {
+        return;
+    }
+
+    const activeMode = (state && state.scan_mode) ? state.scan_mode.toLowerCase() : 'single';
+    const focusInterface = state && state.focus_interface ? state.focus_interface : '';
+    const interfaces = state && Array.isArray(state.interfaces) ? state.interfaces : [];
+
+    const buttons = buttonsContainer.querySelectorAll('button[data-mode]');
+    buttons.forEach(button => {
+        const mode = button.dataset.mode;
+        if (!mode) {
+            return;
+        }
+        const isActive = mode === activeMode;
+        button.classList.toggle('bg-Ragnar-500', isActive);
+        button.classList.toggle('border-Ragnar-400', isActive);
+        button.classList.toggle('text-white', isActive);
+        button.classList.toggle('shadow-md', isActive);
+        button.classList.toggle('bg-slate-800', !isActive);
+        button.classList.toggle('border-slate-600', !isActive);
+        button.classList.toggle('text-gray-300', !isActive);
+        button.onclick = async () => {
+            if (button.dataset.busy === 'true' || mode === activeMode) {
+                return;
+            }
+            await setMultiInterfaceMode(mode, button);
+        };
+    });
+
+    const shouldShowFocus = activeMode === 'single';
+    focusWrapper.classList.toggle('hidden', !shouldShowFocus);
+
+    const uniqueOptions = interfaces
+        .filter(entry => entry && entry.name)
+        .map(entry => ({
+            name: entry.name,
+            label: `${entry.name}${entry.connected_ssid ? ` • ${entry.connected_ssid}` : ''}`
+        }));
+
+    if (shouldShowFocus) {
+        const options = uniqueOptions.length
+            ? ['<option value="">Select adapter</option>', ...uniqueOptions.map(entry => {
+                const selected = entry.name === focusInterface ? ' selected' : '';
+                return `<option value="${escapeHtml(entry.name)}"${selected}>${escapeHtml(entry.label)}</option>`;
+            })]
+            : ['<option value="">No adapters detected</option>'];
+        focusSelect.innerHTML = options.join('');
+        focusSelect.disabled = uniqueOptions.length === 0;
+        focusSelect.onchange = async () => {
+            const nextValue = focusSelect.value || '';
+            await setMultiInterfaceFocus(nextValue);
+        };
+    } else {
+        focusSelect.onchange = null;
+    }
+}
+
+async function setMultiInterfaceMode(mode, button) {
+    if (!mode) {
+        return;
+    }
+    if (button) {
+        button.dataset.busy = 'true';
+        button.classList.add('opacity-60', 'cursor-not-allowed');
+    }
+    try {
+        await postAPI('/api/wifi/scan-control/mode', { mode });
+        addConsoleMessage(mode === 'multi' ? 'Scanning all eligible adapters' : 'Single-adapter focus enabled', 'info');
+        await refreshWifiStatus();
+    } catch (error) {
+        console.error('Unable to update scan mode:', error);
+        addConsoleMessage('Scan mode update failed', 'error');
+    } finally {
+        if (button) {
+            button.classList.remove('opacity-60', 'cursor-not-allowed');
+            delete button.dataset.busy;
+        }
+    }
+}
+
+async function setMultiInterfaceFocus(interfaceName) {
+    try {
+        await postAPI('/api/wifi/scan-control/mode', { focus_interface: interfaceName || '' });
+        addConsoleMessage(interfaceName ? `Focused on ${interfaceName}` : 'Cleared scan focus', 'info');
+        await refreshWifiStatus();
+    } catch (error) {
+        console.error('Unable to update focused adapter:', error);
+        addConsoleMessage('Focus adapter update failed', 'error');
+    }
 }
 
 function handleScanControlToggle(event) {

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import re
 from contextlib import contextmanager
 from dataclasses import dataclass
 import threading
@@ -69,6 +70,10 @@ class NetworkContextRegistry:
 class MultiInterfaceState:
     """Tracks Wi-Fi interfaces and orchestrates multi-network scanning limits."""
 
+    MODE_SINGLE = 'single'
+    MODE_MULTI = 'multi'
+    _iface_pattern = re.compile(r'^[A-Za-z0-9_.:-]+$')
+
     def __init__(self, shared_data):
         self.shared_data = shared_data
         self._lock = threading.RLock()
@@ -91,8 +96,9 @@ class MultiInterfaceState:
         """Sync incoming interface metadata (from nmcli, wifi manager, or API)."""
         selected = self._select_interfaces(interfaces)
         timestamp = time.time()
-        global_enabled = bool(self.shared_data.config.get('wifi_multi_network_scans_enabled', False))
+        global_enabled = self.is_multi_mode_enabled()
         default_iface = self.shared_data.config.get('wifi_default_interface', 'wlan0')
+        focus_interface = self.get_focus_interface()
 
         with self._lock:
             new_state: Dict[str, Dict] = {}
@@ -115,6 +121,7 @@ class MultiInterfaceState:
                     'scan_enabled': base_enabled,
                     'last_refresh': timestamp,
                     'reason': None,
+                    'focus_selected': bool(name and name == focus_interface),
                 }
 
                 if not global_enabled:
@@ -131,12 +138,12 @@ class MultiInterfaceState:
 
             self.interfaces = new_state
             self.last_refresh = timestamp
+            self._refresh_focus_flags()
 
     def get_scan_jobs(self) -> List[ScanJob]:
         """Return all scan jobs respecting interface limits and enable flags."""
         max_interfaces = max(1, int(self.shared_data.config.get('wifi_multi_scan_max_interfaces', 2)))
-        global_enabled = bool(self.shared_data.config.get('wifi_multi_network_scans_enabled', False))
-        if not global_enabled:
+        if not self.is_multi_mode_enabled():
             return []
 
         jobs: List[ScanJob] = []
@@ -162,13 +169,20 @@ class MultiInterfaceState:
 
     def get_state_payload(self) -> Dict:
         with self._lock:
-            return {
-                'global_enabled': bool(self.shared_data.config.get('wifi_multi_network_scans_enabled', False)),
+            focus_name = self.get_focus_interface()
+            focus_entry = self.interfaces.get(focus_name) if focus_name else None
+            payload = {
+                'global_enabled': self.is_multi_mode_enabled(),
                 'max_parallel': max(1, int(self.shared_data.config.get('wifi_multi_scan_max_parallel', 1))),
                 'max_interfaces': max(1, int(self.shared_data.config.get('wifi_multi_scan_max_interfaces', 2))),
                 'last_refresh': self.last_refresh,
                 'interfaces': list(self.interfaces.values()),
+                'scan_mode': self.get_scan_mode(),
+                'focus_interface': focus_name,
+                'focus_interface_connected': bool(focus_entry and focus_entry.get('connected')),
+                'focus_interface_ssid': focus_entry.get('connected_ssid') if focus_entry else None,
             }
+            return payload
 
     def set_scan_enabled(self, interface_name: str, enabled: bool) -> Dict:
         """Override scan enable flag for a specific interface."""
@@ -185,9 +199,122 @@ class MultiInterfaceState:
                 return self.interfaces[interface_name]
         return {}
 
+    def get_scan_mode(self) -> str:
+        raw_mode = str(self.shared_data.config.get('wifi_multi_scan_mode', '') or '').strip().lower()
+        if raw_mode in (self.MODE_SINGLE, self.MODE_MULTI):
+            return raw_mode
+        legacy_enabled = bool(self.shared_data.config.get('wifi_multi_network_scans_enabled', False))
+        return self.MODE_MULTI if legacy_enabled else self.MODE_SINGLE
+
+    def is_multi_mode_enabled(self) -> bool:
+        return self.get_scan_mode() == self.MODE_MULTI
+
+    def get_focus_interface(self) -> Optional[str]:
+        focus = self.shared_data.config.get('wifi_multi_scan_focus_interface') or ''
+        focus = str(focus).strip()
+        return focus or None
+
+    def get_focus_job(self) -> Optional[ScanJob]:
+        focus_name = self.get_focus_interface()
+        if not focus_name:
+            return None
+        with self._lock:
+            entry = self.interfaces.get(focus_name)
+            if not entry and self.interfaces:
+                fallback = self._auto_focus_interface()
+                if fallback and fallback in self.interfaces:
+                    entry = self.interfaces.get(fallback)
+                    focus_name = fallback
+                    self.shared_data.config['wifi_multi_scan_focus_interface'] = fallback
+                    try:
+                        self.shared_data.save_config()
+                    except Exception as exc:
+                        logger.debug(f"Unable to persist fallback focus interface: {exc}")
+                    self._refresh_focus_flags()
+            if not entry:
+                return None
+            if not entry.get('connected') or not entry.get('connected_ssid'):
+                return None
+            return ScanJob(
+                interface=entry['name'],
+                ssid=entry['connected_ssid'],
+                role=entry.get('role', 'internal'),
+                ip_address=entry.get('ip_address'),
+                cidr=entry.get('cidr'),
+                network_cidr=entry.get('network_cidr'),
+            )
+
+    def update_scan_mode(self, mode: Optional[str] = None, focus_interface: Optional[str] = None) -> Dict:
+        requested_mode = self.get_scan_mode()
+        if mode is not None:
+            normalized = str(mode).strip().lower()
+            if normalized not in (self.MODE_SINGLE, self.MODE_MULTI):
+                raise ValueError("mode must be 'single' or 'multi'")
+            requested_mode = normalized
+
+        focus_provided = focus_interface is not None
+        sanitized_focus = None
+        if focus_provided:
+            sanitized_focus = self._sanitize_interface_name(focus_interface)
+
+        changed = False
+        if self.shared_data.config.get('wifi_multi_scan_mode') != requested_mode:
+            self.shared_data.config['wifi_multi_scan_mode'] = requested_mode
+            changed = True
+
+        desired_multi_flag = (requested_mode == self.MODE_MULTI)
+        if bool(self.shared_data.config.get('wifi_multi_network_scans_enabled', False)) != desired_multi_flag:
+            self.shared_data.config['wifi_multi_network_scans_enabled'] = desired_multi_flag
+            changed = True
+
+        if focus_provided:
+            self.shared_data.config['wifi_multi_scan_focus_interface'] = sanitized_focus or ''
+            changed = True
+        elif requested_mode == self.MODE_SINGLE and not self.get_focus_interface():
+            auto_focus = self._auto_focus_interface() or ''
+            self.shared_data.config['wifi_multi_scan_focus_interface'] = auto_focus
+            changed = True
+
+        if changed:
+            try:
+                self.shared_data.save_config()
+            except Exception as exc:
+                logger.warning(f"Unable to persist multi-interface scan mode: {exc}")
+
+        self._refresh_focus_flags()
+        return self.get_state_payload()
+
     # ------------------------------------------------------------------
     # Helpers
     # ------------------------------------------------------------------
+    def _sanitize_interface_name(self, value: Optional[str]) -> Optional[str]:
+        if value is None:
+            return None
+        candidate = str(value).strip()
+        if not candidate:
+            return None
+        if not self._iface_pattern.match(candidate):
+            raise ValueError('Invalid interface name')
+        return candidate
+
+    def _auto_focus_interface(self) -> Optional[str]:
+        default_iface = self.shared_data.config.get('wifi_default_interface', 'wlan0')
+        with self._lock:
+            if default_iface in self.interfaces:
+                return default_iface
+            for entry in self.interfaces.values():
+                if entry.get('connected') and entry.get('connected_ssid'):
+                    return entry.get('name')
+            if self.interfaces:
+                return next(iter(self.interfaces.keys()))
+        return default_iface
+
+    def _refresh_focus_flags(self):
+        focus_name = self.get_focus_interface()
+        with self._lock:
+            for entry in self.interfaces.values():
+                entry['focus_selected'] = bool(entry.get('name') == focus_name)
+
     def _resolve_enabled_flag(self, interface_name: str, global_enabled: bool) -> bool:
         if interface_name in self.scan_overrides:
             return bool(self.scan_overrides[interface_name])
