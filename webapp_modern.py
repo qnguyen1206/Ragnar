@@ -1410,6 +1410,30 @@ def _count_credentials_in_dir(directory: Optional[str]) -> int:
 
 
 def _load_intelligence_vulnerability_counts(intelligence_dir: Optional[str]) -> Tuple[Optional[int], Optional[int]]:
+    # Prefer live, in-memory data from the intelligence engine when available so
+    # dashboard cards stay aligned with the Threat Intel tab.
+    try:
+        network_intel = getattr(shared_data, 'network_intelligence', None)
+        intel_enabled = getattr(shared_data, 'config', {}).get('network_intelligence_enabled', True)
+        if network_intel and intel_enabled:
+            findings = network_intel.get_active_findings_for_dashboard() or {}
+            vuln_map = findings.get('vulnerabilities') or {}
+            counts = findings.get('counts') or {}
+            vuln_total = counts.get('vulnerabilities')
+            if vuln_total is None:
+                vuln_total = len(vuln_map)
+
+            host_keys = set()
+            for vuln in vuln_map.values():
+                host_identifier = (vuln.get('host') or vuln.get('ip') or vuln.get('target') or '').strip()
+                if host_identifier:
+                    host_keys.add(host_identifier)
+            host_total = len(host_keys)
+
+            return safe_int(vuln_total, 0), safe_int(host_total, 0)
+    except Exception as exc:
+        logger.debug(f"Unable to read live network intelligence counts: {exc}")
+
     if not intelligence_dir:
         return None, None
     findings_file = os.path.join(intelligence_dir, 'active_findings.json')
@@ -1419,9 +1443,23 @@ def _load_intelligence_vulnerability_counts(intelligence_dir: Optional[str]) -> 
         with open(findings_file, 'r', encoding='utf-8') as handle:
             payload = json.load(handle)
         counts = payload.get('counts') or {}
-        vulnerabilities = safe_int(counts.get('vulnerabilities'), None)
-        affected = safe_int(counts.get('affected_hosts') or counts.get('hosts'), None)
-        return vulnerabilities, affected
+        vulnerabilities = counts.get('vulnerabilities')
+        affected = counts.get('affected_hosts') or counts.get('hosts')
+
+        vuln_map = payload.get('vulnerabilities') or {}
+        if vulnerabilities is None:
+            if isinstance(vuln_map, dict):
+                vulnerabilities = len(vuln_map)
+            elif isinstance(vuln_map, list):
+                vulnerabilities = len(vuln_map)
+
+        if affected is None and isinstance(vuln_map, dict):
+            host_keys = { (item.get('host') or item.get('ip') or item.get('target') or '').strip()
+                          for item in vuln_map.values()
+                          if (item.get('host') or item.get('ip') or item.get('target')) }
+            affected = len([key for key in host_keys if key])
+
+        return safe_int(vulnerabilities, None), safe_int(affected, None)
     except Exception as exc:
         logger.debug(f"Unable to read network intelligence findings: {exc}")
         return None, None
