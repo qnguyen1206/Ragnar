@@ -20,6 +20,7 @@ import signal
 from datetime import datetime, timedelta
 from logger import Logger
 from db_manager import get_db
+from wifi_interfaces import gather_wifi_interfaces
 
 
 class WiFiManager:
@@ -86,6 +87,8 @@ class WiFiManager:
         self.interface_scan_cache = {}
         self.interface_cache_time = {}
         self.last_scan_interface = None
+        self.last_interface_reenable_time = 0
+        self.interface_reenable_interval = shared_data.config.get('wifi_interface_reenable_interval', 30)
         self.current_ssid = None
         self._pending_ping_sweep_ssid = None
         self._ping_sweep_thread = None
@@ -476,6 +479,8 @@ class WiFiManager:
     def _initial_endless_loop_sequence(self):
         """Handle initial Wi-Fi connection with endless loop behavior"""
         self.logger.info("Starting Endless Loop Wi-Fi management...")
+
+        self._ensure_wifi_interfaces_up()
         
         # Wait 30 seconds after boot before starting the endless loop (reduced from 2 minutes)
         if self.boot_completed_time:
@@ -511,6 +516,8 @@ class WiFiManager:
         """Search for and connect to known WiFi networks - simply enable WiFi and let system auto-reconnect"""
         self.logger.info("Endless Loop: Starting WiFi search phase (1 minute)")
         search_start_time = time.time()
+
+        self._ensure_wifi_interfaces_up()
         
         # First check if already connected
         if self.check_wifi_connection():
@@ -995,6 +1002,7 @@ class WiFiManager:
     def check_wifi_connection(self):
         """Check if Wi-Fi is connected using multiple methods"""
         try:
+            self._ensure_wifi_interfaces_up()
             # Method 1: Check using nmcli for active wireless connections
             result = subprocess.run(['nmcli', '-t', '-f', 'ACTIVE,TYPE', 'con', 'show'], 
                                   capture_output=True, text=True, timeout=30)
@@ -1038,6 +1046,48 @@ class WiFiManager:
         except Exception as e:
             self.logger.error(f"Error checking Wi-Fi connection: {e}")
             return False
+
+    def _ensure_wifi_interfaces_up(self):
+        """Bring Wi-Fi interfaces up if they are down or unmanaged."""
+        try:
+            now = time.time()
+            if now - self.last_interface_reenable_time < self.interface_reenable_interval:
+                return
+            self.last_interface_reenable_time = now
+
+            interfaces = gather_wifi_interfaces(self.default_wifi_interface)
+            for iface in interfaces:
+                name = iface.get('name')
+                state = (iface.get('state') or '').strip().upper()
+                if not name or state not in ('DOWN', 'DISCONNECTED', 'UNAVAILABLE', 'UNMANAGED'):
+                    continue
+                self.logger.info(f"Bringing up Wi-Fi interface {name} (state: {state})")
+
+                link_result = subprocess.run(
+                    ['sudo', 'ip', 'link', 'set', name, 'up'],
+                    capture_output=True,
+                    text=True,
+                    timeout=5
+                )
+                if link_result.returncode != 0:
+                    self.logger.warning(
+                        f"Failed to set interface {name} up: "
+                        f"{(link_result.stderr or link_result.stdout).strip()}"
+                    )
+
+                managed_result = subprocess.run(
+                    ['sudo', 'nmcli', 'dev', 'set', name, 'managed', 'yes'],
+                    capture_output=True,
+                    text=True,
+                    timeout=5
+                )
+                if managed_result.returncode != 0:
+                    self.logger.warning(
+                        f"Failed to mark interface {name} managed: "
+                        f"{(managed_result.stderr or managed_result.stdout).strip()}"
+                    )
+        except Exception as exc:
+            self.logger.debug(f"Unable to re-enable Wi-Fi interfaces: {exc}")
     
     def get_current_ssid(self):
         """Get the current connected SSID"""
