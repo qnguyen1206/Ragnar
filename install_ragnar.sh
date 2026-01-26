@@ -5,6 +5,10 @@
 # Author: infinition
 # Version: 1.0 - 071124 - 0954
 
+if [ -z "$BASH_VERSION" ]; then
+    exec /bin/bash "$0" "$@"
+fi
+
 # Colors for output
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -1284,4 +1288,3 @@ main() {
 }
 
 main
-
