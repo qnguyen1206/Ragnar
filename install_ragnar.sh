@@ -281,14 +281,22 @@ check_system_compatibility() {
         
         # Compare versions (expecting trixie = 13)
         expected_version="13"
-        if [ "$VERSION_ID" != "$expected_version" ]; then
+        version_major="${VERSION_ID%%.*}"
+
+        # Only attempt numeric comparison when we have an integer major version
+        if ! [[ "$version_major" =~ ^[0-9]+$ ]]; then
+            log "WARNING" "Could not parse OS version (${VERSION_ID}); skipping numeric comparison"
+            echo -e "${YELLOW}This script was tested with Raspbian GNU/Linux 13 (trixie)${NC}"
+            echo -e "${YELLOW}Current system: ${PRETTY_NAME}${NC}"
+            should_ask_confirmation=true
+        elif [ "$version_major" -ne "$expected_version" ]; then
             log "WARNING" "Different OS version detected"
             echo -e "${YELLOW}This script was tested with Raspbian GNU/Linux 13 (trixie)${NC}"
             echo -e "${YELLOW}Current system: ${PRETTY_NAME}${NC}"
-            if [ "$VERSION_ID" -lt "$expected_version" ]; then
-                echo -e "${YELLOW}Your system version ($VERSION_ID) is older than recommended ($expected_version)${NC}"
-            elif [ "$VERSION_ID" -gt "$expected_version" ]; then
-                echo -e "${YELLOW}Your system version ($VERSION_ID) is newer than tested ($expected_version)${NC}"
+            if [ "$version_major" -lt "$expected_version" ]; then
+                echo -e "${YELLOW}Your system version ($version_major) is older than recommended ($expected_version)${NC}"
+            elif [ "$version_major" -gt "$expected_version" ]; then
+                echo -e "${YELLOW}Your system version ($version_major) is newer than tested ($expected_version)${NC}"
             fi
             should_ask_confirmation=true
         else
