@@ -288,7 +288,7 @@
                     <button onclick="showTab('threat-intel')" class="nav-btn px-4 py-2 rounded-lg hover:bg-slate-700 transition-colors" data-tab="threat-intel">
                         Threat Intel
                     </button>
-                    <button onclick="showTab('epaper')" class="nav-btn px-4 py-2 rounded-lg hover:bg-slate-700 transition-colors" data-tab="epaper">
+                    <button onclick="showTab('epaper')" class="nav-btn px-4 py-2 rounded-lg hover:bg-slate-700 transition-colors requires-display" data-tab="epaper">
                         E-Paper
                     </button>
                     <button onclick="showTab('files')" class="nav-btn px-4 py-2 rounded-lg hover:bg-slate-700 transition-colors" data-tab="files">
@@ -327,7 +327,7 @@
                     Pentest
                 </button>
                 <button onclick="showTab('threat-intel')" class="block w-full text-left px-3 py-2 rounded-lg hover:bg-slate-700">Threat Intel</button>
-                <button onclick="showTab('epaper')" class="block w-full text-left px-3 py-2 rounded-lg hover:bg-slate-700">E-Paper</button>
+                <button onclick="showTab('epaper')" class="block w-full text-left px-3 py-2 rounded-lg hover:bg-slate-700 requires-display">E-Paper</button>
                 <button onclick="showTab('files')" class="block w-full text-left px-3 py-2 rounded-lg hover:bg-slate-700">Files</button>
                 <button onclick="showTab('system')" class="block w-full text-left px-3 py-2 rounded-lg hover:bg-slate-700">System</button>
                 <button onclick="showTab('connect')" class="block w-full text-left px-3 py-2 rounded-lg hover:bg-slate-700">Connect</button>
@@ -2118,7 +2118,7 @@
         </div>
         
         <!-- E-Paper Display Tab -->
-        <div id="epaper-tab" class="tab-content hidden">
+        <div id="epaper-tab" class="tab-content hidden requires-display">
             <div class="glass rounded-xl p-6">
                 <div class="flex items-center justify-between mb-6">
                     <h2 class="text-2xl font-bold">E-Paper Display</h2>

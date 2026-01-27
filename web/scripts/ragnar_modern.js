@@ -363,6 +363,7 @@ document.addEventListener('DOMContentLoaded', function() {
     initializeThreatIntelFilters();
     initializePwnUI();
     initializePwnagotchiVisibility();
+    handleHeadlessMode();
 });
 
 
@@ -3680,6 +3681,76 @@ function updatePwnToggleAvailability(isHeadless) {
         if (warning) {
             warning.classList.add('hidden');
         }
+    }
+}
+
+// ============================================================================
+// HEADLESS MODE DETECTION AND MANAGEMENT
+// ============================================================================
+
+/**
+ * Detect and handle headless mode (server installations without e-paper display)
+ * Headless mode hides E-Paper related UI elements
+ */
+async function handleHeadlessMode() {
+    try {
+        const response = await fetch('/api/system/headless');
+        const data = await response.json();
+        
+        const isHeadless = data.headless === true || data.is_headless === true;
+        headlessMode = isHeadless;
+        
+        if (isHeadless) {
+            console.log('[Headless] Headless mode detected - hiding E-Paper UI elements');
+            applyHeadlessVisibility(true);
+        } else {
+            console.log('[Headless] Display mode detected - E-Paper UI elements visible');
+            applyHeadlessVisibility(false);
+        }
+        
+        // Update Pwnagotchi toggle availability based on headless mode
+        updatePwnToggleAvailability(isHeadless);
+        
+    } catch (error) {
+        // If endpoint doesn't exist or fails, assume not headless (default behavior)
+        console.log('[Headless] Detection failed, assuming display mode:', error.message);
+        headlessMode = false;
+        applyHeadlessVisibility(false);
+    }
+}
+
+/**
+ * Apply headless mode visibility settings to UI elements
+ * @param {boolean} isHeadless - Whether the system is in headless mode
+ */
+function applyHeadlessVisibility(isHeadless) {
+    // Find all elements that require a display (E-Paper)
+    const displayElements = document.querySelectorAll('.requires-display');
+    
+    if (isHeadless) {
+        // Hide all E-Paper related elements
+        displayElements.forEach(el => {
+            el.style.display = 'none';
+            el.setAttribute('data-hidden-by-headless', 'true');
+        });
+        
+        console.log(`[Headless] Hidden ${displayElements.length} E-Paper UI elements`);
+        
+        // If user is currently on E-Paper tab, redirect to dashboard
+        if (currentTab === 'epaper') {
+            console.log('[Headless] Redirecting from E-Paper tab to dashboard');
+            showTab('dashboard');
+        }
+    } else {
+        // Show all E-Paper related elements
+        displayElements.forEach(el => {
+            if (el.getAttribute('data-hidden-by-headless') === 'true') {
+                el.style.display = '';
+                el.removeAttribute('data-hidden-by-headless');
+            }
+        });
+        
+        console.log(`[Headless] Restored ${displayElements.length} E-Paper UI elements`);
     }
 }
 
@@ -9566,6 +9637,10 @@ window.stopOrchestrator = stopOrchestrator;
 window.triggerNetworkScan = triggerNetworkScan;
 window.triggerVulnScan = triggerVulnScan;
 window.refreshDashboard = refreshDashboard;
+
+// Headless Mode Functions
+window.handleHeadlessMode = handleHeadlessMode;
+window.applyHeadlessVisibility = applyHeadlessVisibility;
 
 // Wi-Fi Management Functions
 window.loadWifiInterfaces = loadWifiInterfaces;
