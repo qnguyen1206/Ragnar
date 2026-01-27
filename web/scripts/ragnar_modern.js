@@ -42,6 +42,7 @@ const RELEASE_GATE_DEFAULT_MESSAGE = 'A controlled release is rolling out. Updat
 let releaseGateState = { enabled: false, message: RELEASE_GATE_DEFAULT_MESSAGE };
 let releaseGateResolver = null;
 let releaseGatePendingPromise = null;
+let threatIntelStatusFilter = 'open';
 
 const configMetadata = {
     manual_mode: {
@@ -359,6 +360,7 @@ document.addEventListener('DOMContentLoaded', function() {
     setupAutoRefresh();
     setupEpaperAutoRefresh();
     setupEventListeners();
+    initializeThreatIntelFilters();
     initializePwnUI();
     initializePwnagotchiVisibility();
 });
@@ -660,6 +662,23 @@ function initializeMobileMenu() {
             mobileMenu.classList.toggle('hidden');
         });
     }
+}
+
+function initializeThreatIntelFilters() {
+    const buttons = document.querySelectorAll('.threat-intel-filter-btn');
+    if (!buttons || buttons.length === 0) {
+        return;
+    }
+
+    buttons.forEach(btn => {
+        btn.addEventListener('click', () => {
+            const status = btn.getAttribute('data-status');
+            setThreatIntelFilter(status);
+        });
+    });
+
+    // Ensure initial visual state matches default filter without reloading data
+    setThreatIntelFilter(threatIntelStatusFilter, { skipReload: true });
 }
 
 // ============================================================================
@@ -9618,22 +9637,58 @@ window.updateThreatIntelStats = updateThreatIntelStats;
 window.toggleHostDetails = toggleHostDetails;
 window.showVulnerabilityDetails = showVulnerabilityDetails;
 window.closeVulnerabilityModal = closeVulnerabilityModal;
+window.setThreatIntelFilter = setThreatIntelFilter;
 
 // ===========================================
 // THREAT INTELLIGENCE FUNCTIONS
 // ===========================================
 
+function setThreatIntelFilter(status, options = {}) {
+    const validStatuses = ['open', 'resolved', 'all'];
+    if (!validStatuses.includes(status)) {
+        return;
+    }
+
+    threatIntelStatusFilter = status;
+
+    const activeClasses = 'threat-intel-filter-btn px-3 py-2 rounded-lg text-sm font-semibold border border-Ragnar-500 bg-Ragnar-600 text-white shadow-md shadow-Ragnar-500/40';
+    const inactiveClasses = 'threat-intel-filter-btn px-3 py-2 rounded-lg text-sm font-semibold border border-slate-700 bg-slate-800 text-slate-300 hover:text-white hover:border-slate-500';
+
+    document.querySelectorAll('.threat-intel-filter-btn').forEach(btn => {
+        const isActive = btn.getAttribute('data-status') === status;
+        btn.className = isActive ? activeClasses : inactiveClasses;
+        btn.setAttribute('aria-pressed', isActive ? 'true' : 'false');
+    });
+
+    if (options.skipReload) {
+        return;
+    }
+
+    const container = document.getElementById('grouped-vulnerabilities-container');
+    if (container) {
+        const label = status.charAt(0).toUpperCase() + status.slice(1);
+        container.innerHTML = `
+            <div class="glass rounded-lg p-6 text-center">
+                <p class="text-slate-300">Loading ${label} vulnerabilities...</p>
+            </div>
+        `;
+    }
+
+    loadThreatIntelData();
+}
+
 // Load threat intelligence data when tab is shown
 async function loadThreatIntelData() {
     try {
+        const statusParam = encodeURIComponent(threatIntelStatusFilter || 'open');
         // Load grouped vulnerabilities
-        const response = await networkAwareFetch('/api/vulnerabilities/grouped');
+        const response = await networkAwareFetch(`/api/vulnerabilities/grouped?status=${statusParam}`);
         if (response.ok) {
             const data = await response.json();
             displayGroupedVulnerabilities(data);
         } else {
             // Fallback to regular vulnerabilities endpoint
-            const fallbackResponse = await networkAwareFetch('/api/vulnerabilities');
+            const fallbackResponse = await networkAwareFetch(`/api/vulnerabilities?status=${statusParam}`);
             if (fallbackResponse.ok) {
                 const vulnData = await fallbackResponse.json();
                 displayFallbackVulnerabilities(vulnData);
@@ -10025,7 +10080,7 @@ async function triggerManualVulnScan() {
 function refreshThreatIntel() {
     showNotification('Refreshing threat intelligence...', 'info');
     if (currentTab === 'threat-intel') {
-        loadThreatIntelData();
+        setThreatIntelFilter(threatIntelStatusFilter);
     }
 }
 
