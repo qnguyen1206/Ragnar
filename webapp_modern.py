@@ -2368,6 +2368,17 @@ def serve_static(filename):
     return send_from_directory('web', filename)
 
 
+@app.route('/api/system/headless')
+def get_system_headless():
+    """Expose headless mode flag for UI to hide display-only features."""
+    try:
+        is_headless = safe_bool(getattr(shared_data, 'headless_mode', False))
+        return jsonify({'success': True, 'headless': is_headless, 'is_headless': is_headless})
+    except Exception as exc:
+        logger.error(f"Failed to read headless state: {exc}")
+        return jsonify({'success': False, 'headless': False, 'error': str(exc)}), 500
+
+
 # ============================================================================
 # API ENDPOINTS
 # ============================================================================
