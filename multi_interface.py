@@ -249,22 +249,22 @@ class MultiInterfaceState:
         """Return all scan jobs respecting interface limits and enable flags."""
         max_interfaces = max(1, int(self.shared_data.config.get('wifi_multi_scan_max_interfaces', 2)))
         if not self.is_multi_mode_enabled():
-            logger.debug("get_scan_jobs: multi mode not enabled, returning empty")
+            logger.info("[MULTI-SCAN] get_scan_jobs: multi mode not enabled, returning empty")
             return []
 
         jobs: List[ScanJob] = []
         with self._lock:
-            logger.debug(f"get_scan_jobs: checking {len(self.interfaces)} interfaces (max={max_interfaces})")
+            logger.info(f"[MULTI-SCAN] get_scan_jobs: checking {len(self.interfaces)} interfaces (max={max_interfaces})")
             for entry in self.interfaces.values():
                 if len(jobs) >= max_interfaces:
                     break
                 if not entry.get('scan_enabled'):
-                    logger.debug(f"get_scan_jobs: {entry.get('name')} skipped - scan_enabled=False (reason={entry.get('reason')})")
+                    logger.warning(f"[MULTI-SCAN] {entry.get('name')} skipped - scan_enabled=False (reason={entry.get('reason')})")
                     continue
                 if not entry.get('connected') or not entry.get('connected_ssid'):
-                    logger.debug(f"get_scan_jobs: {entry.get('name')} skipped - connected={entry.get('connected')}, ssid={entry.get('connected_ssid')}")
+                    logger.warning(f"[MULTI-SCAN] {entry.get('name')} skipped - connected={entry.get('connected')}, ssid={entry.get('connected_ssid')}")
                     continue
-                logger.debug(f"get_scan_jobs: adding job for {entry.get('name')} -> {entry.get('connected_ssid')}")
+                logger.info(f"[MULTI-SCAN] Adding scan job: {entry.get('name')} -> {entry.get('connected_ssid')}")
                 jobs.append(
                     ScanJob(
                         interface=entry['name'],

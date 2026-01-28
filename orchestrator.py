@@ -405,7 +405,7 @@ class Orchestrator:
             logger.warning(f"Unable to refresh multi-interface state: {exc}")
 
         is_multi = multi_state.is_multi_mode_enabled()
-        logger.debug(f"Multi-interface scan check: is_multi={is_multi}, scan_mode={multi_state.get_scan_mode()}")
+        logger.info(f"[MULTI-SCAN] Mode check: is_multi={is_multi}, scan_mode={multi_state.get_scan_mode()}")
         
         if is_multi:
             jobs = multi_state.get_scan_jobs()
