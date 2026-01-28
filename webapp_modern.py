@@ -6406,6 +6406,8 @@ def get_ethernet_status():
         # Refresh Ethernet interfaces
         state.refresh_ethernet_interfaces()
         status = state.get_ethernet_status()
+        # Add ethernet preference setting
+        status['prefer_ethernet'] = shared_data.config.get('ethernet_prefer_over_wifi', True)
         return jsonify({'success': True, **status})
     except Exception as exc:
         logger.error(f"Failed to get Ethernet status: {exc}")

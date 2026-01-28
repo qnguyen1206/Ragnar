@@ -523,20 +523,45 @@
                         </svg>
                         Connectivity
                     </h2>
+                    <!-- Primary Connection Display (LAN or WiFi) -->
+                    <div id="primary-connection-card" class="p-4 bg-gradient-to-r from-slate-800/60 to-slate-700/40 rounded-lg border border-slate-600/30 mb-3">
+                        <div class="flex items-center justify-between mb-2">
+                            <div class="flex items-center gap-2">
+                                <span id="primary-connection-icon" class="text-blue-400">
+                                    <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8.111 16.404a5.5 5.5 0 017.778 0M12 20h.01m-7.08-7.071c3.904-3.905 10.236-3.905 14.141 0M1.394 9.393c5.857-5.857 15.355-5.857 21.213 0"></path>
+                                    </svg>
+                                </span>
+                                <span id="primary-connection-label" class="text-white font-semibold">Checking...</span>
+                            </div>
+                            <span id="primary-connection-status" class="w-3 h-3 bg-gray-600 rounded-full"></span>
+                        </div>
+                        <div id="primary-connection-details" class="text-xs text-gray-400 space-y-1">
+                            <div id="primary-connection-name">Detecting connection type...</div>
+                            <div id="primary-connection-ip" class="text-gray-500"></div>
+                        </div>
+                        <div id="wifi-dashboard-interface-switch" class="mt-2 hidden">
+                            <p class="text-[10px] uppercase tracking-wide text-gray-500 mb-1">Show data for</p>
+                            <div id="wifi-dashboard-interface-buttons" class="flex flex-wrap gap-1"></div>
+                        </div>
+                    </div>
+
                     <div class="grid grid-cols-2 gap-3">
-                        <div class="p-3 bg-slate-800 bg-opacity-50 rounded-lg">
+                        <div id="wifi-secondary-card" class="p-3 bg-slate-800 bg-opacity-50 rounded-lg">
                             <div class="flex items-center justify-between mb-1">
                                 <span class="text-gray-400 text-sm">WiFi</span>
                                 <span id="wifi-status" class="w-3 h-3 bg-gray-600 rounded-full"></span>
                             </div>
-                            <div id="wifi-dashboard-interface-switch" class="mt-2 hidden">
-                                <p class="text-[10px] uppercase tracking-wide text-gray-500 mb-1">Show data for</p>
-                                <div id="wifi-dashboard-interface-buttons" class="flex flex-wrap gap-1"></div>
-                            </div>
                             <div id="wifi-ssid-display" class="text-xs text-gray-500 truncate">Not connected</div>
-                            <div id="wifi-dashboard-interfaces" class="mt-3 space-y-1 text-[11px] text-gray-400">
-                                <div class="text-gray-500">Adapters will appear after the next Wi-Fi refresh.</div>
+                            <div id="wifi-dashboard-interfaces" class="mt-3 space-y-1 text-[11px] text-gray-400 hidden">
                             </div>
+                        </div>
+                        <div id="lan-secondary-card" class="p-3 bg-slate-800 bg-opacity-50 rounded-lg">
+                            <div class="flex items-center justify-between mb-1">
+                                <span class="text-gray-400 text-sm">LAN</span>
+                                <span id="lan-status" class="w-3 h-3 bg-gray-600 rounded-full"></span>
+                            </div>
+                            <div id="lan-info-display" class="text-xs text-gray-500 truncate">Not connected</div>
                         </div>
                         <div class="p-3 bg-slate-800 bg-opacity-50 rounded-lg">
                             <div class="flex items-center justify-between">
@@ -548,12 +573,6 @@
                             <div class="flex items-center justify-between">
                                 <span class="text-gray-400 text-sm">USB</span>
                                 <span id="usb-status" class="w-3 h-3 bg-gray-600 rounded-full"></span>
-                            </div>
-                        </div>
-                        <div class="p-3 bg-slate-800 bg-opacity-50 rounded-lg">
-                            <div class="flex items-center justify-between">
-                                <span class="text-gray-400 text-sm">PAN</span>
-                                <span id="pan-status" class="w-3 h-3 bg-gray-600 rounded-full"></span>
                             </div>
                         </div>
                     </div>

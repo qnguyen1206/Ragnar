@@ -700,9 +700,10 @@ async function loadInitialData() {
             updateDashboardStatus(quickData);
         }
         
-        // OPTIMIZATION: Defer WiFi status to after dashboard is visible
+        // OPTIMIZATION: Defer WiFi and Ethernet status to after dashboard is visible
         setTimeout(() => {
             refreshWifiStatus().catch(err => console.warn('WiFi status load failed:', err));
+            refreshEthernetStatus().catch(err => console.warn('Ethernet status load failed:', err));
         }, 200);
         
         // OPTIMIZATION: Defer console logs to much later (lowest priority)
@@ -4588,6 +4589,12 @@ async function refreshWifiStatus() {
         const interfaceLabel = data.interface ? data.interface : activeInterface;
         const ipBadge = data.ip_address ? ` (${data.ip_address})` : '';
         
+        // Update primary connection state for WiFi
+        primaryConnectionState.wifiConnected = data.wifi_connected || false;
+        primaryConnectionState.wifiSsid = data.current_ssid || null;
+        primaryConnectionState.wifiInterface = interfaceLabel || null;
+        primaryConnectionState.wifiIp = data.ip_address || null;
+        
         if (data.ap_mode_active) {
             const apMessage = `AP Mode Active: "${data.ap_ssid || 'Ragnar'}" | Connect to configure Wi-Fi`;
             console.log('Setting AP mode status:', apMessage);
@@ -4595,6 +4602,8 @@ async function refreshWifiStatus() {
             statusIndicator.textContent = 'AP Mode';
             statusIndicator.className = 'text-sm px-2 py-1 rounded bg-orange-700 text-orange-300';
             wifiInfo.textContent = apMessage;
+            // In AP mode, WiFi is not really "connected" for scanning purposes
+            primaryConnectionState.wifiConnected = false;
         } else if (data.wifi_connected) {
             const ssid = data.current_ssid || 'Unknown Network';
             const connectedMessage = interfaceLabel
@@ -4615,6 +4624,10 @@ async function refreshWifiStatus() {
             statusIndicator.className = 'text-sm px-2 py-1 rounded bg-red-700 text-red-300';
             wifiInfo.textContent = disconnectedMessage;
         }
+        
+        // Update primary connection display after WiFi state is set
+        updatePrimaryConnectionDisplay();
+        
         if (connectedList) {
             const interfaces = Array.isArray(data.interfaces) ? data.interfaces : [];
             const connectedAdapters = interfaces.filter(iface => iface && iface.connected);
@@ -4689,32 +4702,164 @@ async function refreshWifiStatus() {
     }
 }
 
+// Track connectivity state for primary connection display
+let primaryConnectionState = {
+    lanConnected: false,
+    lanInterface: null,
+    lanIp: null,
+    wifiConnected: false,
+    wifiSsid: null,
+    wifiInterface: null,
+    wifiIp: null,
+    preferEthernet: true
+};
+
+function updatePrimaryConnectionDisplay() {
+    const iconEl = document.getElementById('primary-connection-icon');
+    const labelEl = document.getElementById('primary-connection-label');
+    const statusEl = document.getElementById('primary-connection-status');
+    const nameEl = document.getElementById('primary-connection-name');
+    const ipEl = document.getElementById('primary-connection-ip');
+    const interfaceSwitch = document.getElementById('wifi-dashboard-interface-switch');
+
+    if (!iconEl || !labelEl || !statusEl || !nameEl) {
+        return;
+    }
+
+    const wifiIcon = `<svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8.111 16.404a5.5 5.5 0 017.778 0M12 20h.01m-7.08-7.071c3.904-3.905 10.236-3.905 14.141 0M1.394 9.393c5.857-5.857 15.355-5.857 21.213 0"></path>
+    </svg>`;
+    
+    const lanIcon = `<svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 12h14M5 12a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v4a2 2 0 01-2 2M5 12a2 2 0 00-2 2v4a2 2 0 002 2h14a2 2 0 002-2v-4a2 2 0 00-2-2m-2-4h.01M17 16h.01"></path>
+    </svg>`;
+
+    const st = primaryConnectionState;
+
+    // Determine primary connection: LAN if connected and preferred (or WiFi not available), else WiFi
+    const useLanAsPrimary = st.lanConnected && (st.preferEthernet || !st.wifiConnected);
+
+    if (useLanAsPrimary) {
+        // LAN is primary
+        iconEl.innerHTML = lanIcon;
+        iconEl.className = 'text-blue-400';
+        labelEl.textContent = 'LAN Connected';
+        statusEl.className = 'w-3 h-3 bg-green-500 rounded-full';
+        nameEl.textContent = `Connected via ${st.lanInterface || 'eth0'}`;
+        if (ipEl) {
+            ipEl.textContent = st.lanIp ? `IP: ${st.lanIp}` : '';
+        }
+        // Hide WiFi interface switch when LAN is primary
+        if (interfaceSwitch) {
+            interfaceSwitch.classList.add('hidden');
+        }
+    } else if (st.wifiConnected) {
+        // WiFi is primary
+        iconEl.innerHTML = wifiIcon;
+        iconEl.className = 'text-blue-400';
+        labelEl.textContent = 'WiFi Connected';
+        statusEl.className = 'w-3 h-3 bg-green-500 rounded-full';
+        const ifaceLabel = st.wifiInterface ? ` on ${st.wifiInterface}` : '';
+        nameEl.textContent = `${st.wifiSsid || 'Unknown Network'}${ifaceLabel}`;
+        if (ipEl) {
+            ipEl.textContent = st.wifiIp ? `IP: ${st.wifiIp}` : '';
+        }
+    } else {
+        // No connection
+        iconEl.innerHTML = wifiIcon;
+        iconEl.className = 'text-gray-500';
+        labelEl.textContent = 'No Connection';
+        statusEl.className = 'w-3 h-3 bg-red-500 rounded-full';
+        nameEl.textContent = 'No active network connection';
+        if (ipEl) {
+            ipEl.textContent = '';
+        }
+    }
+
+    // Update secondary cards
+    updateSecondaryConnectionCards();
+}
+
+function updateSecondaryConnectionCards() {
+    const st = primaryConnectionState;
+    
+    // Update WiFi secondary card
+    const wifiStatus = document.getElementById('wifi-status');
+    const wifiSsidDisplay = document.getElementById('wifi-ssid-display');
+    
+    if (wifiStatus) {
+        wifiStatus.className = st.wifiConnected 
+            ? 'w-3 h-3 bg-green-500 rounded-full' 
+            : 'w-3 h-3 bg-gray-600 rounded-full';
+    }
+    if (wifiSsidDisplay) {
+        if (st.wifiConnected) {
+            wifiSsidDisplay.textContent = st.wifiSsid || 'Connected';
+            wifiSsidDisplay.className = 'text-xs text-green-400 truncate';
+        } else {
+            wifiSsidDisplay.textContent = 'Not connected';
+            wifiSsidDisplay.className = 'text-xs text-gray-500 truncate';
+        }
+    }
+
+    // Update LAN secondary card
+    const lanStatus = document.getElementById('lan-status');
+    const lanInfoDisplay = document.getElementById('lan-info-display');
+    
+    if (lanStatus) {
+        lanStatus.className = st.lanConnected 
+            ? 'w-3 h-3 bg-green-500 rounded-full' 
+            : 'w-3 h-3 bg-gray-600 rounded-full';
+    }
+    if (lanInfoDisplay) {
+        if (st.lanConnected) {
+            const ifaceLabel = st.lanInterface || 'eth0';
+            lanInfoDisplay.textContent = st.lanIp ? `${ifaceLabel} • ${st.lanIp}` : ifaceLabel;
+            lanInfoDisplay.className = 'text-xs text-green-400 truncate';
+        } else {
+            lanInfoDisplay.textContent = 'Not connected';
+            lanInfoDisplay.className = 'text-xs text-gray-500 truncate';
+        }
+    }
+}
+
 async function refreshEthernetStatus() {
     const indicator = document.getElementById('lan-status-indicator');
     const info = document.getElementById('lan-info');
     const list = document.getElementById('lan-interface-list');
-    if (!indicator || !info) {
-        return;
-    }
 
     try {
         const data = await fetchAPI('/api/ethernet/status');
         const active = data && data.active_interface ? data.active_interface : null;
         const interfaces = data && Array.isArray(data.interfaces) ? data.interfaces : [];
 
-        if (active) {
-            const ipLabel = active.ip_address ? ` • ${escapeHtml(active.ip_address)}` : '';
-            indicator.textContent = 'LAN Connected';
-            indicator.className = 'text-sm px-2 py-1 rounded bg-green-700 text-green-200';
-            info.textContent = `Connected via ${active.name}${ipLabel}`;
-        } else if (data && data.available) {
-            indicator.textContent = 'No Link';
-            indicator.className = 'text-sm px-2 py-1 rounded bg-amber-700 text-amber-200';
-            info.textContent = 'Ethernet detected but no active link or IP address.';
-        } else {
-            indicator.textContent = 'Unavailable';
-            indicator.className = 'text-sm px-2 py-1 rounded bg-gray-700 text-gray-300';
-            info.textContent = 'No Ethernet interfaces detected on this host.';
+        // Update primary connection state for LAN
+        primaryConnectionState.lanConnected = !!active;
+        primaryConnectionState.lanInterface = active ? active.name : null;
+        primaryConnectionState.lanIp = active ? active.ip_address : null;
+        primaryConnectionState.preferEthernet = data && typeof data.prefer_ethernet === 'boolean' 
+            ? data.prefer_ethernet 
+            : true;
+
+        // Update primary connection display
+        updatePrimaryConnectionDisplay();
+
+        // Update Connect tab elements if they exist
+        if (indicator && info) {
+            if (active) {
+                const ipLabel = active.ip_address ? ` • ${escapeHtml(active.ip_address)}` : '';
+                indicator.textContent = 'LAN Connected';
+                indicator.className = 'text-sm px-2 py-1 rounded bg-green-700 text-green-200';
+                info.textContent = `Connected via ${active.name}${ipLabel}`;
+            } else if (data && data.available) {
+                indicator.textContent = 'No Link';
+                indicator.className = 'text-sm px-2 py-1 rounded bg-amber-700 text-amber-200';
+                info.textContent = 'Ethernet detected but no active link or IP address.';
+            } else {
+                indicator.textContent = 'Unavailable';
+                indicator.className = 'text-sm px-2 py-1 rounded bg-gray-700 text-gray-300';
+                info.textContent = 'No Ethernet interfaces detected on this host.';
+            }
         }
 
         if (list) {
@@ -4746,9 +4891,16 @@ async function refreshEthernetStatus() {
         }
     } catch (error) {
         console.error('Error refreshing Ethernet status:', error);
-        indicator.textContent = 'Error';
-        indicator.className = 'text-sm px-2 py-1 rounded bg-red-700 text-red-300';
-        info.textContent = 'Unable to read LAN status.';
+        primaryConnectionState.lanConnected = false;
+        primaryConnectionState.lanInterface = null;
+        primaryConnectionState.lanIp = null;
+        updatePrimaryConnectionDisplay();
+        
+        if (indicator && info) {
+            indicator.textContent = 'Error';
+            indicator.className = 'text-sm px-2 py-1 rounded bg-red-700 text-red-300';
+            info.textContent = 'Unable to read LAN status.';
+        }
         if (list) {
             list.innerHTML = '<div class="text-xs text-red-300">Failed to load Ethernet details.</div>';
             list.classList.remove('hidden');
