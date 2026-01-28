@@ -11,7 +11,7 @@ import time
 from typing import Dict, List, Optional
 
 from logger import Logger
-from wifi_interfaces import gather_wifi_interfaces, gather_ethernet_interfaces, is_ethernet_available, get_active_ethernet_interface
+from wifi_interfaces import gather_wifi_interfaces, gather_ethernet_interfaces, is_ethernet_available, get_active_ethernet_interface, is_link_local_ip
 
 logger = Logger(name="multi_interface", level=logging.INFO)
 
@@ -120,9 +120,17 @@ class MultiInterfaceState:
                 has_carrier = iface.get('has_carrier', False)
                 is_connected = iface.get('connected', False)
                 ip_address = iface.get('ip_address')
+                
+                # Check for link-local IP (169.254.x.x) - not a valid connection
+                has_link_local = is_link_local_ip(ip_address)
+                if has_link_local:
+                    logger.debug(f"Ethernet interface {name} has link-local IP - treating as not connected")
+                    ip_address = None
+                    is_connected = False
 
                 # Determine if this interface can be used for scanning
-                can_scan = ethernet_scan_enabled and has_carrier and is_connected and ip_address
+                # Requires: enabled, carrier, connected, valid (non-link-local) IP
+                can_scan = ethernet_scan_enabled and has_carrier and is_connected and ip_address and not has_link_local
 
                 entry = {
                     'name': name,
@@ -137,7 +145,8 @@ class MultiInterfaceState:
                     'mac_address': iface.get('mac_address'),
                     'scan_enabled': can_scan,
                     'last_refresh': timestamp,
-                    'reason': None if can_scan else ('disabled' if not ethernet_scan_enabled else 'no_connection'),
+                    'is_link_local': has_link_local,
+                    'reason': None if can_scan else ('link_local' if has_link_local else 'disabled' if not ethernet_scan_enabled else 'no_connection'),
                 }
                 new_state[name] = entry
 
@@ -149,7 +158,11 @@ class MultiInterfaceState:
         with self._lock:
             active_interface = None
             for iface in self.ethernet_interfaces.values():
-                if iface.get('connected') and iface.get('has_carrier') and iface.get('ip_address'):
+                # Only consider interfaces with valid (non-link-local) IPs
+                if (iface.get('connected') and 
+                    iface.get('has_carrier') and 
+                    iface.get('ip_address') and
+                    not iface.get('is_link_local')):
                     active_interface = iface
                     break
 

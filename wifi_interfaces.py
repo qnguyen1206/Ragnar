@@ -15,6 +15,24 @@ logger = Logger(name="wifi_interfaces", level=logging.INFO)
 _WIFI_NAME_PATTERN = re.compile(r"^(wlan\d+|wlp[\w\d]+|wlx[\w\d]+)$")
 _ETHERNET_NAME_PATTERN = re.compile(r"^(eth\d+|enp\d+s\d+|eno\d+|ens\d+|enx[\w\d]+)$")
 
+# Link-local network (169.254.0.0/16) - APIPA addresses when DHCP fails
+_LINK_LOCAL_NETWORK = ipaddress.ip_network('169.254.0.0/16')
+
+
+def is_link_local_ip(ip_address: Optional[str]) -> bool:
+    """Check if an IP address is in the link-local range (169.254.x.x).
+    
+    These addresses are auto-assigned when DHCP fails and should not be
+    treated as valid network connections.
+    """
+    if not ip_address:
+        return False
+    try:
+        ip = ipaddress.ip_address(ip_address)
+        return ip in _LINK_LOCAL_NETWORK
+    except ValueError:
+        return False
+
 
 def _get_interface_ipv4_details(interface_name: str) -> Dict[str, Optional[str]]:
     """Return IPv4 metadata (address, prefix, netmask, network) for an interface."""
@@ -340,24 +358,40 @@ def gather_ethernet_interfaces(default_interface: str = 'eth0') -> List[Dict]:
     # Enrich with IPv4 details
     for iface in interfaces.values():
         ipv4 = _get_interface_ipv4_details(iface['name'])
-        iface['ip_address'] = ipv4.get('ip')
+        ip_addr = ipv4.get('ip')
+        
+        # Filter out link-local IPs (169.254.x.x) - these are APIPA addresses
+        # assigned when DHCP fails and don't represent real network connectivity
+        if is_link_local_ip(ip_addr):
+            iface['ip_address'] = None
+            iface['is_link_local'] = True
+            iface['connected'] = False
+            logger.debug(f"Interface {iface['name']} has link-local IP {ip_addr} - ignoring as not connected")
+        else:
+            iface['ip_address'] = ip_addr
+            iface['is_link_local'] = False
+        
         iface['cidr'] = ipv4.get('cidr')
         iface['netmask'] = ipv4.get('netmask')
         iface['network_cidr'] = ipv4.get('network')
         iface.setdefault('mac_address', None)
 
-        # If we have an IP, we're likely connected
-        if iface['ip_address'] and iface.get('has_carrier'):
+        # If we have a valid (non-link-local) IP, we're likely connected
+        if iface['ip_address'] and iface.get('has_carrier') and not iface.get('is_link_local'):
             iface['connected'] = True
 
     return sorted(interfaces.values(), key=lambda entry: entry['name'])
 
 
 def get_active_ethernet_interface() -> Optional[Dict]:
-    """Get the first active (connected with carrier) Ethernet interface."""
+    """Get the first active (connected with carrier) Ethernet interface.
+    
+    Note: Interfaces with link-local IPs (169.254.x.x) are not considered active.
+    """
     ethernet_interfaces = gather_ethernet_interfaces()
     for iface in ethernet_interfaces:
-        if iface.get('connected') and iface.get('has_carrier') and iface.get('ip_address'):
+        ip_addr = iface.get('ip_address')
+        if iface.get('connected') and iface.get('has_carrier') and ip_addr and not is_link_local_ip(ip_addr):
             return iface
     return None
 
