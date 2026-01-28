@@ -1179,15 +1179,15 @@ class WiFiManager:
             if self.ap_mode_active:
                 return self.scan_networks_while_ap(interface=target_iface)
             
-            # Try to get cached networks first (within last 2 minutes for better performance)
-            if self.db:
-                cached_networks = self.db.get_cached_wifi_networks(max_age_seconds=120)
-                if cached_networks:
-                    self.logger.info(f"Using {len(cached_networks)} cached WiFi networks (age < 2min)")
-                    self._cache_interface_networks(target_iface, cached_networks)
+            # Check per-interface in-memory cache first (more accurate than DB cache)
+            cached_networks, cache_time = self._get_cached_interface_networks(target_iface)
+            if cached_networks is not None and cache_time:
+                cache_age = time.time() - cache_time
+                if cache_age < 120:  # 2 minutes
+                    self.logger.info(f"Using {len(cached_networks)} cached WiFi networks for {target_iface} (age: {cache_age:.0f}s)")
                     return cached_networks
             
-            self.logger.info(f"Scanning for Wi-Fi networks on {target_iface} (cache miss or disabled)...")
+            self.logger.info(f"Scanning for Wi-Fi networks on {target_iface} (cache miss or expired)...")
             
             # Get system WiFi profiles to mark known networks
             system_profiles = self.get_system_wifi_profiles()
