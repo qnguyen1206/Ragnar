@@ -161,6 +161,22 @@ detect_platform() {
     log "INFO" "Detected platform: ${OS_PRETTY} (id=${OS_ID}, version=${OS_VERSION_ID}), arch=${ARCH}, pkg_mgr=${PKG_MGR}"
 }
 
+# Print a concise system summary for visibility
+log_system_summary() {
+    local cpu_model ram_mb disk_mb
+
+    cpu_model=$(grep -m1 "model name" /proc/cpuinfo 2>/dev/null | cut -d: -f2- | sed 's/^ *//')
+    ram_mb=$(free -m 2>/dev/null | awk '/^Mem:/{print $2}')
+    disk_mb=$(df -m /home 2>/dev/null | awk 'NR==2 {print $4}')
+
+    log "INFO" "System summary:" \
+        " OS=${OS_PRETTY:-unknown}" \
+        " Arch=${ARCH:-unknown}" \
+        " CPU=${cpu_model:-unknown}" \
+        " RAM=${ram_mb:-?}MB" \
+        " FreeDisk=${disk_mb:-?}MB (/home)"
+}
+
 # Provide package-name fallbacks across distros
 package_candidates() {
     local pkg=$1
@@ -240,13 +256,7 @@ check_system_compatibility() {
     log "INFO" "Checking system compatibility..."
     local should_ask_confirmation=false
     
-    # Check if running on Raspberry Pi (skip this warning for server installs)
-    if [ "$SERVER_INSTALL" != true ]; then
-        if ! grep -q "Raspberry Pi" /proc/cpuinfo; then
-            log "WARNING" "This system might not be a Raspberry Pi"
-            should_ask_confirmation=true
-        fi
-    fi
+    # Skip hardware gating - Ragnar now supports all tested platforms
 
     # Check RAM (Raspberry Pi Zero has 512MB RAM)
     total_ram=$(free -m | awk '/^Mem:/{print $2}')
@@ -307,31 +317,13 @@ check_system_compatibility() {
         should_ask_confirmation=true
     fi
 
-    # Check if system is 32-bit ARM (armhf) or 64-bit
+    # Architecture compatibility: supported across tested platforms, log for visibility only
     if command -v dpkg >/dev/null 2>&1; then
         architecture=$(dpkg --print-architecture)
     else
         architecture=${ARCH:-$(uname -m 2>/dev/null)}
     fi
-
-    if [ "$architecture" != "armhf" ] && [ "$architecture" != "arm64" ] && [ "$architecture" != "aarch64" ] && [ "$architecture" != "armv7l" ] && [ "$architecture" != "armv6l" ]; then
-        log "WARNING" "Different architecture detected. Expected: armhf/arm64, Found: ${architecture}"
-        echo -e "${YELLOW}This script was tested with armhf/arm64 architectures${NC}"
-        should_ask_confirmation=true
-    else
-        log "SUCCESS" "Architecture check passed: ${architecture}"
-    fi
-    
-    # Additional Pi Zero specific checks only when targeting Pi profile
-    if [ "$SERVER_INSTALL" != true ]; then
-        if ! (grep -q "Pi Zero" /proc/cpuinfo || grep -q "BCM2835" /proc/cpuinfo); then
-            log "WARNING" "Could not confirm if this is a Raspberry Pi Zero"
-            echo -e "${YELLOW}This script was designed for Raspberry Pi Zero${NC}"
-            should_ask_confirmation=true
-        else
-            log "SUCCESS" "Raspberry Pi Zero detected"
-        fi
-    fi
+    log "INFO" "Architecture detected: ${architecture} (proceeding without compatibility warnings)"
 
     if [ "$should_ask_confirmation" = true ]; then
         echo -e "\n${YELLOW}Some system compatibility warnings were detected (see above).${NC}"
@@ -1238,6 +1230,7 @@ main() {
     log "INFO" "Starting ragnar installation..."
 
     detect_platform
+    log_system_summary
 
     # Check if script is run as root
     if [ "$(id -u)" -ne 0 ]; then
