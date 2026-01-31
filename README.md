@@ -14,7 +14,7 @@
 </table>
 </p>
 
-Ragnar is a « Tamagotchi like » sophisticated, autonomous network scanning, vulnerability assessment, and offensive security tool designed to run on a Raspberry Pi equipped with a 2.13-inch e-Paper HAT—or as a headless/server install on AMD64/ARM hardware with Ethernet-first connectivity. This document provides a detailed explanation of the project.
+Ragnar is a « Tamagotchi like » sophisticated, autonomous network scanning, vulnerability assessment, and offensive security tool designed to run on a Raspberry Pi equipped with a 2.13-inch e-Paper HAT—or as a headless/server install on Debian-based systems (AMD64/ARM/ARM64) with Ethernet-first connectivity. On servers with 8GB+ RAM, Ragnar unlocks advanced capabilities including real-time traffic analysis and enhanced vulnerability assessment. This document provides a detailed explanation of the project.
 
 The fastest way to install Ragnar is using the automatic installation script :
 
@@ -75,6 +75,9 @@ The e-Paper HAT display and web interface make it easy to monitor and interact w
   - See [AI Integration Guide](AI_INTEGRATION.md) for setup
 - **System Attacks**: Conducts brute-force attacks on various services (FTP, SSH, SMB, RDP, Telnet, SQL).
 - **File Stealing**: Extracts data from vulnerable services.
+- **Advanced Server Features (8GB+ RAM)**: 🆕
+  - **Real-Time Traffic Analysis**: Live packet capture, connection tracking, protocol analysis, bandwidth monitoring, and C2 beacon detection using tcpdump, tshark, and custom analyzers
+  - **Advanced Vulnerability Scanning**: Enhanced assessment with Nuclei templates, Nikto web server scanning, SQLMap injection testing, parallel scanning, CVE correlation, and exploit suggestion engine
 - **LAN-First Connectivity**: Prefers Ethernet when present, exposes a LAN status card in the modern dashboard, and still manages WiFi as needed.
 - **Smart WiFi Management**: 
   - Auto-connects to known networks on boot
@@ -115,6 +118,17 @@ The e-Paper HAT display and web interface make it easy to monitor and interact w
 - Username and hostname set to `ragnar`.
 - 2.13-inch e-Paper HAT connected to GPIO pins.
 
+### 📋 Prerequisites for Debian-based Server/Headless Installation
+
+- **Operating System**: Debian 11+ or Ubuntu 20.04+ (AMD64, ARM64, or ARMv7)
+- **Architecture Support**: AMD64 (x86_64), ARM64 (aarch64), ARMv7l, ARMv8l
+- **Minimum Resources**: 2GB RAM, 2 CPU cores, 10GB free disk space
+- **Recommended for Advanced Features**: 8GB+ RAM to unlock:
+  - Real-time traffic analysis with packet capture
+  - Advanced vulnerability scanning (Nuclei, Nikto, SQLMap)
+  - Parallel scanning capabilities
+  - Enhanced threat detection
+
 Ragnar is built for 64 bit trixie and 
 Waveshare 2.13inch E-Paper Display HAT V4 for 32 bit system i recommend using Ragnars son [Bjorn](https://github.com/infinition/Bjorn) 
 
@@ -138,7 +152,10 @@ sudo chmod +x install_ragnar.sh && sudo ./install_ragnar.sh
 
 **Installer intelligence (new):**
 - Auto-detects distro/package manager (apt, dnf, pacman, zypper) and CPU arch to install the right package names.
+- **Debian System Support**: Full compatibility with Debian-based distributions on ARM, ARM64, and AMD64 architectures.
 - Profiles: **Pi + e-Paper** (display enabled) or **Server/Headless** (no display, modern web UI only). Non-Pi hardware defaults to Server/Headless.
+- **Automatic Advanced Tools**: Systems with 8GB+ RAM automatically install advanced features during fresh setup—no prompts, fully automatic.
+- **Smart Resource Management**: Pi Zero W/W2 automatically skip advanced tools due to hardware limitations.
 - Server installs supported on AMD64/ARM64/ARMv7 with LAN-first networking; USB-gadget steps are skipped automatically off-Pi.
 - On Pi, the only prompt is whether an e-Paper HAT is connected; everything else runs end-to-end automatically.
 - Uses PiWheels on ARM, retries mirrors, and skips Pi-only steps on other hardware.
@@ -189,6 +206,77 @@ Ragnar is designed to be a community-driven weapon forge. Create and share your 
 
 
 ⚠️ **For educational and authorized testing purposes only** ⚠️
+
+## 🖥️ Server Mode: Advanced Features (8GB+ RAM)
+
+When deployed on capable hardware (Debian-based systems with 8GB+ RAM), Ragnar automatically unlocks advanced security testing capabilities:
+
+> **✅ Fresh Installations (AUTOMATIC):**
+> The main `install_ragnar.sh` installer automatically detects systems with 8GB+ RAM and installs advanced tools during setup. **No user interaction required.** Pi Zero W/W2 are automatically excluded due to resource constraints.
+>
+> **⚠️ Existing Installations:**
+> If you already have Ragnar running and want to enable these advanced features, you **must** run the advanced tools installer:
+> ```bash
+> cd /home/ragnar/Ragnar
+> sudo ./install_advanced_tools.sh
+> sudo systemctl restart ragnar
+> ```
+
+### 🔍 Real-Time Traffic Analysis
+- **Live Packet Capture**: Monitor network traffic in real-time using tcpdump and tshark
+- **Connection Tracking**: Track all TCP/UDP connections with detailed statistics
+- **Protocol Analysis**: Deep inspection of HTTP, DNS, SMB, SSH, and other protocols
+- **Bandwidth Monitoring**: Per-host bandwidth usage and connection patterns
+- **Anomaly Detection**: Identify suspicious traffic patterns, port scans, and potential C2 beacons
+- **DNS Query Logging**: Track all DNS lookups for threat intelligence correlation
+
+### 🛡️ Advanced Vulnerability Scanning
+- **Nuclei Templates**: Automated scanning with 5000+ vulnerability templates from ProjectDiscovery
+- **Nikto Web Scanning**: Comprehensive web server vulnerability assessment
+- **SQLMap Integration**: Automated SQL injection detection and exploitation
+- **Parallel Scanning**: Multi-threaded vulnerability assessment for faster results
+- **CVE Correlation**: Automatic correlation with NVD, CISA KEV, and threat intelligence feeds
+- **Exploit Suggestions**: AI-powered recommendations for vulnerability exploitation paths
+- **Custom Payloads**: Support for custom vulnerability testing templates
+
+### 📊 Enhanced Web Interface
+Server mode features are seamlessly integrated into the modern web dashboard at `http://<ragnar-ip>:8000`:
+- **Traffic Analysis Tab**: Real-time packet capture visualization and statistics
+- **Advanced Vuln Tab**: Detailed vulnerability scan results with remediation guidance
+- **Resource Monitor**: System resource usage and performance metrics
+- **Threat Intelligence**: Multi-source threat correlation with actionable insights
+
+### 🚀 Performance Benefits
+- **Parallel Operations**: Run multiple scans and analyses simultaneously
+- **Large Dictionary Support**: Use comprehensive wordlists for brute-force attacks
+- **Extended Scanning**: Deeper port scans and more thorough vulnerability checks
+- **Local AI Integration**: Optional on-device LLM support for offline analysis
+
+### 📦 Installing Advanced Tools
+
+**For fresh installations**: If your system has 8GB+ RAM and is not a Pi Zero, the main installer will automatically offer to install advanced tools.
+
+**For existing Ragnar installations**, these advanced features require the separate installer:
+
+```bash
+cd /home/ragnar/Ragnar
+sudo ./install_advanced_tools.sh
+```
+
+This script installs:
+- **Traffic Analysis**: tcpdump, tshark, ngrep, iftop, nethogs
+- **Vulnerability Scanners**: Nuclei, Nikto, SQLMap, WhatWeb
+- **Web App Security**: OWASP ZAP (requires Java)
+- **Nmap Scripts**: vulners.nse, vulscan database
+
+**Pi Zero W/W2**: Advanced tools are not recommended due to limited CPU and RAM. The installer automatically skips resource-intensive tools on Pi Zero hardware.
+
+After installation, restart Ragnar:
+```bash
+sudo systemctl restart ragnar
+```
+
+Ragnar will automatically detect available tools and enable corresponding features in the web interface.
 
 ## 🤝 Contributing
 
